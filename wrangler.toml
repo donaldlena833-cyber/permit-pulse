@@ -2,12 +2,19 @@ name = "permit-pulse-scanner"
 main = "permit-scanner.mjs"
 compatibility_date = "2024-01-01"
 
-# Runs at 8am ET and 6pm ET (13:00 UTC and 23:00 UTC)
+# Runs daily at 7am ET (12:00 UTC, accounting for EDT)
 [triggers]
-crons = ["0 13 * * *", "0 23 * * *"]
+crons = ["0 12 * * *"]
 
 [vars]
-NOTIFY_EMAIL = "info@metroglasspro.com"
+NOTIFY_EMAIL = "operations@metroglasspro.com"
 
-# Add your Resend API key as a secret:
+# KV namespace for tracking picked architects (no repeats)
+# Create with: npx wrangler kv namespace create PERMIT_PULSE
+# Then paste the ID below
+[[kv_namespaces]]
+binding = "PERMIT_PULSE"
+id = "YOUR_KV_NAMESPACE_ID_HERE"
+
+# SECRETS (set via CLI, not in this file):
 # npx wrangler secret put RESEND_API_KEY

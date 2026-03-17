@@ -1,189 +1,149 @@
-# ⚡ PermitPulse — Setup & Deployment Guide
+# ⚡ PermitPulse v3 — Setup Guide
 
-## What You Have
+## What This Does
 
-**Repo:** `github.com/donaldlena833-cyber/permit-pulse` (private)
+Every morning at 7am ET, PermitPulse:
 
-| Component | File | What It Does |
-|-----------|------|-------------|
-| Dashboard | `src/App.tsx` + `src/index.css` | React app — live DOB permit scanner with scoring |
-| Scanner | `permit-scanner.mjs` | Automated cron script — fetches, scores, emails leads |
-| Worker Config | `wrangler.toml` | Cloudflare Worker cron schedule (8am + 6pm ET) |
-| Deploy Script | `deploy.sh` | One-command deploy to Cloudflare Pages |
+1. Scans all new DOB Job Application Filings from the last 72 hours
+2. Filters to architect-filed luxury residential alterations in Manhattan, Brooklyn, Queens ($75K+)
+3. Scores each architect based on: neighborhood fit, project cost, building type, filing history volume, Manhattan focus
+4. Removes anyone already picked (never repeats)
+5. Picks the **top 5 new architects** of the day
+6. Drafts a personalized outreach email for each one referencing their specific project
+7. Emails you the digest at operations@metroglasspro.com
+
+You review the 5 drafts over coffee, edit to your voice, and send from your Gmail. 10 minutes, 5 high-quality architect contacts per day, ~25 per week.
 
 ---
 
-## Step 1: Deploy the Dashboard (5 minutes)
+## Quick Deploy (20 minutes)
 
-On your Mac, open Terminal:
+### 1. Clone the repo
 
 ```bash
-# Clone the repo
 git clone https://x-access-token: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@github.com/donaldlena833-cyber/permit-pulse.git
 cd permit-pulse
-
-# Install dependencies
-pnpm install
-
-# Build
-pnpm build
-
-# Login to Cloudflare (opens browser — use your MetroGlassPro account)
-npx wrangler login
-
-# Deploy to Cloudflare Pages
-npx wrangler pages deploy dist --project-name=permit-pulse --branch=main
 ```
 
-After the first deploy, Cloudflare gives you a URL like `permit-pulse-xxx.pages.dev`. You can use that immediately.
-
-### Add Custom Domain: `leads.metroglasspro.com`
-
-1. Go to **Cloudflare Dashboard → Pages → permit-pulse → Custom Domains**
-2. Click **Set up a custom domain**
-3. Enter: `leads.metroglasspro.com`
-4. Cloudflare auto-provisions SSL since metroglasspro.com is already on Cloudflare
-
----
-
-## Step 2: Set Up Email Alerts (10 minutes)
-
-### Create a Resend Account (free tier = 100 emails/day)
-
-1. Go to [resend.com](https://resend.com) → Sign up
-2. **Add your domain:** Settings → Domains → Add `metroglasspro.com`
-   - Add the DNS records Resend gives you (2 TXT records in Cloudflare DNS)
-   - Wait for verification (~5 min)
-3. **Get your API key:** Settings → API Keys → Create
-
-### Deploy the Scanner Worker
+### 2. Login to Cloudflare
 
 ```bash
-cd permit-pulse
+npm install -g wrangler
+wrangler login
+```
 
-# Deploy the worker
-npx wrangler deploy
+### 3. Create KV namespace (stores picked architects)
 
-# Add your Resend API key as a secret
+```bash
+npx wrangler kv namespace create PERMIT_PULSE
+```
+
+This outputs an ID like `abc123def456`. Open `wrangler.toml` and replace `YOUR_KV_NAMESPACE_ID_HERE` with that ID.
+
+### 4. Set up Resend (email delivery)
+
+1. Go to [resend.com](https://resend.com) → Sign up (free)
+2. Add domain: `metroglasspro.com` → add the DNS records in Cloudflare
+3. Get your API key
+
+```bash
 npx wrangler secret put RESEND_API_KEY
-# (paste your Resend API key when prompted)
+# paste your Resend API key
 ```
 
-### Update Email Address
-
-In `permit-scanner.mjs`, find this line near the top of the `TENANTS` object:
-
-```javascript
-email: 'info@metroglasspro.com',  // UPDATE: your actual email
-```
-
-Change it to your preferred email. Commit + push + redeploy:
+### 5. Deploy
 
 ```bash
-git add -A && git commit -m "Update email" && git push
 npx wrangler deploy
 ```
 
-### Test It
+### 6. Test it
 
 ```bash
-# Trigger a manual scan
 curl https://permit-pulse-scanner.YOUR_SUBDOMAIN.workers.dev/scan
 ```
 
-You should get a JSON response with lead counts, and an email in your inbox within 30 seconds.
+You should see the pipeline run and get an email within 30 seconds with your first 5 architect picks.
 
 ---
 
-## Step 3: Daily Operation
+## Daily Workflow
 
-### What Happens Automatically
+**7:00 AM** — PermitPulse runs automatically
 
-- **8:00 AM ET** — Scanner pulls last 3 days of permits, scores them, emails you hot + warm leads
-- **6:00 PM ET** — Same thing, catches any permits issued during the day
+**~7:05 AM** — You get an email with 5 architect cards, each showing:
+- Architect name + RA license + filing history
+- The specific project that triggered the pick (address, cost, building, floor)
+- Why they scored high (reasons)
+- Their recent project list
+- A **draft outreach email** ready to edit
+- Links: Google search (find their firm), Maps, DOB BIS
 
-### What You Do
-
-When you get the email digest:
-
-1. **🔥 Hot Leads** — These have explicit glass/mirror/storefront mentions OR are high-value renovations in your target area. **Call the GC listed** — they're the one managing the project and hiring subs.
-
-2. **Warm Leads** — Big renovations that likely need glass but didn't explicitly mention it. Worth a quick call to the GC: *"Hey, I saw you pulled a permit for [address]. We're MetroGlassPro — we do custom shower doors and glass for Manhattan projects. Do you need a glass sub on this one?"*
-
-3. **Dashboard** — Open `leads.metroglasspro.com` anytime to run a fresh scan, search by GC name, filter by borough, or dig into a specific lead's full details (DOB BIS link, Google Maps, owner info).
+**Your 10-minute routine:**
+1. Open the digest email
+2. For each of the 5 picks:
+   - Click "Find firm + email" to Google the architect and find their contact
+   - Copy the draft email, paste into Gmail, edit to your voice
+   - Send from operations@metroglasspro.com
+3. Done. 5 new architect contacts made.
 
 ---
 
-## Adding Other Trades (Your Revenue Play)
+## How Scoring Works
 
-When you're ready to add your tile guy, HVAC guy, plumber:
+Each architect gets scored 0-100 on two dimensions:
 
-### 1. Add Their Profile to `permit-scanner.mjs`
+### Current Filing Score (project quality)
+| Signal | Points | What it means |
+|--------|--------|--------------|
+| Tier 1 neighborhood | +15 | UES, UWS, Tribeca, SoHo, Chelsea, Park Slope, etc. |
+| Tier 2 neighborhood | +8 | Harlem, Astoria, LIC, Hudson Yards, etc. |
+| Sweet spot cost ($150K-$2M) | +12 | Luxury apartment renovation range |
+| Mega project ($2M+) | +8 | Large-scale, multi-trade project |
+| High-rise (10+ stories) | +6 | Co-op/condo building |
+| Residential building | +8 | Has dwelling units |
+| Penthouse | +5 | Premium unit, high-end client |
 
-In the `TENANTS` object, add a new entry:
+### Architect History Score (practice quality)
+| Signal | Points | What it means |
+|--------|--------|--------------|
+| 10+ filings in 2 years | +30 | High-volume practice — ideal partner |
+| 5-9 filings in 2 years | +20 | Established practice |
+| 3-4 filings | +10 | Active |
+| 70%+ Manhattan-focused | +10 | Works your territory |
+| 3+ target neighborhoods | +5 | Diverse across your areas |
+| Avg project $150K+ | +8 | Consistent high-end work |
 
-```javascript
-tile_specialist: {
-  id: 'tile_specialist',
-  name: 'ABC Tile Co',
-  email: 'guy@abctile.com',
-  // ... keywords, boroughs, etc.
-}
+---
+
+## No Repeats
+
+The system uses Cloudflare KV to track every architect it has ever picked. Once picked, an architect won't appear again for 180 days. This means:
+
+- Week 1: 25 new architects
+- Month 1: ~100 new architects
+- Month 3: ~300 architects in your network pipeline
+
+After 6 months, an architect becomes eligible again — by then you either have a relationship or it's worth a re-introduction.
+
+To see everyone who's been picked:
+```bash
+curl https://permit-pulse-scanner.YOUR_SUBDOMAIN.workers.dev/picked
 ```
-
-### 2. The Business Model
-
-**Option A — Sell Leads ($50-200/lead)**
-You run PermitPulse, surface hot leads for their trade, and charge per lead delivered.
-
-**Option B — Revenue Share (5-10%)**
-Free leads, but you take a cut when they close the job.
-
-**Option C — Monthly Subscription ($200-500/mo)**
-Flat fee for daily lead emails + dashboard access.
-
-### 3. Multi-Tenant Dashboard (Phase 2)
-
-When you have 3+ paying trades, we add:
-- Supabase auth — each trade gets a login
-- Separate dashboards with their own profile/keywords
-- Lead status tracking (new → contacted → quoted → won → lost)
-- Revenue tracking per lead source
-
----
-
-## How the Scoring Works
-
-Each permit gets scored 0-100 based on your MetroGlassPro profile:
-
-| Signal | Points | Example |
-|--------|--------|---------|
-| Direct keyword match | Up to 40 | "install new storefront glass" |
-| Inferred need | Up to 20 | "gut renovation" (almost always needs glass) |
-| Budget sweet spot | Up to 15 | $50K-$2M projects |
-| Commercial signal | Up to 10 | "pilates studio", "restaurant" |
-| Building type | Up to 8 | "luxury condo", "brownstone" |
-| Recency | Up to 10 | Issued within 3 days |
-| Location | Up to 7 | Manhattan + target neighborhood |
-
-**Hot ≥ 45** — Call immediately
-**Warm ≥ 25** — Worth investigating
-**Cold < 25** — Background noise
 
 ---
 
 ## Troubleshooting
 
-**Scanner not sending emails?**
-- Check: `npx wrangler tail` to see live logs
-- Verify Resend domain is verified
-- Check Resend dashboard for delivery status
+**No picks showing up?**
+The system needs at least 1 new qualifying filing in the last 3 days that hasn't been picked before. On slow filing days (weekends, holidays), you might get fewer than 5.
 
-**No leads showing up?**
-- Expand the date range (try 30 days instead of 14)
-- Lower the minimum cost
-- Check that the DOB API is responding: visit `https://data.cityofnewyork.us/resource/rbx6-tga4.json?$limit=1` in your browser
+**Want to reset the picked list?**
+```bash
+npx wrangler kv key list --binding PERMIT_PULSE | jq -r '.[].name' | while read key; do
+  npx wrangler kv key delete --binding PERMIT_PULSE "$key"
+done
+```
 
-**Want to update keywords?**
-- Edit the `directKeywords` or `inferredKeywords` arrays in both `src/App.tsx` (dashboard) and `permit-scanner.mjs` (cron)
-- Rebuild + redeploy both
+**Want to change the number of daily picks?**
+Edit `DAILY_PICKS` at the top of `permit-scanner.mjs` and redeploy.
