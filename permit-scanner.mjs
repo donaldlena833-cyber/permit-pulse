@@ -605,7 +605,156 @@ async function runDailyPipeline(env = {}) {
 // GMAIL INTEGRATION IMPORTS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-import { DraftQueue, handleGmailRoutes, sendGmail } from './gmail-integration.mjs';
+// Gmail integration is inlined below (Cloudflare Workers single-file deployment)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GMAIL INTEGRATION — JWT/OAuth2 for Google Workspace Service Account
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function base64UrlEncode(data) {
+  if (typeof data === 'string') data = new TextEncoder().encode(data);
+  return btoa(String.fromCharCode(...new Uint8Array(data)))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function str2ab(str) {
+  const buf = new ArrayBuffer(str.length);
+  const bufView = new Uint8Array(buf);
+  for (let i = 0; i < str.length; i++) bufView[i] = str.charCodeAt(i);
+  return buf;
+}
+
+async function getGoogleAccessToken(serviceAccountJson, impersonateEmail) {
+  const sa = typeof serviceAccountJson === 'string' ? JSON.parse(serviceAccountJson) : serviceAccountJson;
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64UrlEncode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claimSet = base64UrlEncode(JSON.stringify({
+    iss: sa.client_email, sub: impersonateEmail,
+    scope: 'https://www.googleapis.com/auth/gmail.send',
+    aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
+  }));
+  const signInput = `${header}.${claimSet}`;
+  const pkPem = sa.private_key.replace('-----BEGIN PRIVATE KEY-----', '')
+    .replace('-----END PRIVATE KEY-----', '').replace(/(\r\n|\n|\r)/gm, '');
+  const signingKey = await crypto.subtle.importKey('pkcs8', str2ab(atob(pkPem)),
+    { name: 'RSASSA-PKCS1-v1_5', hash: { name: 'SHA-256' } }, false, ['sign']);
+  const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', signingKey,
+    new TextEncoder().encode(signInput));
+  const jwt = `${signInput}.${base64UrlEncode(signature)}`;
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+  });
+  if (!tokenRes.ok) throw new Error(`Google OAuth failed: ${await tokenRes.text()}`);
+  return (await tokenRes.json()).access_token;
+}
+
+async function sendGmail({ to, subject, body, env }) {
+  const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
+  const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT, sender);
+  const rawEmail = [`From: MetroGlass Pro <${sender}>`, `To: ${to}`, `Subject: ${subject}`,
+    'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\r\n');
+  const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${sender}/messages/send`, {
+    method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: base64UrlEncode(rawEmail) }),
+  });
+  if (!res.ok) throw new Error(`Gmail send failed: ${await res.text()}`);
+  const result = await res.json();
+  return { success: true, messageId: result.id, threadId: result.threadId };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DRAFT QUEUE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class DraftQueue {
+  constructor(kv) { this.kv = kv; }
+
+  async addDraft(draft) {
+    const id = `draft:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const record = { id, status: 'pending', createdAt: new Date().toISOString(),
+      architectName: draft.architectName, architectLicense: draft.architectLicense,
+      recipientEmail: draft.recipientEmail || null, subject: draft.subject,
+      body: draft.body, projectAddress: draft.projectAddress, score: draft.score };
+    await this.kv.put(id, JSON.stringify(record), { expirationTtl: 30 * 86400 });
+    return record;
+  }
+
+  async getDraft(id) { return await this.kv.get(id, 'json'); }
+
+  async updateDraft(id, updates) {
+    const existing = await this.getDraft(id);
+    if (!existing) throw new Error(`Draft ${id} not found`);
+    const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    await this.kv.put(id, JSON.stringify(updated), { expirationTtl: 30 * 86400 });
+    return updated;
+  }
+
+  async getPendingDrafts() {
+    const list = await this.kv.list({ prefix: 'draft:' });
+    const drafts = [];
+    for (const key of list.keys) {
+      const val = await this.kv.get(key.name, 'json');
+      if (val && val.status === 'pending') drafts.push(val);
+    }
+    return drafts.sort((a, b) => (b.score || 0) - (a.score || 0));
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GMAIL API ROUTES
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function handleGmailRoutes(request, env) {
+  const url = new URL(request.url);
+  if (url.pathname === '/drafts' && request.method === 'GET') {
+    return (async () => {
+      const queue = new DraftQueue(env.PERMIT_PULSE);
+      return jsonRes(await queue.getPendingDrafts());
+    })();
+  }
+  if (url.pathname.match(/^\/drafts\/[^/]+\/approve$/) && request.method === 'POST') {
+    const rawId = url.pathname.split('/')[2];
+    return (async () => {
+      const queue = new DraftQueue(env.PERMIT_PULSE);
+      const draft = await queue.getDraft(`draft:${rawId}`);
+      if (!draft) return jsonRes({ error: 'Draft not found' }, 404);
+      if (!draft.recipientEmail) return jsonRes({ error: 'No recipient email. Edit draft first.' }, 400);
+      if (!env.GOOGLE_SERVICE_ACCOUNT) return jsonRes({ error: 'Gmail not configured. Set GOOGLE_SERVICE_ACCOUNT secret.' }, 400);
+      try {
+        const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env });
+        await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId });
+        return jsonRes({ success: true, messageId: result.messageId });
+      } catch (err) { return jsonRes({ error: `Send failed: ${err.message}` }, 500); }
+    })();
+  }
+  if (url.pathname.match(/^\/drafts\/[^/]+\/edit$/) && request.method === 'POST') {
+    const rawId = url.pathname.split('/')[2];
+    return (async () => {
+      const queue = new DraftQueue(env.PERMIT_PULSE);
+      const updates = await request.json();
+      try {
+        const updated = await queue.updateDraft(`draft:${rawId}`, {
+          ...(updates.recipientEmail && { recipientEmail: updates.recipientEmail }),
+          ...(updates.subject && { subject: updates.subject }),
+          ...(updates.body && { body: updates.body }),
+        });
+        return jsonRes(updated);
+      } catch (err) { return jsonRes({ error: err.message }, 400); }
+    })();
+  }
+  if (url.pathname.match(/^\/drafts\/[^/]+\/skip$/) && request.method === 'POST') {
+    const rawId = url.pathname.split('/')[2];
+    return (async () => {
+      const queue = new DraftQueue(env.PERMIT_PULSE);
+      try {
+        const updated = await queue.updateDraft(`draft:${rawId}`, { status: 'skipped' });
+        return jsonRes(updated);
+      } catch (err) { return jsonRes({ error: err.message }, 400); }
+    })();
+  }
+  return null;
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CLOUDFLARE WORKER EXPORTS
