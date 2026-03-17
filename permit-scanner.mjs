@@ -373,8 +373,8 @@ function draftOutreachEmail(architect) {
   const name = titleCase(architect.name);
   const firstName = titleCase(architect.firstName);
   const project = architect.triggerProject;
-  const addr = `${project.house_no} ${titleCase(project.street_name.toLowerCase())}`;
-  const neighborhood = project.nta || project.borough;
+  const addr = `${project.house_no} ${titleCase(cleanStreetName(project.street_name).toLowerCase())}`;
+  const neighborhood = titleCase((project.nta || project.borough || '').toLowerCase());
   const cost = formatCost(project.initial_cost);
   const floor = project.work_on_floor || '';
 
@@ -425,6 +425,11 @@ function titleCase(str) {
   return str.replace(/\b\w/g, c => c.toUpperCase());
 }
 
+// Normalize DOB street names: collapse multiple spaces, trim
+function cleanStreetName(raw) {
+  return (raw || '').replace(/\s+/g, ' ').trim();
+}
+
 function formatCost(val) {
   const num = parseFloat(val) || 0;
   if (num >= 1000000) return `$${(num / 1000000).toFixed(1)}M`;
@@ -469,7 +474,7 @@ function buildDigestHTML(picks, stats) {
     const cost = formatCost(p.initial_cost);
     const stories = p.existing_stories || '?';
     const googleSearch = `https://www.google.com/search?q=${encodeURIComponent(pick.name + ' architect NYC')}`;
-    const mapsLink = `https://www.google.com/maps/search/${encodeURIComponent(p.house_no + ' ' + p.street_name + ', ' + p.borough + ', NY')}`;
+    const mapsLink = `https://www.google.com/maps/search/${encodeURIComponent(p.house_no + ' ' + cleanStreetName(p.street_name) + ', ' + p.borough + ', NY')}`;
 
     html += `
   <div style="background:#151518;border:1px solid #2A2A32;border-radius:10px;padding:18px;margin-bottom:12px;border-left:3px solid #D4691A;">
@@ -485,7 +490,7 @@ function buildDigestHTML(picks, stats) {
       </div>
     </div>
 
-    <div style="font-size:14px;font-weight:600;margin-bottom:4px;">📍 ${p.house_no} ${p.street_name}, ${p.borough}</div>
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px;">📍 ${p.house_no} ${cleanStreetName(p.street_name)}, ${p.borough}</div>
     <div style="font-size:12px;color:#8A8A96;margin-bottom:10px;">${p.nta || ''} · Floor: ${p.work_on_floor || '?'} · Filed: ${p.filing_date?.slice(0, 10)}</div>
 
     <div style="font-size:12px;color:#5C5C68;margin-bottom:10px;">
@@ -495,7 +500,7 @@ function buildDigestHTML(picks, stats) {
     ${pick.recentProjects.length > 1 ? `
     <div style="font-size:12px;color:#5C5C68;margin-bottom:10px;">
       <strong style="color:#8A8A96;">Recent projects:</strong>
-      ${pick.recentProjects.slice(0, 4).map(rp => `${rp.house_no} ${rp.street_name} (${rp.borough}, ${formatCost(rp.initial_cost)})`).join(' · ')}
+      ${pick.recentProjects.slice(0, 4).map(rp => `${rp.house_no} ${cleanStreetName(rp.street_name)} (${rp.borough}, ${formatCost(rp.initial_cost)})`).join(' · ')}
     </div>` : ''}
 
     <div style="margin-bottom:12px;">
@@ -579,11 +584,16 @@ async function runDailyPipeline(env = {}) {
     const license = f.applicant_license;
     if (!license) continue;
     if (!architectMap.has(license)) {
+      // DOB API returns names in ALL CAPS — normalize to Title Case immediately
+      const rawFirst = (f.applicant_first_name || '').trim();
+      const rawLast = (f.applicant_last_name || '').trim();
+      const first = titleCase(rawFirst.toLowerCase());
+      const last = titleCase(rawLast.toLowerCase());
       architectMap.set(license, {
         raLicense: license,
-        firstName: f.applicant_first_name || '',
-        lastName: f.applicant_last_name || '',
-        name: `${f.applicant_first_name || ''} ${f.applicant_last_name || ''}`.trim(),
+        firstName: first,
+        lastName: last,
+        name: `${first} ${last}`.trim(),
         filings: [],
       });
     }
@@ -672,7 +682,7 @@ async function runDailyPipeline(env = {}) {
   console.log(`\n🏆 Step 5: ${topPicks.length} picks (${tier1.length} Tier 1, ${tier2.length} Tier 2):`);
   for (let i = 0; i < Math.min(topPicks.length, 10); i++) {
     const pick = topPicks[i];
-    console.log(`   #${i + 1} [${pick.tier}|${pick.totalScore}] ${pick.name} — ${pick.triggerProject.house_no} ${pick.triggerProject.street_name}, ${pick.triggerProject.borough} ($${pick.triggerProject.initial_cost})`);
+    console.log(`   #${i + 1} [${pick.tier}|${pick.totalScore}] ${pick.name} — ${pick.triggerProject.house_no} ${cleanStreetName(pick.triggerProject.street_name)}, ${pick.triggerProject.borough} ($${pick.triggerProject.initial_cost})`);
   }
   if (topPicks.length > 10) console.log(`   ... and ${topPicks.length - 10} more`);
 
@@ -718,7 +728,7 @@ async function runDailyPipeline(env = {}) {
         recipientEmail: e.email || null,
         subject: pick.draftEmail.subject,
         body: pick.draftEmail.body,
-        projectAddress: `${pick.triggerProject.house_no} ${pick.triggerProject.street_name}, ${pick.triggerProject.borough}`,
+        projectAddress: `${pick.triggerProject.house_no} ${cleanStreetName(pick.triggerProject.street_name)}, ${pick.triggerProject.borough}`,
         score: pick.totalScore,
         tier: pick.tier || 'tier2',
         // Enriched contact data
@@ -742,7 +752,7 @@ async function runDailyPipeline(env = {}) {
       name: pick.name,
       raLicense: pick.raLicense,
       score: pick.totalScore,
-      triggerAddress: `${pick.triggerProject.house_no} ${pick.triggerProject.street_name}`,
+      triggerAddress: `${pick.triggerProject.house_no} ${cleanStreetName(pick.triggerProject.street_name)}`,
       borough: pick.triggerProject.borough,
     });
   }
@@ -843,6 +853,17 @@ class DraftQueue {
   constructor(kv) { this.kv = kv; }
 
   async addDraft(draft) {
+    // Dedup: skip if a pending draft already exists for this architect
+    if (draft.architectLicense) {
+      const existing = await this.kv.list({ prefix: 'draft:' });
+      for (const key of existing.keys) {
+        const val = await this.kv.get(key.name, 'json');
+        if (val && val.architectLicense === draft.architectLicense && val.status === 'pending') {
+          console.log(`   ⏭️  Skipping duplicate draft for ${draft.architectName} (license ${draft.architectLicense})`);
+          return val; // Return the existing draft instead of creating a new one
+        }
+      }
+    }
     const id = `draft:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const record = { id, status: 'pending', createdAt: new Date().toISOString(),
       architectName: draft.architectName, architectLicense: draft.architectLicense,
@@ -881,6 +902,16 @@ class DraftQueue {
     }
     return drafts.sort((a, b) => (b.score || 0) - (a.score || 0));
   }
+
+  async getAllDrafts() {
+    const list = await this.kv.list({ prefix: 'draft:' });
+    const drafts = [];
+    for (const key of list.keys) {
+      const val = await this.kv.get(key.name, 'json');
+      if (val) drafts.push(val);
+    }
+    return drafts.sort((a, b) => (b.score || 0) - (a.score || 0));
+  }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -891,7 +922,7 @@ async function handleGmailRoutes(request, env) {
   const url = new URL(request.url);
   if (url.pathname === '/drafts' && request.method === 'GET') {
     const queue = new DraftQueue(env.PERMIT_PULSE);
-    return jsonRes(await queue.getPendingDrafts());
+    return jsonRes(await queue.getAllDrafts());
   }
   if (url.pathname.match(/^\/drafts\/[^/]+\/approve$/) && request.method === 'POST') {
     const rawId = url.pathname.split('/')[2];
@@ -1132,9 +1163,9 @@ textarea{min-height:180px;line-height:1.6}
 <script>
 var API=window.location.origin,drafts=[];
 async function loadDrafts(){document.getElementById('app').innerHTML='<div class="loading">Loading...</div>';try{var r=await fetch(API+'/drafts');drafts=await r.json();renderStats();render()}catch(e){document.getElementById('app').innerHTML='<div class="empty"><h3>Could not load</h3><p>'+e.message+'</p></div>'}}
-function renderStats(){var t1=drafts.filter(function(d){return d.tier==='tier1'}).length,t2=drafts.length-t1,avg=drafts.length?Math.round(drafts.reduce(function(s,d){return s+(d.score||0)},0)/drafts.length):0;document.getElementById('stats').innerHTML='<div class="stat-card"><p class="stat-label">Total</p><p class="stat-value">'+drafts.length+'</p></div><div class="stat-card"><p class="stat-label">Priority</p><p class="stat-value" style="color:var(--accent-dark)">'+t1+'</p></div><div class="stat-card"><p class="stat-label">Standard</p><p class="stat-value">'+t2+'</p></div><div class="stat-card"><p class="stat-label">Avg score</p><p class="stat-value">'+avg+'</p></div>'}
+function renderStats(){var pending=drafts.filter(function(d){return d.status==='pending'}).length,sent=drafts.filter(function(d){return d.status==='sent'}).length,skipped=drafts.filter(function(d){return d.status==='skipped'}).length,t1=drafts.filter(function(d){return d.tier==='tier1'&&d.status==='pending'}).length;document.getElementById('stats').innerHTML='<div class="stat-card"><p class="stat-label">Pending</p><p class="stat-value" style="color:var(--accent-dark)">'+pending+'</p></div><div class="stat-card"><p class="stat-label">Priority</p><p class="stat-value">'+t1+'</p></div><div class="stat-card"><p class="stat-label">Sent</p><p class="stat-value" style="color:var(--green)">'+sent+'</p></div><div class="stat-card"><p class="stat-label">Skipped</p><p class="stat-value">'+skipped+'</p></div>'}
 async function triggerScan(){if(!confirm('Run scan now?'))return;document.getElementById('app').innerHTML='<div class="loading">Scanning DOB filings...</div>';try{var r=await fetch(API+'/scan'),d=await r.json();alert(d.picks+' new picks from '+d.scanned+' filings');loadDrafts()}catch(e){alert('Failed: '+e.message)}}
-function render(){var app=document.getElementById('app');app.innerHTML='';if(!drafts.length){app.innerHTML='<div class="empty"><h3>No pending drafts</h3><p>Run a scan or wait for the morning cron at 7am.</p></div>';return}drafts.sort(function(a,b){if(a.tier==='tier1'&&b.tier!=='tier1')return-1;if(b.tier==='tier1'&&a.tier!=='tier1')return 1;return(b.score||0)-(a.score||0)});drafts.forEach(function(d,i){var sid=d.id.replace('draft:',''),div=document.createElement('div');div.className='draft '+d.status;div.style.animationDelay=(i*40)+'ms';div.innerHTML='<div class="draft-top"><div style="flex:1"><div class="badge-row"><span class="badge badge-'+(d.tier||'t2')+'">'+(d.tier==='tier1'?'Priority':'Standard')+'</span><span class="badge badge-'+d.status+'">'+d.status+'</span></div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(d.score||0)+'</div></div><div class="links"><a class="lk-e" target="_blank">Find email</a><a class="lk-f" target="_blank">Find firm</a></div><div class="field"><label>Architect email</label><input class="f-email" placeholder="architect@firm.com"></div><div class="field"><label>Subject</label><input class="f-subj"></div><div class="field"><label>Email body</label><textarea class="f-body"></textarea></div><div class="draft-actions"><button class="btn btn-primary js-a">Send via Gmail</button><button class="btn js-s">Save edits</button><button class="btn btn-danger js-k">Skip</button></div>';div.querySelector('.arch-name').textContent=d.architectName||'Unknown';div.querySelector('.arch-meta').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'')+' · Score: '+(d.score||0);div.querySelector('.lk-e').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect NYC email');div.querySelector('.lk-f').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect portfolio NYC');div.querySelector('.f-email').value=d.recipientEmail||'';div.querySelector('.f-subj').value=d.subject||'';div.querySelector('.f-body').value=d.body||'';if(d.status!=='pending'){div.querySelectorAll('input,textarea').forEach(function(el){el.disabled=true});var a=div.querySelector('.draft-actions');if(a)a.style.display='none'}div.querySelector('.js-a').addEventListener('click',function(){doA(sid,div)});div.querySelector('.js-s').addEventListener('click',function(){doS(sid,div)});div.querySelector('.js-k').addEventListener('click',function(){doK(sid)});app.appendChild(div)})}
+function render(){var app=document.getElementById('app');app.innerHTML='';if(!drafts.length){app.innerHTML='<div class="empty"><h3>No drafts yet</h3><p>Run a scan or wait for the morning cron at 7am.</p></div>';return}drafts.sort(function(a,b){var so={'pending':0,'sent':1,'skipped':2};if(so[a.status]!==so[b.status])return so[a.status]-so[b.status];if(a.tier==='tier1'&&b.tier!=='tier1')return-1;if(b.tier==='tier1'&&a.tier!=='tier1')return 1;return(b.score||0)-(a.score||0)});drafts.forEach(function(d,i){var sid=d.id.replace('draft:',''),div=document.createElement('div');div.className='draft '+d.status;div.style.animationDelay=(i*40)+'ms';var enrichHtml='';if(d.firmName)enrichHtml+='<span class="enrich-tag">'+d.firmName+'</span>';if(d.linkedin)enrichHtml+='<a href="'+d.linkedin+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">LinkedIn</a>';if(d.phone)enrichHtml+='<span class="enrich-tag">'+d.phone+'</span>';if(d.firmWebsite)enrichHtml+='<a href="'+d.firmWebsite+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">Website</a>';div.innerHTML='<div class="draft-top"><div style="flex:1"><div class="badge-row"><span class="badge badge-'+(d.tier||'t2')+'">'+(d.tier==='tier1'?'Priority':'Standard')+'</span><span class="badge badge-'+d.status+'">'+d.status+'</span></div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(d.score||0)+'</div></div>'+(enrichHtml?'<div class="enrich-row">'+enrichHtml+'</div>':'')+'<div class="links"><a class="lk-e" target="_blank">Find email</a><a class="lk-f" target="_blank">Find firm</a></div><div class="field"><label>Architect email</label><input class="f-email" placeholder="architect@firm.com"></div><div class="field"><label>Subject</label><input class="f-subj"></div><div class="field"><label>Email body</label><textarea class="f-body"></textarea></div><div class="draft-actions"><button class="btn btn-primary js-a">Send via Gmail</button><button class="btn js-s">Save edits</button><button class="btn btn-danger js-k">Skip</button></div>';div.querySelector('.arch-name').textContent=d.architectName||'Unknown';div.querySelector('.arch-meta').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'')+' · Score: '+(d.score||0);div.querySelector('.lk-e').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect NYC email');div.querySelector('.lk-f').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect portfolio NYC');div.querySelector('.f-email').value=d.recipientEmail||'';div.querySelector('.f-subj').value=d.subject||'';div.querySelector('.f-body').value=d.body||'';if(d.status!=='pending'){div.querySelectorAll('input,textarea').forEach(function(el){el.disabled=true});var a=div.querySelector('.draft-actions');if(a)a.style.display='none'}div.querySelector('.js-a').addEventListener('click',function(){doA(sid,div)});div.querySelector('.js-s').addEventListener('click',function(){doS(sid,div)});div.querySelector('.js-k').addEventListener('click',function(){doK(sid)});app.appendChild(div)})}
 function gF(d){return{email:d.querySelector('.f-email').value.trim(),subject:d.querySelector('.f-subj').value.trim(),body:d.querySelector('.f-body').value.trim()}}
 async function doS(id,div){var f=gF(div);try{await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});alert('Saved')}catch(e){alert(e.message)}}
 async function doA(id,div){var f=gF(div);if(!f.email||f.email.indexOf('@')<0){alert('Add email first');return}await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});if(!confirm('Send to '+f.email+'?'))return;try{var r=await fetch(API+'/drafts/'+id+'/approve',{method:'POST'}),d=await r.json();if(d.success){alert('Sent!');loadDrafts()}else alert(d.error||'Failed')}catch(e){alert(e.message)}}
