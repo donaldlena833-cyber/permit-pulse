@@ -602,35 +602,61 @@ async function runDailyPipeline(env = {}) {
   }
   console.log(`   ${candidates.length} new architects (${architectMap.size - candidates.length} already picked)`);
 
-  // Step 4: Score each candidate
-  console.log('\n📊 Step 4: Scoring candidates...');
-  const scored = [];
+  // Step 4: Pre-score candidates using filing data only (no extra API calls)
+  console.log('\n📊 Step 4: Pre-scoring candidates...');
+  const preScored = [];
 
   for (const candidate of candidates) {
-    // Score the trigger filing (the most recent one)
     const bestFiling = candidate.filings.sort((a, b) =>
       (parseFloat(b.initial_cost) || 0) - (parseFloat(a.initial_cost) || 0)
     )[0];
 
     const filingScore = scoreCurrentFiling(bestFiling);
 
-    // Fetch and score their full history
-    const history = await fetchArchitectHistory(candidate.raLicense);
-    const historyScore = scoreArchitectHistory(history);
-
-    const totalScore = Math.min(filingScore.score + historyScore.score, 100);
-    const allReasons = [...filingScore.reasons, ...historyScore.reasons];
-
-    scored.push({
+    preScored.push({
       ...candidate,
       triggerProject: bestFiling,
-      recentProjects: history.slice(0, 5),
       filingScore: filingScore.score,
-      historyScore: historyScore.score,
-      totalScore,
-      allReasons,
-      historyStats: historyScore,
+      filingReasons: filingScore.reasons,
     });
+  }
+
+  // Sort by filing score, take top candidates only for deep enrichment
+  preScored.sort((a, b) => b.filingScore - a.filingScore);
+  const topCandidates = preScored.slice(0, TOTAL_MAX + 10); // fetch history for slightly more than we need
+  console.log(`   ${preScored.length} candidates pre-scored, deep-enriching top ${topCandidates.length}`);
+
+  // Step 4.5: Fetch history ONLY for top candidates (limits API calls)
+  console.log('\n📜 Step 4.5: Fetching architect histories...');
+  const scored = [];
+
+  for (const candidate of topCandidates) {
+    try {
+      const history = await fetchArchitectHistory(candidate.raLicense);
+      const historyScore = scoreArchitectHistory(history);
+
+      const totalScore = Math.min(candidate.filingScore + historyScore.score, 100);
+      const allReasons = [...candidate.filingReasons, ...historyScore.reasons];
+
+      scored.push({
+        ...candidate,
+        recentProjects: history.slice(0, 5),
+        historyScore: historyScore.score,
+        totalScore,
+        allReasons,
+        historyStats: historyScore,
+      });
+    } catch (err) {
+      // If history fetch fails, still include with filing score only
+      scored.push({
+        ...candidate,
+        recentProjects: [],
+        historyScore: 0,
+        totalScore: candidate.filingScore,
+        allReasons: candidate.filingReasons,
+        historyStats: { totalFilings: 0, manhattanFilings: 0, avgCost: 0, targetNeighborhoods: [] },
+      });
+    }
   }
 
   // Sort by total score, take tiered picks
@@ -650,10 +676,10 @@ async function runDailyPipeline(env = {}) {
   }
   if (topPicks.length > 10) console.log(`   ... and ${topPicks.length - 10} more`);
 
-  // Step 5.5: Enrich with Apollo (email, phone, LinkedIn, firm)
-  console.log('\n🔍 Step 5.5: Enriching contacts via Apollo...');
+  // Step 5.5: Enrich with Apollo (email, phone, LinkedIn, firm) — tier1 only to stay fast
+  console.log('\n🔍 Step 5.5: Enriching tier1 contacts via Apollo...');
   let enriched = 0, enrichFailed = 0;
-  for (const pick of topPicks) {
+  for (const pick of tier1) {
     pick.enrichment = null;
     if (env.APOLLO_API_KEY) {
       try {
