@@ -552,10 +552,16 @@ async function runDailyPipeline(env = {}) {
   console.log('⚡ PermitPulse v3 — Daily Architect Scan');
   console.log('━'.repeat(50));
 
-  // Step 1: Fetch recent filings (last 3 days for overlap safety)
+  // Step 1: Fetch recent filings (last 14 days for wide coverage)
   console.log('\n📥 Step 1: Fetching recent filings...');
-  const filings = await fetchRecentFilings(3);
-  console.log(`   Found ${filings.length} architect-filed alterations`);
+  let filings = [];
+  try {
+    filings = await fetchRecentFilings(14);
+    console.log(`   Found ${filings.length} architect-filed alterations`);
+  } catch (err) {
+    console.error(`   ❌ Fetch failed: ${err.message}`);
+    return { picks: 0, scanned: 0, totalContacted: 0, error: err.message };
+  }
 
   // Step 2: Group by architect (unique RA license)
   console.log('\n🏗️  Step 2: Grouping by architect...');
@@ -920,6 +926,29 @@ export default {
     if (url.pathname === '/scan') {
       const results = await runDailyPipeline(env);
       return jsonRes(results);
+    }
+
+    if (url.pathname === '/debug') {
+      // Debug: test the DOB API query directly
+      try {
+        const dateFrom = new Date();
+        dateFrom.setDate(dateFrom.getDate() - 14);
+        const dateStr = dateFrom.toISOString().split('T')[0] + 'T00:00:00';
+        const where = [
+          `(applicant_professional_title='RA' OR applicant_professional_title='PE')`,
+          `filing_date>'${dateStr}'`,
+          `job_type='Alteration'`,
+          `general_construction_work_type_='1'`,
+          `(borough='MANHATTAN' OR borough='BROOKLYN' OR borough='QUEENS' OR borough='BRONX')`,
+        ].join(' AND ');
+        const apiUrl = `https://data.cityofnewyork.us/resource/w9ak-ipjd.json?$where=${encodeURIComponent(where)}&$order=filing_date DESC&$limit=5`;
+        const res = await fetch(apiUrl);
+        const status = res.status;
+        const text = await res.text();
+        return jsonRes({ apiUrl, status, responseLength: text.length, first200chars: text.slice(0, 200), dateStr, now: new Date().toISOString() });
+      } catch (err) {
+        return jsonRes({ error: err.message, stack: err.stack });
+      }
     }
 
     if (url.pathname === '/picked') {
