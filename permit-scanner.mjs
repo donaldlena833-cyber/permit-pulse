@@ -24,7 +24,11 @@
 
 const FILINGS_API = 'https://data.cityofnewyork.us/resource/w9ak-ipjd.json';
 const PERMITS_API = 'https://data.cityofnewyork.us/resource/rbx6-tga4.json';
-const DAILY_PICKS = 5;
+
+// Tiered daily picks
+const TIER1_PICKS = 10;  // Best matches — you review + edit each one
+const TIER2_PICKS = 20;  // Good matches — you batch review, light edits
+const TOTAL_MAX = 30;    // Max per scan
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // METROGLASSPRO ARCHITECT SCORING PROFILE
@@ -48,14 +52,14 @@ const PROFILE = {
     'bushwick', 'crown heights', 'bay ridge', 'sunset park',
   ],
 
-  // Building characteristics that signal high-end residential (glass-heavy)
+  // Building characteristics that signal residential work needing glass
   highEndSignals: {
-    minStories: 5,           // 5+ story buildings = likely condo/co-op
-    minCost: 75000,          // $75K+ alterations = real renovation, not patch work
-    sweetSpotMin: 150000,    // $150K-$2M = luxury apartment reno sweet spot
+    minStories: 3,           // 3+ story buildings
+    minCost: 40000,          // $40K+ alterations (lowered to catch more)
+    sweetSpotMin: 100000,    // $100K-$2M = luxury apartment reno sweet spot
     sweetSpotMax: 2000000,
-    maxDwellingUnits: 200,   // Under 200 units = boutique building, better access
-    minFloorArea: 500,       // 500+ sqft construction area = substantial work
+    maxDwellingUnits: 300,   // Under 300 units
+    minFloorArea: 300,       // 300+ sqft construction area
   },
 
   // Architect scoring weights
@@ -81,27 +85,24 @@ const PROFILE = {
 // DATA FETCHING
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function fetchRecentFilings(daysBack = 3) {
+async function fetchRecentFilings(daysBack = 7) {
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - daysBack);
   const dateStr = dateFrom.toISOString().split('T')[0] + 'T00:00:00';
 
-  // NOTE: initial_cost is a text field in the API, so we can't filter numerically server-side.
-  // We fetch all RA alterations and filter by cost client-side.
   const where = [
-    `applicant_professional_title='RA'`,
+    `(applicant_professional_title='RA' OR applicant_professional_title='PE')`,
     `filing_date>'${dateStr}'`,
     `job_type='Alteration'`,
     `general_construction_work_type_='1'`,
-    `(borough='MANHATTAN' OR borough='BROOKLYN' OR borough='QUEENS')`,
+    `(borough='MANHATTAN' OR borough='BROOKLYN' OR borough='QUEENS' OR borough='BRONX')`,
   ].join(' AND ');
 
-  const url = `${FILINGS_API}?$where=${encodeURIComponent(where)}&$order=filing_date DESC&$limit=200`;
+  const url = `${FILINGS_API}?$where=${encodeURIComponent(where)}&$order=filing_date DESC&$limit=500`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Filings API error: ${res.status}`);
   const data = await res.json();
 
-  // Filter by cost client-side (initial_cost is text, needs parseFloat)
   return data.filter(f => (parseFloat(f.initial_cost) || 0) >= PROFILE.highEndSignals.minCost);
 }
 
@@ -533,39 +534,43 @@ async function runDailyPipeline(env = {}) {
     });
   }
 
-  // Sort by total score, take top 5
+  // Sort by total score, take tiered picks
   scored.sort((a, b) => b.totalScore - a.totalScore);
-  const topPicks = scored.slice(0, DAILY_PICKS);
+  const tier1 = scored.slice(0, TIER1_PICKS);
+  const tier2 = scored.slice(TIER1_PICKS, TIER1_PICKS + TIER2_PICKS);
+  const topPicks = [...tier1, ...tier2].slice(0, TOTAL_MAX);
 
-  console.log(`\n🏆 Step 5: Top ${DAILY_PICKS} picks:`);
-  for (let i = 0; i < topPicks.length; i++) {
+  // Assign tier labels
+  tier1.forEach(p => p.tier = 'tier1');
+  tier2.forEach(p => p.tier = 'tier2');
+
+  console.log(`\n🏆 Step 5: ${topPicks.length} picks (${tier1.length} Tier 1, ${tier2.length} Tier 2):`);
+  for (let i = 0; i < Math.min(topPicks.length, 10); i++) {
     const pick = topPicks[i];
-    console.log(`\n   #${i + 1} [Score: ${pick.totalScore}] ${pick.name} (RA #${pick.raLicense})`);
-    console.log(`      Project: ${pick.triggerProject.house_no} ${pick.triggerProject.street_name}, ${pick.triggerProject.borough}`);
-    console.log(`      Cost: $${pick.triggerProject.initial_cost} | ${pick.historyStats.totalFilings} filings in 2yr`);
-    console.log(`      Reasons: ${pick.allReasons.join(' · ')}`);
+    console.log(`   #${i + 1} [${pick.tier}|${pick.totalScore}] ${pick.name} — ${pick.triggerProject.house_no} ${pick.triggerProject.street_name}, ${pick.triggerProject.borough} ($${pick.triggerProject.initial_cost})`);
   }
+  if (topPicks.length > 10) console.log(`   ... and ${topPicks.length - 10} more`);
 
   // Step 6: Draft outreach emails + save to queue
   console.log('\n✉️  Step 6: Drafting outreach emails + saving to queue...');
   for (const pick of topPicks) {
     pick.draftEmail = draftOutreachEmail(pick);
-    console.log(`   Draft for ${pick.name}: "${pick.draftEmail.subject}"`);
 
-    // Save to draft queue for review/approve in dashboard
     if (env.PERMIT_PULSE) {
       const queue = new DraftQueue(env.PERMIT_PULSE);
       await queue.addDraft({
         architectName: pick.name,
         architectLicense: pick.raLicense,
-        recipientEmail: null, // User will add this after Googling the architect
+        recipientEmail: null,
         subject: pick.draftEmail.subject,
         body: pick.draftEmail.body,
         projectAddress: `${pick.triggerProject.house_no} ${pick.triggerProject.street_name}, ${pick.triggerProject.borough}`,
         score: pick.totalScore,
+        tier: pick.tier || 'tier2',
       });
     }
   }
+  console.log(`   ${topPicks.length} drafts saved to queue`);
 
   // Step 7: Mark as picked (no repeats)
   console.log('\n💾 Step 7: Saving picks to tracker...');
@@ -679,7 +684,8 @@ class DraftQueue {
     const record = { id, status: 'pending', createdAt: new Date().toISOString(),
       architectName: draft.architectName, architectLicense: draft.architectLicense,
       recipientEmail: draft.recipientEmail || null, subject: draft.subject,
-      body: draft.body, projectAddress: draft.projectAddress, score: draft.score };
+      body: draft.body, projectAddress: draft.projectAddress, score: draft.score,
+      tier: draft.tier || 'tier2' };
     await this.kv.put(id, JSON.stringify(record), { expirationTtl: 30 * 86400 });
     return record;
   }
@@ -791,6 +797,17 @@ export default {
       return jsonRes(all);
     }
 
+    if (url.pathname === '/reset' && request.method === 'POST') {
+      // Clear all picked architects and drafts
+      const list = await env.PERMIT_PULSE.list();
+      let deleted = 0;
+      for (const key of list.keys) {
+        await env.PERMIT_PULSE.delete(key.name);
+        deleted++;
+      }
+      return jsonRes({ reset: true, deleted });
+    }
+
     // Dashboard HTML (review + approve interface)
     if (url.pathname === '/' || url.pathname === '/dashboard') {
       return new Response(getDashboardHTML(), {
@@ -851,6 +868,9 @@ function getDashboardHTML() {
   .draft{background:#151518;border:1px solid #2A2A32;border-radius:10px;padding:20px;margin-bottom:16px;border-left:3px solid #D4691A}
   .draft.sent{border-left-color:#3A7D44;opacity:.6}
   .draft.skipped{border-left-color:#5C5C68;opacity:.4}
+  .tier-label{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-right:6px}
+  .tier-label.tier1{background:rgba(212,105,26,0.2);color:#D4691A}
+  .tier-label.tier2{background:rgba(138,138,150,0.15);color:#8A8A96}
   .draft-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
   .arch-name{font-size:18px;font-weight:700}
   .arch-meta{font-size:12px;color:#8A8A96;margin-top:2px}
@@ -920,6 +940,7 @@ function render() {
     var div = document.createElement('div');
     div.className = 'draft ' + d.status;
     var h = '<div class="draft-header"><div>'
+      + '<span class="tier-label ' + (d.tier||'tier2') + '">' + (d.tier === 'tier1' ? 'Priority' : 'Standard') + '</span>'
       + '<span class="status-badge ' + d.status + '">' + d.status + '</span>'
       + '<div class="arch-name"></div>'
       + '<div class="arch-meta"></div>'
