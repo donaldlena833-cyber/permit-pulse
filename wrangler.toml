@@ -15,7 +15,7 @@ GMAIL_SENDER = "operations@metroglasspro.com"
 # Then paste the ID below
 [[kv_namespaces]]
 binding = "PERMIT_PULSE"
-id = "YOUR_KV_NAMESPACE_ID_HERE"
+id = "6bd0ca87c13d448c80381159511f8e40"
 
 # SECRETS (set via CLI):
 # npx wrangler secret put RESEND_API_KEY          — for the digest notification email
