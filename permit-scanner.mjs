@@ -571,7 +571,7 @@ async function sendEmail(to, subject, html, apiKey) {
 async function runDailyPipeline(env = {}) {
   const tracker = new PickTracker(env.PERMIT_PULSE || null);
 
-  console.log('⚡ PermitPulse v3 — Daily Architect Scan');
+  console.log('⚡ PermitPulse v4 — Daily Architect Scan');
   console.log('━'.repeat(50));
 
   // Step 1: Fetch recent filings (last 14 days for wide coverage)
@@ -609,16 +609,33 @@ async function runDailyPipeline(env = {}) {
   }
   console.log(`   ${architectMap.size} unique architects`);
 
-  // Step 3: Filter out already-picked architects
-  console.log('\n🔄 Step 3: Deduplicating...');
+  // Step 3: Filter out already-picked architects + detect re-engagements (Phase 6)
+  console.log('\n🔄 Step 3: Deduplicating + detecting re-engagements...');
   const candidates = [];
+  const reEngagements = [];
   for (const [license, arch] of architectMap) {
     const picked = await tracker.hasBeenPicked(license);
     if (!picked) {
       candidates.push(arch);
+    } else if (env.PERMIT_PULSE) {
+      // Phase 6: Check if this is a re-engagement opportunity
+      // The picked record exists but the 180-day TTL means it's still active
+      // We check the CRM to see if they were previously cold/lost and have new activity
+      try {
+        const crm = await getArchitectCRM(env.PERMIT_PULSE, license);
+        if (crm && (crm.lastStatus === 'cold' || crm.lastStatus === 'lost') && arch.filings.length > 0) {
+          const pickedData = await env.PERMIT_PULSE.get(`picked:${license}`, 'json');
+          if (pickedData) {
+            reEngagements.push({ ...arch, previousContact: pickedData });
+          }
+        }
+      } catch (e) { /* skip */ }
     }
   }
   console.log(`   ${candidates.length} new architects (${architectMap.size - candidates.length} already picked)`);
+  if (reEngagements.length > 0) {
+    console.log(`   🔄 ${reEngagements.length} re-engagement opportunities detected`);
+  }
 
   // Step 4: Pre-score candidates using filing data only (no extra API calls)
   console.log('\n📊 Step 4: Pre-scoring candidates...');
@@ -752,6 +769,31 @@ async function runDailyPipeline(env = {}) {
     }
   }
   console.log(`   ${topPicks.length} drafts saved to queue`);
+
+  // Step 6.5: Create re-engagement drafts (Phase 6)
+  if (env.PERMIT_PULSE && reEngagements.length > 0) {
+    console.log(`\n🔄 Step 6.5: Drafting re-engagement emails...`);
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    let reCount = 0;
+    for (const re of reEngagements.slice(0, 5)) { // Max 5 re-engagements per scan
+      const bestFiling = re.filings.sort((a, b) => (parseFloat(b.initial_cost) || 0) - (parseFloat(a.initial_cost) || 0))[0];
+      const email = draftReEngagementEmail({ ...re, triggerProject: bestFiling }, re.previousContact);
+      await queue.addDraft({
+        architectName: re.name,
+        architectLicense: re.raLicense,
+        recipientEmail: null,
+        subject: email.subject,
+        body: email.body,
+        projectAddress: `${bestFiling.house_no} ${cleanStreetName(bestFiling.street_name)}, ${bestFiling.borough}`,
+        score: 0,
+        tier: 'reengagement',
+        isReEngagement: true,
+        previousContactDate: re.previousContact.pickedDate,
+      });
+      reCount++;
+    }
+    console.log(`   ${reCount} re-engagement drafts created`);
+  }
 
   // Step 7: Mark as picked (no repeats)
   console.log('\n💾 Step 7: Saving picks to tracker...');
@@ -1399,6 +1441,42 @@ async function handleGmailRoutes(request, env) {
     } catch (err) { return jsonRes({ error: err.message }, 500); }
   }
 
+  // CSV export of pipeline data
+  if (url.pathname === '/export.csv' && request.method === 'GET') {
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    const allDrafts = await queue.getAllDrafts();
+    const headers = ['Architect','License','Email','Firm','Project Address','Score','Tier','Status','Pipeline Status','Sent Date','Reply Detected','Follow-ups','Deal Value','Notes'];
+    const rows = allDrafts.map(d => [
+      d.architectName, d.architectLicense, d.recipientEmail || '', d.firmName || '',
+      d.projectAddress || '', d.score || '', d.tier || '', d.status,
+      d.pipelineStatus || '', d.sentAt ? d.sentAt.slice(0,10) : '',
+      d.replyDetected ? 'Yes' : 'No', d.followUpCount || 0,
+      d.dealValue || '', (d.notes || '').replace(/"/g, '""'),
+    ].map(v => `"${v}"`).join(','));
+    const csv = [headers.join(','), ...rows].join('\n');
+    return new Response(csv, {
+      headers: { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="permitpulse-pipeline.csv"', 'Access-Control-Allow-Origin': '*' },
+    });
+  }
+
+  // Batch send: send all pending drafts that have an email filled in
+  if (url.pathname === '/batch-send' && request.method === 'POST') {
+    if (!hasGmailAuth(env)) return jsonRes({ error: 'Gmail not configured' }, 400);
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    const allDrafts = await queue.getAllDrafts();
+    const ready = allDrafts.filter(d => d.status === 'pending' && d.recipientEmail && d.recipientEmail.includes('@'));
+    let sent = 0, failed = 0;
+    for (const draft of ready) {
+      try {
+        const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env });
+        await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId, gmailThreadId: result.threadId, pipelineStatus: 'awaiting_reply', followUpCount: 0 });
+        await upsertArchitectCRMFromDraft(env.PERMIT_PULSE, draft, 'sent');
+        sent++;
+      } catch (err) { failed++; }
+    }
+    return jsonRes({ sent, failed, total: ready.length });
+  }
+
   return null;
 }
 
@@ -1551,320 +1629,205 @@ function jsonRes(data, status = 200) {
 function getDashboardHTML() {
   return `<!DOCTYPE html>
 <html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0F0E0C">
 <title>PermitPulse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#FFFCF7;--bg-card:rgba(255,255,255,0.88);--bg-card-hover:rgba(255,255,255,0.95);
-  --border:rgba(238,230,216,0.9);--border-light:#EEE6D8;
-  --text:#2A241F;--text-muted:#716254;--text-dim:#948372;
-  --accent:#B88A52;--accent-light:rgba(184,138,82,0.12);--accent-dark:#946C40;
-  --green:#16a34a;--green-bg:rgba(22,163,74,0.08);
-  --blue:#2563eb;--blue-bg:rgba(37,99,235,0.08);
-  --purple:#7c3aed;--purple-bg:rgba(124,58,237,0.08);
-  --red:#dc2626;--red-bg:rgba(220,38,38,0.06);
-  --orange:#ea580c;--orange-bg:rgba(234,88,12,0.08);
-  --shadow:0 10px 30px -22px rgba(26,22,19,0.28),0 14px 40px -30px rgba(59,51,45,0.22);
-  --shadow-hover:0 18px 44px -28px rgba(26,22,19,0.34),0 24px 52px -36px rgba(59,51,45,0.24);
-  --shadow-soft:0 8px 24px -20px rgba(26,22,19,0.24);
-  --radius:1.5rem;--font:"Avenir Next",Avenir,"Helvetica Neue","Segoe UI",Arial,sans-serif;
-}
-@media(prefers-color-scheme:dark){:root{
-  --bg:#161412;--bg-card:rgba(34,30,26,0.9);--bg-card-hover:rgba(40,36,32,0.95);
-  --border:#3A332D;--border-light:#3A332D;
-  --text:#F6F1E8;--text-muted:#B2A697;--text-dim:#8A7D6E;
-  --accent:#D2A86E;--accent-light:rgba(210,168,110,0.15);--accent-dark:#E8C08A;
-  --green:#22c55e;--green-bg:rgba(34,197,94,0.12);
-  --blue:#60a5fa;--blue-bg:rgba(96,165,250,0.12);
-  --purple:#a78bfa;--purple-bg:rgba(167,139,250,0.12);
-  --orange:#fb923c;--orange-bg:rgba(251,146,60,0.12);
-  --shadow:0 20px 50px -34px rgba(0,0,0,0.6),0 10px 26px -18px rgba(0,0,0,0.45);
-  --shadow-hover:0 24px 56px -30px rgba(0,0,0,0.7);
-}}
-body{font-family:var(--font);background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;min-height:100vh;
-  background-image:radial-gradient(circle at top left,rgba(184,138,82,0.12),transparent 30%),radial-gradient(circle at bottom right,rgba(59,51,45,0.08),transparent 28%)}
-.hero{position:relative;margin:20px 20px 0;padding:28px;border-radius:34px;border:1px solid var(--border);background:var(--bg-card);box-shadow:var(--shadow);overflow:hidden;backdrop-filter:blur(8px)}
-.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at top right,rgba(184,138,82,0.18),transparent 28%),radial-gradient(circle at bottom left,rgba(59,51,45,0.08),transparent 32%);pointer-events:none}
-.hero-inner{position:relative;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px}
-.hero-eyebrow{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.28em;color:var(--accent-dark)}
-.hero-title{font-size:2rem;font-weight:600;letter-spacing:-0.03em;margin-top:12px}
-.hero-desc{font-size:14px;color:var(--text-muted);margin-top:8px;line-height:1.6;max-width:520px}
-.hero-actions{display:flex;gap:8px;align-self:flex-start;margin-top:8px;flex-wrap:wrap}
-.tabs{display:flex;gap:4px;margin:20px 20px 0;background:var(--bg-card);border:1px solid var(--border);border-radius:28px;padding:4px;box-shadow:var(--shadow-soft)}
-.tab{flex:1;padding:10px 16px;border-radius:24px;text-align:center;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;color:var(--text-muted);letter-spacing:0.02em}
-.tab.active{background:var(--accent);color:#fff;box-shadow:var(--shadow-soft)}
-.tab:hover:not(.active){background:var(--accent-light)}
-.tab .tab-count{display:inline-block;font-size:10px;background:rgba(0,0,0,0.1);padding:1px 6px;border-radius:10px;margin-left:4px}
-.tab.active .tab-count{background:rgba(255,255,255,0.25)}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:20px 20px 0}
-.stat-card{border-radius:28px;border:1px solid var(--border);background:var(--bg-card);padding:18px 20px;box-shadow:var(--shadow-soft);backdrop-filter:blur(8px);transition:transform .2s}
-.stat-card:hover{transform:translateY(-2px)}
-.stat-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.18em;color:var(--text-muted)}
-.stat-value{font-size:22px;font-weight:600;letter-spacing:-0.02em;margin-top:4px}
-.container{padding:20px;max-width:900px;margin:0 auto}
-.card{border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-card);padding:24px;margin-bottom:14px;box-shadow:var(--shadow);backdrop-filter:blur(8px);transition:all 0.3s ease;animation:fadeUp .35s ease-out both}
-.card:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
-.card.sent{border-left:3px solid var(--green)}.card.skipped{opacity:.35}.card.replied{border-left:3px solid var(--blue)}.card.meeting{border-left:3px solid var(--purple)}.card.quoted{border-left:3px solid var(--orange)}.card.won{border-left:3px solid var(--green);background:var(--green-bg)}.card.lost{opacity:.4}.card.cold{opacity:.3}.card.followup{border-left:3px dashed var(--accent)}
-@keyframes fadeUp{0%{opacity:0;transform:translateY(12px)}100%{opacity:1;transform:translateY(0)}}
-.card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
-.arch-name{font-size:18px;font-weight:600;letter-spacing:-0.02em}
-.arch-meta{font-size:12px;color:var(--text-dim);margin-top:3px}
-.score-pill{font-size:13px;font-weight:700;color:var(--accent-dark);background:var(--accent-light);padding:6px 14px;border-radius:20px;white-space:nowrap}
-.badge-row{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
-.badge{font-size:10px;padding:3px 10px;border-radius:20px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px}
-.badge-tier1{background:var(--accent-light);color:var(--accent-dark)}
-.badge-tier2{background:rgba(148,131,114,0.1);color:var(--text-dim)}
-.badge-pending{background:var(--accent-light);color:var(--accent-dark)}
-.badge-sent{background:var(--green-bg);color:var(--green)}
-.badge-skipped{background:rgba(148,131,114,0.1);color:var(--text-dim)}
-.badge-replied{background:var(--blue-bg);color:var(--blue)}
-.badge-meeting{background:var(--purple-bg);color:var(--purple)}
-.badge-quoted{background:var(--orange-bg);color:var(--orange)}
-.badge-won{background:var(--green-bg);color:var(--green)}
-.badge-lost{background:var(--red-bg);color:var(--red)}
-.badge-cold{background:rgba(148,131,114,0.1);color:var(--text-dim)}
-.badge-awaiting_reply{background:rgba(148,131,114,0.08);color:var(--text-muted)}
-.badge-followup{background:var(--accent-light);color:var(--accent-dark);border:1px dashed var(--accent)}
-.links{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-.links a{font-size:12px;color:var(--accent-dark);text-decoration:none;background:var(--accent-light);padding:6px 14px;border-radius:20px;font-weight:500;transition:all .2s}
-.links a:hover{background:var(--accent);color:#fff}
-.enrich-row{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
-.enrich-tag{font-size:11px;padding:4px 12px;border-radius:16px;background:rgba(148,131,114,0.08);color:var(--text-muted);font-weight:500}
-label{display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.18em;color:var(--text-muted);margin-bottom:6px}
-input,textarea,select{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:12px 16px;border-radius:16px;font-family:var(--font);font-size:13px;resize:vertical;transition:border .2s}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
-textarea{min-height:160px;line-height:1.6}
-select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23948372' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 16px center}
-.field{margin-bottom:14px}
-.btn{padding:10px 20px;border-radius:20px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;font-weight:500;transition:all .2s;box-shadow:var(--shadow-soft)}
-.btn:hover{box-shadow:var(--shadow);transform:translateY(-1px)}
-.btn:active{transform:scale(0.98)}
-.btn-sm{padding:6px 14px;font-size:11px;border-radius:16px}
-.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.btn-primary:hover{filter:brightness(1.1)}
-.btn-danger{color:var(--red);border-color:rgba(220,38,38,0.2)}
-.btn-danger:hover{background:var(--red-bg)}
-.btn-green{color:var(--green);border-color:rgba(22,163,74,0.2)}
-.btn-blue{color:var(--blue);border-color:rgba(37,99,235,0.2)}
-.card-actions{display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);flex-wrap:wrap}
-.empty{text-align:center;padding:60px 20px;color:var(--text-dim)}
-.empty h3{font-size:18px;font-weight:600;color:var(--text);margin:12px 0 6px}
-.loading{text-align:center;padding:60px;color:var(--text-muted);font-size:14px}
-.funnel{display:flex;gap:2px;margin:20px 0;align-items:flex-end}
-.funnel-step{flex:1;text-align:center;padding:12px 8px;border-radius:12px;border:1px solid var(--border);background:var(--bg-card)}
-.funnel-num{font-size:28px;font-weight:700;letter-spacing:-0.02em}
-.funnel-label{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-muted);margin-top:4px}
-.funnel-arrow{color:var(--text-dim);font-size:16px;padding:0 2px;align-self:center}
-.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:20px 0}
-.metric{border-radius:20px;border:1px solid var(--border);background:var(--bg-card);padding:20px;box-shadow:var(--shadow-soft)}
-.metric-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-muted)}
-.metric-value{font-size:32px;font-weight:700;margin-top:6px;letter-spacing:-0.03em}
-.metric-sub{font-size:12px;color:var(--text-dim);margin-top:4px}
-.crm-card{border-radius:20px;border:1px solid var(--border);background:var(--bg-card);padding:20px;margin-bottom:12px;box-shadow:var(--shadow-soft);cursor:pointer;transition:all .2s}
-.crm-card:hover{box-shadow:var(--shadow);transform:translateY(-1px)}
-.touchpoint{font-size:12px;padding:6px 0;border-bottom:1px solid var(--border);color:var(--text-muted)}
-.touchpoint:last-child{border-bottom:none}
-.pipeline-select{width:auto;display:inline-block;padding:6px 32px 6px 12px;border-radius:14px;font-size:11px;font-weight:600}
-.notes-area{font-size:12px;min-height:60px;border-radius:12px;padding:10px 14px}
-@media(max-width:600px){.hero{margin:12px;padding:20px;border-radius:24px}.hero-title{font-size:1.5rem}.tabs{margin:12px;border-radius:20px}.tabs .tab{font-size:11px;padding:8px 8px}.stats{margin:12px;grid-template-columns:1fr 1fr}.container{padding:12px}.card{padding:18px;border-radius:20px}.card-actions{flex-direction:column}.card-actions .btn{width:100%;text-align:center}.funnel{flex-wrap:wrap}.funnel-step{min-width:60px}.funnel-arrow{display:none}}
+:root{--bg:#0F0E0C;--bg2:rgba(28,26,23,0.92);--bg3:rgba(36,33,29,0.88);--bdr:rgba(62,56,48,0.6);--bdr2:rgba(62,56,48,0.3);--tx:#EDE8DF;--tx2:#A89E90;--tx3:#7A7067;--ac:#C9944A;--acl:rgba(201,148,74,0.14);--acd:#DDB06A;--g:#34d399;--gb:rgba(52,211,153,0.1);--bl:#60a5fa;--blb:rgba(96,165,250,0.1);--pu:#a78bfa;--pub:rgba(167,139,250,0.1);--rd:#f87171;--rdb:rgba(248,113,113,0.08);--or:#fb923c;--orb:rgba(251,146,60,0.1);--yl:#fbbf24;--ylb:rgba(251,191,36,0.1);--sh:0 12px 40px -16px rgba(0,0,0,0.6);--sh2:0 4px 20px -10px rgba(0,0,0,0.4);--r:20px;--f:'DM Sans',system-ui,sans-serif}
+body{font-family:var(--f);background:var(--bg);color:var(--tx);-webkit-font-smoothing:antialiased;min-height:100dvh;padding-bottom:env(safe-area-inset-bottom)}
+.w{max-width:860px;margin:0 auto;padding:0 16px}
+.hero{padding:28px 0 0}.hr{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px}
+.he{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3em;color:var(--ac)}
+.ht{font-size:1.6rem;font-weight:700;letter-spacing:-0.03em;margin:8px 0 2px}.hd{font-size:12px;color:var(--tx3)}
+.ha{display:flex;gap:5px;flex-wrap:wrap}
+.tabs{display:flex;gap:2px;margin:16px 0 0;background:var(--bg2);border:1px solid var(--bdr);border-radius:14px;padding:3px}
+.tab{flex:1;padding:8px;border-radius:11px;text-align:center;font-size:11px;font-weight:700;cursor:pointer;transition:.2s;color:var(--tx3);user-select:none}
+.tab.on{background:var(--ac);color:#fff}.tab:hover:not(.on){background:var(--acl);color:var(--tx)}
+.tc{font-size:9px;opacity:.7;margin-left:2px}
+.sts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:14px 0}
+.st{border-radius:14px;border:1px solid var(--bdr2);background:var(--bg2);padding:12px 14px}
+.sl{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.2em;color:var(--tx3)}
+.sv{font-size:22px;font-weight:800;letter-spacing:-.03em;margin-top:1px}
+#app{margin:14px 0 40px}
+.c{border-radius:var(--r);border:1px solid var(--bdr);background:var(--bg2);padding:18px;margin-bottom:8px;box-shadow:var(--sh2);transition:.25s;animation:u .25s ease both;position:relative}
+.c:hover{box-shadow:var(--sh)}.c.sent{border-left:3px solid var(--g)}.c.replied{border-left:3px solid var(--bl)}.c.meeting{border-left:3px solid var(--pu)}.c.quoted{border-left:3px solid var(--or)}.c.won{border-left:3px solid var(--g);background:var(--gb)}.c.lost{opacity:.3}.c.cold{opacity:.2}.c.fu{border-left:3px dashed var(--ac)}.c.re{border-left:3px solid var(--yl)}.c.skipped{opacity:.25}
+.c.urg::after{content:'⚡ Needs attention';position:absolute;top:10px;right:10px;font-size:8px;font-weight:800;letter-spacing:.06em;color:var(--or);background:var(--orb);padding:2px 8px;border-radius:8px}
+@keyframes u{0%{opacity:0;transform:translateY(6px)}100%{opacity:1;transform:translateY(0)}}
+.rw{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.nm{font-size:15px;font-weight:700;letter-spacing:-.02em}.mt{font-size:10px;color:var(--tx3);margin-top:1px}
+.pl{font-size:12px;font-weight:800;color:var(--ac);background:var(--acl);padding:4px 10px;border-radius:12px;white-space:nowrap}
+.bs{display:flex;gap:3px;margin:8px 0;flex-wrap:wrap}
+.b{font-size:8px;padding:2px 7px;border-radius:10px;font-weight:800;text-transform:uppercase;letter-spacing:.4px}
+.bt1{background:var(--acl);color:var(--ac)}.bt2{background:rgba(122,112,103,.1);color:var(--tx3)}.bre{background:var(--ylb);color:var(--yl)}.bfu{background:var(--acl);color:var(--ac);border:1px dashed var(--ac)}
+.baw{background:rgba(122,112,103,.06);color:var(--tx3)}.brp{background:var(--blb);color:var(--bl)}.bmt{background:var(--pub);color:var(--pu)}.bqt{background:var(--orb);color:var(--or)}.bwn{background:var(--gb);color:var(--g)}.bls{background:var(--rdb);color:var(--rd)}.bco{background:rgba(122,112,103,.08);color:var(--tx3)}
+.en{display:flex;gap:3px;margin:6px 0;flex-wrap:wrap}
+.et{font-size:9px;padding:3px 8px;border-radius:10px;background:rgba(122,112,103,.06);color:var(--tx2);font-weight:600;text-decoration:none;transition:.15s}
+a.et:hover{background:var(--acl);color:var(--ac)}
+.lk{display:flex;gap:4px;margin:8px 0;flex-wrap:wrap}
+.lk a{font-size:9px;color:var(--ac);text-decoration:none;background:var(--acl);padding:4px 10px;border-radius:10px;font-weight:700;transition:.15s}
+.lk a:hover{background:var(--ac);color:#fff}
+label{display:block;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.2em;color:var(--tx3);margin-bottom:4px}
+input,textarea,select{width:100%;background:rgba(15,14,12,.5);border:1px solid var(--bdr);color:var(--tx);padding:9px 12px;border-radius:12px;font-family:var(--f);font-size:12px;transition:.15s}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--ac)}
+textarea{min-height:120px;line-height:1.5;resize:vertical}
+select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%237A7067' d='M4 6L0 1h8z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+.fd{margin-bottom:8px}
+.btn{padding:8px 16px;border-radius:12px;border:1px solid var(--bdr);background:var(--bg3);color:var(--tx);font-size:11px;font-family:var(--f);cursor:pointer;font-weight:700;transition:.15s}
+.btn:hover{transform:translateY(-1px);box-shadow:var(--sh2)}.btn:active{transform:scale(.97)}
+.bs2{padding:5px 10px;font-size:10px;border-radius:10px}
+.bp{background:var(--ac);border-color:var(--ac);color:#fff}.bp:hover{filter:brightness(1.1)}
+.bd{color:var(--rd);border-color:rgba(248,113,113,.15)}.bd:hover{background:var(--rdb)}
+.ac{display:flex;gap:5px;margin-top:12px;padding-top:12px;border-top:1px solid var(--bdr2);flex-wrap:wrap}
+.empty{text-align:center;padding:50px 20px;color:var(--tx3)}.empty h3{font-size:15px;font-weight:700;color:var(--tx);margin:6px 0 3px}
+.ld{text-align:center;padding:50px;color:var(--tx2);font-size:12px}
+.fn{display:flex;gap:2px;margin:14px 0;align-items:flex-end}
+.fs{flex:1;text-align:center;padding:12px 4px;border-radius:12px;border:1px solid var(--bdr2);background:var(--bg2)}
+.fv{font-size:26px;font-weight:800;letter-spacing:-.03em}.fl{font-size:7px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:var(--tx3);margin-top:2px}
+.fa{color:var(--tx3);font-size:12px;align-self:center}
+.mg{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:14px 0}
+.m{border-radius:16px;border:1px solid var(--bdr2);background:var(--bg2);padding:16px}
+.ml{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--tx3)}
+.mv{font-size:28px;font-weight:800;margin-top:3px;letter-spacing:-.03em}.ms{font-size:10px;color:var(--tx3);margin-top:1px}
+.cc{border-radius:16px;border:1px solid var(--bdr2);background:var(--bg2);padding:16px;margin-bottom:8px;transition:.2s;animation:u .25s ease both}
+.cc:hover{box-shadow:var(--sh2);transform:translateY(-1px)}
+.tp{font-size:10px;padding:4px 0;border-bottom:1px solid var(--bdr2);color:var(--tx3)}.tp:last-child{border-bottom:none}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--bg3);border:1px solid var(--bdr);color:var(--tx);padding:10px 20px;border-radius:14px;font-size:12px;font-weight:700;z-index:999;box-shadow:var(--sh);transition:.3s ease;backdrop-filter:blur(10px)}
+.toast.show{transform:translateX(-50%) translateY(0)}.toast.ok{border-color:rgba(52,211,153,.3);color:var(--g)}.toast.err{border-color:rgba(248,113,113,.3);color:var(--rd)}
+@media(max-width:600px){.ht{font-size:1.3rem}.sts{grid-template-columns:repeat(2,1fr)}.sv{font-size:18px}.c{padding:14px;border-radius:16px}.ac{flex-direction:column}.ac .btn{width:100%;text-align:center}.fn{flex-wrap:wrap;gap:4px}.fs{min-width:60px}.fa{display:none}.mg{grid-template-columns:1fr 1fr}.ha{width:100%}.ha .btn{flex:1;text-align:center;padding:7px 6px;font-size:10px}}
 </style>
 </head><body>
-<div class="hero"><div class="hero-inner"><div>
-<p class="hero-eyebrow">PermitPulse v4</p>
-<h1 class="hero-title">Architect pipeline</h1>
-<p class="hero-desc">Scan permits, draft outreach, track replies, close deals.</p>
-</div><div class="hero-actions">
-<button class="btn" onclick="refresh()">Refresh</button>
-<button class="btn btn-blue" onclick="doCheckReplies()">Check replies</button>
-<button class="btn" onclick="doGenFollowups()">Gen follow-ups</button>
-<button class="btn btn-primary" onclick="triggerScan()">Run scan</button>
-</div></div></div>
-
+<div class="w">
+<div class="hero"><div class="hr"><div>
+<p class="he">PermitPulse</p>
+<h1 class="ht">Architect pipeline</h1>
+<p class="hd">Scan → Draft → Send → Track → Close</p>
+</div><div class="ha">
+<button class="btn bs2" onclick="refresh()">↻</button>
+<button class="btn bs2" onclick="doReplies()">Replies</button>
+<button class="btn bs2" onclick="doFU()">Follow-ups</button>
+<button class="btn bs2 bp" onclick="doScan()">Scan</button>
+</div></div>
 <div class="tabs" id="tabs">
-<div class="tab active" data-tab="drafts">Drafts</div>
-<div class="tab" data-tab="pipeline">Pipeline</div>
-<div class="tab" data-tab="analytics">Analytics</div>
-<div class="tab" data-tab="crm">CRM</div>
+<div class="tab on" data-t="drafts">Drafts</div>
+<div class="tab" data-t="pipeline">Pipeline</div>
+<div class="tab" data-t="analytics">Analytics</div>
+<div class="tab" data-t="crm">CRM</div>
 </div>
-
-<div class="stats" id="stats"></div>
-<div class="container" id="app"><div class="loading">Loading...</div></div>
-
+<div class="sts" id="sts"></div>
+</div>
+<div id="app"><div class="ld">Loading...</div></div>
+</div>
+<div class="toast" id="toast"></div>
 <script>
-var API=window.location.origin,drafts=[],analytics=null,crmData=[],currentTab='drafts';
-
-// Tab switching
-document.getElementById('tabs').addEventListener('click',function(e){
-  if(!e.target.classList.contains('tab'))return;
-  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});
-  e.target.classList.add('active');
-  currentTab=e.target.getAttribute('data-tab');
-  renderAll();
-});
-
-function refresh(){loadDrafts()}
-
-async function loadDrafts(){
-  document.getElementById('app').innerHTML='<div class="loading">Loading...</div>';
-  try{
-    var r=await fetch(API+'/drafts');drafts=await r.json();
-    try{var ar=await fetch(API+'/analytics');analytics=await ar.json()}catch(e){analytics=null}
-    try{var cr=await fetch(API+'/crm');crmData=await cr.json()}catch(e){crmData=[]}
-    renderAll();
-  }catch(e){document.getElementById('app').innerHTML='<div class="empty"><h3>Could not load</h3><p>'+e.message+'</p></div>'}
+var A=window.location.origin,D=[],an=null,cr=[],T='drafts';
+document.getElementById('tabs').onclick=function(e){var t=e.target;if(!t.dataset.t)return;document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('on')});t.classList.add('on');T=t.dataset.t;rT()};
+function toast(m,t){var e=document.getElementById('toast');e.className='toast '+(t==='ok'?'ok':t==='err'?'err':'');e.textContent=m;e.classList.add('show');setTimeout(function(){e.classList.remove('show')},2600)}
+function refresh(){ld()}
+async function ld(){
+  document.getElementById('app').innerHTML='<div class="ld">Loading...</div>';
+  try{D=await(await fetch(A+'/drafts')).json();
+  try{an=await(await fetch(A+'/analytics')).json()}catch(e){an=null}
+  try{cr=await(await fetch(A+'/crm')).json()}catch(e){cr=[]}
+  rS();rT()}catch(e){document.getElementById('app').innerHTML='<div class="empty"><h3>Error</h3><p>'+X(e.message)+'</p></div>'}
 }
-
-function renderAll(){renderStats();renderTab()}
-
-function renderStats(){
-  var p=drafts.filter(function(d){return d.status==='pending'}).length;
-  var s=drafts.filter(function(d){return d.status==='sent'||d.pipelineStatus}).length;
-  var re=drafts.filter(function(d){return d.pipelineStatus==='replied'||d.replyDetected}).length;
-  var w=drafts.filter(function(d){return d.pipelineStatus==='won'}).length;
-  document.getElementById('stats').innerHTML=
-    '<div class="stat-card"><p class="stat-label">Pending</p><p class="stat-value" style="color:var(--accent-dark)">'+p+'</p></div>'+
-    '<div class="stat-card"><p class="stat-label">Sent</p><p class="stat-value" style="color:var(--green)">'+s+'</p></div>'+
-    '<div class="stat-card"><p class="stat-label">Replies</p><p class="stat-value" style="color:var(--blue)">'+re+'</p></div>'+
-    '<div class="stat-card"><p class="stat-label">Won</p><p class="stat-value" style="color:var(--green)">'+w+'</p></div>';
-  // Update tab counts
-  var pending=drafts.filter(function(d){return d.status==='pending'}).length;
-  var pipeline=drafts.filter(function(d){return d.status==='sent'||d.pipelineStatus}).length;
+function rS(){
+  var p=D.filter(function(d){return d.status==='pending'}).length;
+  var s=D.filter(function(d){return d.status==='sent'||d.pipelineStatus}).length;
+  var re=D.filter(function(d){return d.pipelineStatus==='replied'||d.replyDetected}).length;
+  var rv=D.filter(function(d){return d.pipelineStatus==='won'}).reduce(function(a,d){return a+(d.dealValue||0)},0);
+  document.getElementById('sts').innerHTML='<div class="st"><p class="sl">Pending</p><p class="sv" style="color:var(--ac)">'+p+'</p></div><div class="st"><p class="sl">Sent</p><p class="sv" style="color:var(--g)">'+s+'</p></div><div class="st"><p class="sl">Replies</p><p class="sv" style="color:var(--bl)">'+re+'</p></div><div class="st"><p class="sl">Revenue</p><p class="sv" style="color:var(--g)">$'+(rv>0?rv.toLocaleString():'0')+'</p></div>';
   var tabs=document.querySelectorAll('.tab');
-  tabs[0].innerHTML='Drafts<span class="tab-count">'+pending+'</span>';
-  tabs[1].innerHTML='Pipeline<span class="tab-count">'+pipeline+'</span>';
-  tabs[2].innerHTML='Analytics';
-  tabs[3].innerHTML='CRM<span class="tab-count">'+crmData.length+'</span>';
+  tabs[0].innerHTML='Drafts<span class="tc">'+p+'</span>';tabs[1].innerHTML='Pipeline<span class="tc">'+s+'</span>';tabs[2].innerHTML='Analytics';tabs[3].innerHTML='CRM<span class="tc">'+cr.length+'</span>';
 }
-
-function renderTab(){
-  if(currentTab==='drafts')renderDrafts();
-  else if(currentTab==='pipeline')renderPipeline();
-  else if(currentTab==='analytics')renderAnalytics();
-  else if(currentTab==='crm')renderCRM();
+function rT(){var a=document.getElementById('app');a.innerHTML='';if(T==='drafts')rDr(a);else if(T==='pipeline')rPi(a);else if(T==='analytics')rAn(a);else rCr(a)}
+function rDr(a){
+  var p=D.filter(function(d){return d.status==='pending'});
+  if(!p.length){a.innerHTML='<div class="empty"><h3>No pending drafts</h3><p>Run a scan or wait for 7am cron.</p></div>';return}
+  var we=p.filter(function(d){return d.recipientEmail&&d.recipientEmail.includes('@')}).length;
+  if(we>0){var b=document.createElement('div');b.style.cssText='display:flex;gap:6px;margin-bottom:12px;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:14px;border:1px solid var(--bdr2);background:var(--bg2)';b.innerHTML='<span style="font-size:11px;color:var(--tx2)"><b style="color:var(--ac)">'+we+'</b> ready to send</span><div style="display:flex;gap:4px"><button class="btn bs2 bp" onclick="doBatch()">Send all '+we+'</button><a href="'+A+'/export.csv" class="btn bs2" style="text-decoration:none">↓ CSV</a></div>';a.appendChild(b)}
+  p.sort(function(a,b){if(a.tier==='tier1'&&b.tier!=='tier1')return-1;if(b.tier==='tier1'&&a.tier!=='tier1')return 1;return(b.score||0)-(a.score||0)});
+  p.forEach(function(d,i){mD(a,d,i)})
 }
-
-// ── DRAFTS TAB ──
-function renderDrafts(){
-  var app=document.getElementById('app');app.innerHTML='';
-  var pending=drafts.filter(function(d){return d.status==='pending'});
-  if(!pending.length){app.innerHTML='<div class="empty"><h3>No pending drafts</h3><p>Run a scan or wait for the morning cron.</p></div>';return}
-  pending.sort(function(a,b){if(a.tier==='tier1'&&b.tier!=='tier1')return-1;if(b.tier==='tier1'&&a.tier!=='tier1')return 1;return(b.score||0)-(a.score||0)});
-  pending.forEach(function(d,i){renderDraftCard(app,d,i)});
+function mD(a,d,i){
+  var sid=d.id.replace('draft:',''),v=document.createElement('div');
+  var cl='c';if(d.isFollowUp)cl+=' fu';if(d.isReEngagement)cl+=' re';
+  v.className=cl;v.style.animationDelay=(i*30)+'ms';
+  var en='';
+  if(d.firmName)en+='<span class="et">'+X(d.firmName)+'</span>';
+  if(d.linkedin)en+='<a href="'+X(d.linkedin)+'" target="_blank" class="et">LinkedIn↗</a>';
+  if(d.phone)en+='<span class="et">'+X(d.phone)+'</span>';
+  if(d.firmWebsite)en+='<a href="'+X(d.firmWebsite)+'" target="_blank" class="et">Web↗</a>';
+  var tb=d.tier==='tier1'?'<span class="b bt1">Priority</span>':d.tier==='reengagement'?'<span class="b bre">Re-engage</span>':'<span class="b bt2">Standard</span>';
+  var fb=d.isFollowUp?'<span class="b bfu">F/U #'+(d.followUpNumber||1)+'</span>':'';
+  var ny=d.architectLicense?'https://eservices.nysed.gov/professions/verification-search?t=RA&n='+String(d.architectLicense).padStart(6,'0'):'';
+  v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+tb+fb+'</div><div class="nm"></div><div class="mt"></div></div><div class="pl">'+(d.score||0)+'</div></div>'+(en?'<div class="en">'+en+'</div>':'')+'<div class="lk">'+(ny?'<a href="'+ny+'" target="_blank">NYSED</a>':'')+'<a class="le" target="_blank">Email</a><a class="ll" target="_blank">LinkedIn</a><a class="lf" target="_blank">Firm</a></div><div class="fd"><label>Email</label><input class="fe" placeholder="architect@firm.com"></div><div class="fd"><label>Subject</label><input class="fs2"></div><div class="fd"><label>Body</label><textarea class="fb"></textarea></div><div class="ac"><button class="btn bp ja">Send</button><button class="btn jv">Save</button><button class="btn bd jk">Skip</button></div>';
+  v.querySelector('.nm').textContent=d.architectName||'Unknown';
+  v.querySelector('.mt').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'');
+  var n=d.architectName||'';
+  v.querySelector('.le').href='https://www.google.com/search?q='+encodeURIComponent('"'+n+'" architect NYC email');
+  v.querySelector('.ll').href='https://www.google.com/search?q='+encodeURIComponent(n+' architect site:linkedin.com');
+  v.querySelector('.lf').href='https://www.google.com/search?q='+encodeURIComponent(n+' architect portfolio NYC');
+  v.querySelector('.fe').value=d.recipientEmail||'';v.querySelector('.fs2').value=d.subject||'';v.querySelector('.fb').value=d.body||'';
+  v.querySelector('.ja').onclick=function(){doA(sid,v)};v.querySelector('.jv').onclick=function(){doV(sid,v)};v.querySelector('.jk').onclick=function(){doK(sid)};
+  a.appendChild(v)
 }
-
-function renderDraftCard(app,d,i){
-  var sid=d.id.replace('draft:',''),div=document.createElement('div');
-  div.className='card'+(d.isFollowUp?' followup':'');div.style.animationDelay=(i*40)+'ms';
-  var enrichHtml='';
-  if(d.firmName)enrichHtml+='<span class="enrich-tag">'+esc(d.firmName)+'</span>';
-  if(d.linkedin)enrichHtml+='<a href="'+esc(d.linkedin)+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">LinkedIn</a>';
-  if(d.phone)enrichHtml+='<span class="enrich-tag">'+esc(d.phone)+'</span>';
-  if(d.firmWebsite)enrichHtml+='<a href="'+esc(d.firmWebsite)+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">Website</a>';
-  var tierBadge=d.tier==='tier1'?'tier1':'tier2';
-  var fuBadge=d.isFollowUp?'<span class="badge badge-followup">Follow-up #'+(d.followUpNumber||1)+'</span>':'';
-  div.innerHTML='<div class="card-top"><div style="flex:1"><div class="badge-row"><span class="badge badge-'+tierBadge+'">'+(d.tier==='tier1'?'Priority':'Standard')+'</span>'+fuBadge+'</div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(d.score||0)+'</div></div>'+(enrichHtml?'<div class="enrich-row">'+enrichHtml+'</div>':'')+'<div class="links"><a class="lk-e" target="_blank">Find email</a><a class="lk-f" target="_blank">Find firm</a></div><div class="field"><label>Architect email</label><input class="f-email" placeholder="architect@firm.com"></div><div class="field"><label>Subject</label><input class="f-subj"></div><div class="field"><label>Email body</label><textarea class="f-body"></textarea></div><div class="card-actions"><button class="btn btn-primary js-a">Send via Gmail</button><button class="btn js-s">Save edits</button><button class="btn btn-danger js-k">Skip</button></div>';
-  div.querySelector('.arch-name').textContent=d.architectName||'Unknown';
-  div.querySelector('.arch-meta').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'');
-  div.querySelector('.lk-e').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect NYC email');
-  div.querySelector('.lk-f').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect portfolio NYC');
-  div.querySelector('.f-email').value=d.recipientEmail||'';
-  div.querySelector('.f-subj').value=d.subject||'';
-  div.querySelector('.f-body').value=d.body||'';
-  div.querySelector('.js-a').addEventListener('click',function(){doApprove(sid,div)});
-  div.querySelector('.js-s').addEventListener('click',function(){doSave(sid,div)});
-  div.querySelector('.js-k').addEventListener('click',function(){doSkip(sid)});
-  app.appendChild(div);
+function rPi(a){
+  var p=D.filter(function(d){return d.status==='sent'||d.pipelineStatus});
+  if(!p.length){a.innerHTML='<div class="empty"><h3>No sent emails</h3><p>Send drafts first.</p></div>';return}
+  var bar=document.createElement('div');bar.style.cssText='display:flex;gap:6px;margin-bottom:10px;justify-content:flex-end';bar.innerHTML='<a href="'+A+'/export.csv" class="btn bs2" style="text-decoration:none">↓ CSV</a>';a.appendChild(bar);
+  var so={awaiting_reply:0,replied:1,meeting:2,quoted:3,won:4,lost:5,cold:6};
+  p.sort(function(a,b){return(so[a.pipelineStatus]||0)-(so[b.pipelineStatus]||0)});
+  p.forEach(function(d,i){
+    var sid=d.id.replace('draft:',''),v=document.createElement('div'),ps=d.pipelineStatus||'awaiting_reply';
+    var urg=ps==='awaiting_reply'&&d.sentAt&&(Date.now()-new Date(d.sentAt).getTime())>7*86400000;
+    v.className='c '+ps+(urg?' urg':'');v.style.animationDelay=(i*20)+'ms';
+    var bc={awaiting_reply:'baw',replied:'brp',meeting:'bmt',quoted:'bqt',won:'bwn',lost:'bls',cold:'bco'};
+    var dv=(ps==='quoted'||ps==='won')?'<div class="fd" style="flex:1;min-width:100px;margin:0"><label>Deal $</label><input class="dv" type="number" placeholder="4500" value="'+(d.dealValue||'')+'"></div>':'';
+    v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs"><span class="b '+(bc[ps]||'baw')+'">'+ps.replace(/_/g,' ')+'</span>'+(d.replyDetected?'<span class="b brp">reply</span>':'')+(d.followUpCount?'<span class="b bfu">'+d.followUpCount+' f/u</span>':'')+'</div><div class="nm"></div><div class="mt"></div></div><div class="pl">'+(d.score||0)+'</div></div><div style="display:flex;gap:6px;margin:10px 0;flex-wrap:wrap"><div class="fd" style="flex:2;min-width:120px;margin:0"><label>Status</label><select class="ps"><option value="awaiting_reply">Awaiting reply</option><option value="replied">Replied</option><option value="meeting">Meeting</option><option value="quoted">Quoted</option><option value="won">Won ✓</option><option value="lost">Lost</option><option value="cold">Cold</option></select></div>'+dv+'</div><div class="fd"><label>Notes</label><textarea class="ni" style="min-height:40px;font-size:11px" placeholder="Notes...">'+(X(d.notes||''))+'</textarea></div><div class="ac"><button class="btn bs2 bp jss">Save</button><span style="font-size:9px;color:var(--tx3);padding:4px">'+(d.recipientEmail?'→ '+X(d.recipientEmail):'—')+' · '+(d.sentAt?tA(d.sentAt):'?')+'</span></div>';
+    v.querySelector('.nm').textContent=d.architectName||'Unknown';v.querySelector('.mt').textContent=d.projectAddress||'';
+    v.querySelector('.ps').value=ps;
+    v.querySelector('.jss').onclick=function(){var ns=v.querySelector('.ps').value,dvi=v.querySelector('.dv'),n=v.querySelector('.ni').value;doSt(sid,ns,dvi?dvi.value:'',n)};
+    a.appendChild(v)})
 }
-
-// ── PIPELINE TAB ──
-function renderPipeline(){
-  var app=document.getElementById('app');app.innerHTML='';
-  var pipelineDrafts=drafts.filter(function(d){return d.status==='sent'||d.pipelineStatus});
-  if(!pipelineDrafts.length){app.innerHTML='<div class="empty"><h3>No sent emails yet</h3><p>Send some drafts first, then track them here.</p></div>';return}
-  var statusOrder={awaiting_reply:0,replied:1,meeting:2,quoted:3,won:4,lost:5,cold:6};
-  pipelineDrafts.sort(function(a,b){var sa=statusOrder[a.pipelineStatus]||0,sb=statusOrder[b.pipelineStatus]||0;return sa-sb});
-  pipelineDrafts.forEach(function(d,i){
-    var sid=d.id.replace('draft:',''),div=document.createElement('div');
-    var ps=d.pipelineStatus||'awaiting_reply';
-    div.className='card '+ps;div.style.animationDelay=(i*30)+'ms';
-    div.innerHTML='<div class="card-top"><div style="flex:1"><div class="badge-row"><span class="badge badge-'+ps+'">'+ps.replace(/_/g,' ')+'</span>'+(d.replyDetected?'<span class="badge badge-replied">reply detected</span>':'')+(d.followUpCount?'<span class="badge badge-followup">'+d.followUpCount+' follow-up'+(d.followUpCount>1?'s':'')+'</span>':'')+'</div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(d.score||0)+'</div></div><div class="field"><label>Pipeline status</label><select class="pipeline-select ps-sel"><option value="awaiting_reply">Awaiting reply</option><option value="replied">Replied</option><option value="meeting">Meeting scheduled</option><option value="quoted">Quoted</option><option value="won">Won</option><option value="lost">Lost</option><option value="cold">Cold / No response</option></select></div>'+(ps==='quoted'||ps==='won'?'<div class="field"><label>Deal value ($)</label><input class="dv-input" type="number" placeholder="e.g. 4500" value="'+(d.dealValue||'')+'"></div>':'')+'<div class="field"><label>Notes</label><textarea class="notes-area n-input" placeholder="Add notes about this lead...">'+(d.notes||'')+'</textarea></div><div class="card-actions"><button class="btn btn-primary btn-sm js-save-status">Save status</button>'+(d.recipientEmail?'<span style="font-size:11px;color:var(--text-dim);padding:6px">Sent to '+esc(d.recipientEmail)+' on '+(d.sentAt?d.sentAt.slice(0,10):'?')+'</span>':'')+'</div>';
-    div.querySelector('.arch-name').textContent=d.architectName||'Unknown';
-    div.querySelector('.arch-meta').textContent=(d.projectAddress||'')+' · Sent '+(d.sentAt?timeAgo(d.sentAt):'?');
-    div.querySelector('.ps-sel').value=ps;
-    div.querySelector('.js-save-status').addEventListener('click',function(){
-      var newStatus=div.querySelector('.ps-sel').value;
-      var dv=div.querySelector('.dv-input');
-      var notes=div.querySelector('.n-input').value;
-      doUpdateStatus(sid,newStatus,dv?dv.value:'',notes);
-    });
-    app.appendChild(div);
-  });
+function rAn(a){
+  if(!an){a.innerHTML='<div class="ld">Loading...</div>';return}
+  var f=an.funnel,r=an.rates,rv=an.revenue,t=an.timing,ti=an.tiers;
+  a.innerHTML='<h2 style="font-size:16px;font-weight:800;margin-bottom:10px">Funnel</h2><div class="fn"><div class="fs"><div class="fv">'+f.total+'</div><div class="fl">Draft</div></div><div class="fa">→</div><div class="fs"><div class="fv" style="color:var(--g)">'+f.sent+'</div><div class="fl">Sent</div></div><div class="fa">→</div><div class="fs"><div class="fv" style="color:var(--bl)">'+f.replied+'</div><div class="fl">Reply</div></div><div class="fa">→</div><div class="fs"><div class="fv" style="color:var(--pu)">'+f.meeting+'</div><div class="fl">Meet</div></div><div class="fa">→</div><div class="fs"><div class="fv" style="color:var(--or)">'+f.quoted+'</div><div class="fl">Quote</div></div><div class="fa">→</div><div class="fs"><div class="fv" style="color:var(--g)">'+f.won+'</div><div class="fl">Won</div></div></div><div class="mg"><div class="m"><div class="ml">Reply rate</div><div class="mv" style="color:var(--bl)">'+r.replyRate+'%</div><div class="ms">of sent</div></div><div class="m"><div class="ml">Meeting rate</div><div class="mv" style="color:var(--pu)">'+r.meetingRate+'%</div><div class="ms">of replies</div></div><div class="m"><div class="ml">Close rate</div><div class="mv" style="color:var(--g)">'+r.closeRate+'%</div><div class="ms">of quoted</div></div><div class="m"><div class="ml">Reply time</div><div class="mv">'+t.avgReplyDays+'d</div><div class="ms">avg biz days</div></div><div class="m"><div class="ml">Revenue</div><div class="mv" style="color:var(--g)">$'+rv.estimated.toLocaleString()+'</div><div class="ms">'+rv.wonDeals+' deal'+(rv.wonDeals!==1?'s':'')+'</div></div><div class="m"><div class="ml">Follow-ups</div><div class="mv">'+f.followUps+'</div><div class="ms">auto-generated</div></div></div><h2 style="font-size:16px;font-weight:800;margin:20px 0 10px">Tiers</h2><div class="mg"><div class="m"><div class="ml">Tier 1</div><div class="mv">'+ti.tier1.rate+'%</div><div class="ms">'+ti.tier1.replied+'/'+ti.tier1.sent+'</div></div><div class="m"><div class="ml">Tier 2</div><div class="mv">'+ti.tier2.rate+'%</div><div class="ms">'+ti.tier2.replied+'/'+ti.tier2.sent+'</div></div><div class="m"><div class="ml">Tracked</div><div class="mv">'+an.totalArchitects+'</div><div class="ms">architects</div></div><div class="m"><div class="ml">Cold</div><div class="mv" style="color:var(--tx3)">'+f.cold+'</div><div class="ms">no response</div></div></div>'
 }
-
-// ── ANALYTICS TAB ──
-function renderAnalytics(){
-  var app=document.getElementById('app');
-  if(!analytics){app.innerHTML='<div class="loading">Loading analytics...</div>';return}
-  var f=analytics.funnel,r=analytics.rates,rev=analytics.revenue,t=analytics.timing,ti=analytics.tiers;
-  app.innerHTML='<div style="margin-bottom:24px"><h2 style="font-size:20px;font-weight:600;margin-bottom:16px;letter-spacing:-0.02em">Pipeline funnel</h2><div class="funnel"><div class="funnel-step"><div class="funnel-num">'+f.total+'</div><div class="funnel-label">Drafted</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--green)">'+f.sent+'</div><div class="funnel-label">Sent</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--blue)">'+f.replied+'</div><div class="funnel-label">Replied</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--purple)">'+f.meeting+'</div><div class="funnel-label">Meeting</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--orange)">'+f.quoted+'</div><div class="funnel-label">Quoted</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--green)">'+f.won+'</div><div class="funnel-label">Won</div></div></div></div><div class="metric-grid"><div class="metric"><div class="metric-label">Reply rate</div><div class="metric-value" style="color:var(--blue)">'+r.replyRate+'%</div><div class="metric-sub">of sent emails got a reply</div></div><div class="metric"><div class="metric-label">Meeting rate</div><div class="metric-value" style="color:var(--purple)">'+r.meetingRate+'%</div><div class="metric-sub">of replies led to meetings</div></div><div class="metric"><div class="metric-label">Close rate</div><div class="metric-value" style="color:var(--green)">'+r.closeRate+'%</div><div class="metric-sub">of quotes turned into wins</div></div><div class="metric"><div class="metric-label">Avg reply time</div><div class="metric-value">'+t.avgReplyDays+'d</div><div class="metric-sub">business days to first reply</div></div><div class="metric"><div class="metric-label">Revenue attributed</div><div class="metric-value" style="color:var(--green)">$'+rev.estimated.toLocaleString()+'</div><div class="metric-sub">'+rev.wonDeals+' closed deal'+(rev.wonDeals!==1?'s':'')+'</div></div><div class="metric"><div class="metric-label">Follow-ups sent</div><div class="metric-value">'+f.followUps+'</div><div class="metric-sub">auto-generated sequences</div></div></div><div style="margin-top:24px"><h2 style="font-size:20px;font-weight:600;margin-bottom:16px;letter-spacing:-0.02em">Tier comparison</h2><div class="metric-grid"><div class="metric"><div class="metric-label">Tier 1 (Priority)</div><div class="metric-value">'+ti.tier1.rate+'%</div><div class="metric-sub">'+ti.tier1.replied+' replies from '+ti.tier1.sent+' sent</div></div><div class="metric"><div class="metric-label">Tier 2 (Standard)</div><div class="metric-value">'+ti.tier2.rate+'%</div><div class="metric-sub">'+ti.tier2.replied+' replies from '+ti.tier2.sent+' sent</div></div></div></div><div style="margin-top:24px"><div class="metric-grid"><div class="metric"><div class="metric-label">Total architects tracked</div><div class="metric-value">'+analytics.totalArchitects+'</div><div class="metric-sub">in 180-day database</div></div><div class="metric"><div class="metric-label">Cold / no response</div><div class="metric-value" style="color:var(--text-dim)">'+f.cold+'</div><div class="metric-sub">after '+2+' follow-ups</div></div><div class="metric"><div class="metric-label">Skipped</div><div class="metric-value">'+f.skipped+'</div><div class="metric-sub">manually skipped drafts</div></div></div></div>';
+function rCr(a){
+  if(!cr.length){a.innerHTML='<div class="empty"><h3>No records</h3><p>CRM populates on send.</p></div>';return}
+  cr.sort(function(a,b){return(b.updatedAt||'').localeCompare(a.updatedAt||'')});
+  cr.forEach(function(c,i){
+    var v=document.createElement('div');v.className='cc';v.style.animationDelay=(i*20)+'ms';
+    var bc={replied:'brp',meeting:'bmt',quoted:'bqt',won:'bwn',lost:'bls',cold:'bco',sent:'baw',awaiting_reply:'baw'};
+    var sb=c.lastStatus?'<span class="b '+(bc[c.lastStatus]||'baw')+'">'+X(c.lastStatus).replace(/_/g,' ')+'</span>':'';
+    var ci='';
+    if(c.email)ci+='<span class="et">'+X(c.email)+'</span>';if(c.phone)ci+='<span class="et">'+X(c.phone)+'</span>';if(c.firmName)ci+='<span class="et">'+X(c.firmName)+'</span>';
+    if(c.linkedin)ci+='<a href="'+X(c.linkedin)+'" target="_blank" class="et">LinkedIn↗</a>';if(c.firmWebsite)ci+='<a href="'+X(c.firmWebsite)+'" target="_blank" class="et">Web↗</a>';
+    var tp=(c.touchpoints||[]).slice(-5).reverse().map(function(t){return'<div class="tp"><b>'+X(t.type)+'</b> — '+tA(t.at)+(t.detail?' · '+X(t.detail):'')+'</div>'}).join('');
+    v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+sb+'</div><div class="nm"></div><div class="mt"></div></div><div class="pl">'+(c.score||'—')+'</div></div>'+(ci?'<div class="en">'+ci+'</div>':'')+(tp?'<div style="margin-top:8px"><label>History</label>'+tp+'</div>':'');
+    v.querySelector('.nm').textContent=c.name||'Unknown';v.querySelector('.mt').textContent='RA #'+(c.license||'?')+' · '+(c.projectAddress||'');
+    a.appendChild(v)})
 }
-
-// ── CRM TAB ──
-function renderCRM(){
-  var app=document.getElementById('app');
-  if(!crmData.length){app.innerHTML='<div class="empty"><h3>No architect records yet</h3><p>CRM records are created when you send emails.</p></div>';return}
-  app.innerHTML='';
-  crmData.sort(function(a,b){return(b.updatedAt||'').localeCompare(a.updatedAt||'')});
-  crmData.forEach(function(c,i){
-    var div=document.createElement('div');div.className='crm-card';div.style.animationDelay=(i*30)+'ms';
-    var statusBadge=c.lastStatus?'<span class="badge badge-'+(c.lastStatus||'')+'">'+esc(c.lastStatus||'').replace(/_/g,' ')+'</span>':'';
-    var contactInfo='';
-    if(c.email)contactInfo+='<span class="enrich-tag">'+esc(c.email)+'</span>';
-    if(c.phone)contactInfo+='<span class="enrich-tag">'+esc(c.phone)+'</span>';
-    if(c.firmName)contactInfo+='<span class="enrich-tag">'+esc(c.firmName)+'</span>';
-    if(c.linkedin)contactInfo+='<a href="'+esc(c.linkedin)+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">LinkedIn</a>';
-    var tps=(c.touchpoints||[]).slice(-5).reverse().map(function(tp){return '<div class="touchpoint"><strong>'+esc(tp.type)+'</strong> — '+timeAgo(tp.at)+(tp.detail?' · '+esc(tp.detail):'')+'</div>'}).join('');
-    div.innerHTML='<div class="card-top"><div style="flex:1"><div class="badge-row">'+statusBadge+'</div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(c.score||'—')+'</div></div>'+(contactInfo?'<div class="enrich-row">'+contactInfo+'</div>':'')+(tps?'<div style="margin-top:12px"><label>Recent touchpoints</label>'+tps+'</div>':'');
-    div.querySelector('.arch-name').textContent=c.name||'Unknown';
-    div.querySelector('.arch-meta').textContent='RA #'+(c.license||'?')+' · '+(c.projectAddress||'');
-    app.appendChild(div);
-  });
-}
-
-// ── HELPERS ──
-function esc(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
-function timeAgo(d){if(!d)return'?';var s=Math.floor((Date.now()-new Date(d).getTime())/1000);if(s<60)return'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago'}
-
-function gF(d){return{email:d.querySelector('.f-email').value.trim(),subject:d.querySelector('.f-subj').value.trim(),body:d.querySelector('.f-body').value.trim()}}
-
-async function doSave(id,div){var f=gF(div);try{await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});alert('Saved')}catch(e){alert(e.message)}}
-
-async function doApprove(id,div){var f=gF(div);if(!f.email||f.email.indexOf('@')<0){alert('Add email first');return}await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});if(!confirm('Send to '+f.email+'?'))return;try{var r=await fetch(API+'/drafts/'+id+'/approve',{method:'POST'}),d=await r.json();if(d.success){alert('Sent!');loadDrafts()}else alert(d.error||'Failed')}catch(e){alert(e.message)}}
-
-async function doSkip(id){if(!confirm('Skip?'))return;await fetch(API+'/drafts/'+id+'/skip',{method:'POST'});loadDrafts()}
-
-async function doUpdateStatus(id,status,dealValue,notes){
-  try{
-    var body={pipelineStatus:status};
-    if(dealValue)body.dealValue=dealValue;
-    if(notes)body.notes=notes;
-    await fetch(API+'/drafts/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    loadDrafts();
-  }catch(e){alert(e.message)}
-}
-
-async function triggerScan(){if(!confirm('Run scan now?'))return;document.getElementById('app').innerHTML='<div class="loading">Scanning DOB filings...</div>';try{var r=await fetch(API+'/scan'),d=await r.json();alert(d.picks+' new picks from '+d.scanned+' filings');loadDrafts()}catch(e){alert('Failed: '+e.message)}}
-
-async function doCheckReplies(){try{var r=await fetch(API+'/check-replies',{method:'POST'}),d=await r.json();alert('Checked '+d.checked+' threads, found '+d.replies+' replies');loadDrafts()}catch(e){alert(e.message)}}
-
-async function doGenFollowups(){try{var r=await fetch(API+'/generate-followups',{method:'POST'}),d=await r.json();alert('Generated '+d.generated+' follow-up drafts');loadDrafts()}catch(e){alert(e.message)}}
-
-loadDrafts();
+function X(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function tA(d){if(!d)return'?';var s=Math.floor((Date.now()-new Date(d).getTime())/1000);if(s<60)return'now';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d'}
+function gF(d){return{email:d.querySelector('.fe').value.trim(),subject:d.querySelector('.fs2').value.trim(),body:d.querySelector('.fb').value.trim()}}
+async function doV(id,v){var f=gF(v);try{await fetch(A+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});toast('Saved','ok')}catch(e){toast(e.message,'err')}}
+async function doA(id,v){var f=gF(v);if(!f.email||!f.email.includes('@')){toast('Add email first','err');return}await fetch(A+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});try{var r=await(await fetch(A+'/drafts/'+id+'/approve',{method:'POST'})).json();if(r.success){toast('Sent!','ok');v.style.opacity='.2';setTimeout(ld,600)}else toast(r.error||'Failed','err')}catch(e){toast(e.message,'err')}}
+async function doK(id){try{await fetch(A+'/drafts/'+id+'/skip',{method:'POST'});toast('Skipped','');ld()}catch(e){toast(e.message,'err')}}
+async function doSt(id,s,dv,n){try{var b={pipelineStatus:s};if(dv)b.dealValue=dv;if(n)b.notes=n;await fetch(A+'/drafts/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});toast('→ '+s.replace(/_/g,' '),'ok');ld()}catch(e){toast(e.message,'err')}}
+async function doBatch(){var n=D.filter(function(d){return d.status==='pending'&&d.recipientEmail&&d.recipientEmail.includes('@')}).length;if(!confirm('Send '+n+' emails?'))return;toast('Sending...','');try{var r=await(await fetch(A+'/batch-send',{method:'POST'})).json();toast(r.sent+' sent'+(r.failed?' ('+r.failed+' failed)':''),'ok');ld()}catch(e){toast(e.message,'err')}}
+async function doScan(){document.getElementById('app').innerHTML='<div class="ld">Scanning...</div>';try{var r=await(await fetch(A+'/scan')).json();toast(r.picks+' picks from '+r.scanned+' filings','ok');ld()}catch(e){toast('Failed','err')}}
+async function doReplies(){toast('Checking...','');try{var r=await(await fetch(A+'/check-replies',{method:'POST'})).json();toast(r.replies+' replies ('+r.checked+' checked)','ok');if(r.replies>0)ld()}catch(e){toast(e.message,'err')}}
+async function doFU(){try{var r=await(await fetch(A+'/generate-followups',{method:'POST'})).json();toast(r.generated+' follow-ups','ok');if(r.generated>0)ld()}catch(e){toast(e.message,'err')}}
+ld();
 </script>
 </body></html>`;
 }
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CLI MODE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
