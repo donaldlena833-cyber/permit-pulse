@@ -1,5 +1,5 @@
 /**
- * PermitPulse v3 — Architect Relationship Engine
+ * PermitPulse v4 — Architect Relationship Engine
  * 
  * Runs daily at 7am ET via Cloudflare Worker cron.
  * 
@@ -7,15 +7,23 @@
  * 1. Pull new DOB Job Application Filings (architect-filed alterations)
  * 2. Score each architect against MetroGlassPro profile
  * 3. Check "already contacted" list to avoid repeats
- * 4. Pick top 5 new architects of the day
- * 5. Enrich with filing history + Google search for firm/email
- * 6. Draft personalized outreach emails
- * 7. Send digest to Donald for review + approval
+ * 4. Pick top 30 new architects of the day (10 tier1 + 20 tier2)
+ * 5. Enrich with Apollo (email, phone, LinkedIn, firm)
+ * 6. Draft personalized outreach emails + save to queue
+ * 7. Check for replies to previously sent emails (Phase 2)
+ * 8. Auto-generate follow-ups after 5 business days (Phase 3)
+ * 9. Track pipeline: sent → replied → meeting → quoted → won/lost (Phase 1+4)
+ * 10. Maintain per-architect CRM records (Phase 5)
+ * 11. Smart re-engagement for returning architects (Phase 6)
  * 
- * ENV VARS:
+ * Dashboard tabs: Drafts | Pipeline | Analytics | CRM
+ * 
+ * ENV VARS / SECRETS:
  * - RESEND_API_KEY — for sending the digest email
+ * - GOOGLE_SERVICE_ACCOUNT — JSON key for Gmail API (domain-wide delegation)
+ * - APOLLO_API_KEY — for contact enrichment (free tier: 10K/mo)
  * - NOTIFY_EMAIL — where to send digest (default: operations@metroglasspro.com)
- * - KV namespace PERMIT_PULSE — stores contacted architect list
+ * - KV namespace PERMIT_PULSE — stores everything (picks, drafts, CRM, analytics)
  */
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -808,13 +816,14 @@ function str2ab(str) {
   return buf;
 }
 
-async function getGoogleAccessToken(serviceAccountJson, impersonateEmail) {
+async function getGoogleAccessToken(serviceAccountJson, impersonateEmail, scopes) {
   const sa = typeof serviceAccountJson === 'string' ? JSON.parse(serviceAccountJson) : serviceAccountJson;
   const now = Math.floor(Date.now() / 1000);
+  const scopeStr = scopes || 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly';
   const header = base64UrlEncode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const claimSet = base64UrlEncode(JSON.stringify({
     iss: sa.client_email, sub: impersonateEmail,
-    scope: 'https://www.googleapis.com/auth/gmail.send',
+    scope: scopeStr,
     aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
   }));
   const signInput = `${header}.${claimSet}`;
@@ -845,6 +854,334 @@ async function sendGmail({ to, subject, body, env }) {
   if (!res.ok) throw new Error(`Gmail send failed: ${await res.text()}`);
   const result = await res.json();
   return { success: true, messageId: result.id, threadId: result.threadId };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PHASE 2: REPLY DETECTION — check Gmail threads for architect responses
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function checkForReplies(env) {
+  if (!env.GOOGLE_SERVICE_ACCOUNT) return { checked: 0, replies: 0 };
+  const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
+  const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT, sender);
+  const queue = new DraftQueue(env.PERMIT_PULSE);
+  const allDrafts = await queue.getAllDrafts();
+  const sentDrafts = allDrafts.filter(d => d.status === 'sent' && d.gmailThreadId && !d.replyDetected);
+
+  let checked = 0, replies = 0;
+  for (const draft of sentDrafts) {
+    try {
+      const threadRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/${sender}/threads/${draft.gmailThreadId}?format=metadata&metadataHeaders=From`,
+        { headers: { 'Authorization': `Bearer ${accessToken}` } }
+      );
+      if (!threadRes.ok) continue;
+      const thread = await threadRes.json();
+      checked++;
+
+      // If thread has more than 1 message, someone replied
+      if (thread.messages && thread.messages.length > 1) {
+        const replyMsg = thread.messages.find(m => {
+          const from = (m.payload?.headers?.find(h => h.name === 'From')?.value || '').toLowerCase();
+          return !from.includes(sender.toLowerCase());
+        });
+        if (replyMsg) {
+          replies++;
+          await queue.updateDraft(draft.id, {
+            pipelineStatus: 'replied',
+            replyDetected: true,
+            replyDetectedAt: new Date().toISOString(),
+            replyMessageId: replyMsg.id,
+          });
+          // Also update the architect CRM record
+          await updateArchitectCRM(env.PERMIT_PULSE, draft.architectLicense, {
+            lastReplyAt: new Date().toISOString(),
+            lastStatus: 'replied',
+          });
+          console.log(`   📬 Reply detected from ${draft.architectName}`);
+        }
+      }
+    } catch (err) {
+      console.log(`   ⚠️  Reply check failed for ${draft.architectName}: ${err.message}`);
+    }
+  }
+  return { checked, replies };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PHASE 3: FOLLOW-UP SEQUENCES — auto-draft follow-ups after 5 business days
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const MAX_FOLLOWUPS = 2;
+const FOLLOWUP_WAIT_DAYS = 5;
+
+function businessDaysSince(dateStr) {
+  const sent = new Date(dateStr);
+  const now = new Date();
+  let days = 0;
+  const d = new Date(sent);
+  while (d < now) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) days++;
+  }
+  return days;
+}
+
+function draftFollowUpEmail(draft, followUpNumber) {
+  const firstName = (draft.architectName || '').split(' ')[0];
+  const addr = draft.projectAddress || '';
+
+  if (followUpNumber === 1) {
+    return {
+      subject: `Re: ${draft.subject}`,
+      body: `Hi ${firstName},
+
+Just circling back on my note about ${addr}. If glass or mirrors are in the scope, I'd love to share some photos of similar work we've done.
+
+Happy to jump on a quick call or send over examples — whatever's easiest.
+
+Best,
+Donald Lena
+MetroGlass Pro
+(332) 999-3846
+operations@metroglasspro.com`,
+    };
+  }
+
+  // Follow-up #2 — final touch, very light
+  return {
+    subject: `Re: ${draft.subject}`,
+    body: `Hi ${firstName},
+
+Last note from me — just wanted to make sure this didn't get buried. If glass work comes up on any of your projects, we'd be glad to help.
+
+Our portfolio: metroglasspro.com
+
+All the best,
+Donald Lena
+MetroGlass Pro
+(332) 999-3846`,
+  };
+}
+
+async function generateFollowUps(env) {
+  const queue = new DraftQueue(env.PERMIT_PULSE);
+  const allDrafts = await queue.getAllDrafts();
+  const sentDrafts = allDrafts.filter(d =>
+    d.status === 'sent' &&
+    !d.replyDetected &&
+    d.sentAt &&
+    (d.followUpCount || 0) < MAX_FOLLOWUPS &&
+    d.pipelineStatus !== 'replied' &&
+    d.pipelineStatus !== 'meeting' &&
+    d.pipelineStatus !== 'quoted' &&
+    d.pipelineStatus !== 'won' &&
+    d.pipelineStatus !== 'lost' &&
+    d.pipelineStatus !== 'cold'
+  );
+
+  let generated = 0;
+  for (const draft of sentDrafts) {
+    const daysSince = businessDaysSince(draft.lastFollowUpAt || draft.sentAt);
+    if (daysSince >= FOLLOWUP_WAIT_DAYS) {
+      const followUpNum = (draft.followUpCount || 0) + 1;
+      const followUp = draftFollowUpEmail(draft, followUpNum);
+
+      // Create a new follow-up draft linked to the original
+      const fuId = `draft:fu-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const fuRecord = {
+        id: fuId,
+        status: 'pending',
+        isFollowUp: true,
+        followUpNumber: followUpNum,
+        originalDraftId: draft.id,
+        createdAt: new Date().toISOString(),
+        architectName: draft.architectName,
+        architectLicense: draft.architectLicense,
+        recipientEmail: draft.recipientEmail,
+        subject: followUp.subject,
+        body: followUp.body,
+        projectAddress: draft.projectAddress,
+        score: draft.score,
+        tier: draft.tier,
+        phone: draft.phone,
+        linkedin: draft.linkedin,
+        firmName: draft.firmName,
+        firmWebsite: draft.firmWebsite,
+      };
+      await env.PERMIT_PULSE.put(fuId, JSON.stringify(fuRecord), { expirationTtl: 30 * 86400 });
+
+      // Mark the original with follow-up tracking
+      await queue.updateDraft(draft.id, {
+        followUpCount: followUpNum,
+        lastFollowUpAt: new Date().toISOString(),
+        ...(followUpNum >= MAX_FOLLOWUPS && { pipelineStatus: 'cold' }),
+      });
+
+      generated++;
+      console.log(`   📝 Follow-up #${followUpNum} drafted for ${draft.architectName}`);
+    }
+  }
+  return { generated };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PHASE 5: ARCHITECT CRM — per-architect relationship records
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function updateArchitectCRM(kv, license, updates) {
+  if (!kv || !license) return null;
+  const key = `crm:${license}`;
+  let existing = {};
+  try { existing = await kv.get(key, 'json') || {}; } catch (e) { /* new record */ }
+  const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+
+  // Track touchpoints history
+  if (!updated.touchpoints) updated.touchpoints = [];
+  if (updates.lastStatus || updates.lastReplyAt) {
+    updated.touchpoints.push({
+      type: updates.lastStatus || 'update',
+      at: new Date().toISOString(),
+      detail: updates.detail || null,
+    });
+    // Keep last 50 touchpoints
+    if (updated.touchpoints.length > 50) updated.touchpoints = updated.touchpoints.slice(-50);
+  }
+
+  await kv.put(key, JSON.stringify(updated), { expirationTtl: 365 * 86400 });
+  return updated;
+}
+
+async function getArchitectCRM(kv, license) {
+  if (!kv || !license) return null;
+  return await kv.get(`crm:${license}`, 'json');
+}
+
+async function getAllArchitectCRMs(kv) {
+  if (!kv) return [];
+  const list = await kv.list({ prefix: 'crm:' });
+  const records = [];
+  for (const key of list.keys) {
+    const val = await kv.get(key.name, 'json');
+    if (val) records.push(val);
+  }
+  return records;
+}
+
+// Save CRM records when drafts are created/sent
+async function upsertArchitectCRMFromDraft(kv, draft, event) {
+  return updateArchitectCRM(kv, draft.architectLicense, {
+    name: draft.architectName,
+    license: draft.architectLicense,
+    email: draft.recipientEmail,
+    phone: draft.phone,
+    linkedin: draft.linkedin,
+    firmName: draft.firmName,
+    firmWebsite: draft.firmWebsite,
+    projectAddress: draft.projectAddress,
+    score: draft.score,
+    tier: draft.tier,
+    lastStatus: event,
+    detail: `${event} — ${draft.projectAddress}`,
+  });
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PHASE 4: PIPELINE ANALYTICS — funnel metrics and conversion tracking
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function getPipelineAnalytics(kv) {
+  if (!kv) return null;
+  const draftList = await kv.list({ prefix: 'draft:' });
+  const pickedList = await kv.list({ prefix: 'picked:' });
+
+  const drafts = [];
+  for (const key of draftList.keys) {
+    const val = await kv.get(key.name, 'json');
+    if (val) drafts.push(val);
+  }
+
+  const total = drafts.length;
+  const pending = drafts.filter(d => d.status === 'pending').length;
+  const sent = drafts.filter(d => d.status === 'sent').length;
+  const skipped = drafts.filter(d => d.status === 'skipped').length;
+  const replied = drafts.filter(d => d.pipelineStatus === 'replied' || d.replyDetected).length;
+  const meeting = drafts.filter(d => d.pipelineStatus === 'meeting').length;
+  const quoted = drafts.filter(d => d.pipelineStatus === 'quoted').length;
+  const won = drafts.filter(d => d.pipelineStatus === 'won').length;
+  const lost = drafts.filter(d => d.pipelineStatus === 'lost').length;
+  const cold = drafts.filter(d => d.pipelineStatus === 'cold').length;
+  const followUps = drafts.filter(d => d.isFollowUp).length;
+
+  // Compute rates
+  const sentTotal = sent + replied + meeting + quoted + won + lost + cold;
+  const replyRate = sentTotal > 0 ? ((replied + meeting + quoted + won) / sentTotal * 100).toFixed(1) : 0;
+  const meetingRate = (replied + meeting + quoted + won) > 0 ? ((meeting + quoted + won) / (replied + meeting + quoted + won) * 100).toFixed(1) : 0;
+  const closeRate = (quoted + won + lost) > 0 ? (won / (quoted + won + lost) * 100).toFixed(1) : 0;
+
+  // Revenue estimation from won deals
+  const wonDrafts = drafts.filter(d => d.pipelineStatus === 'won');
+  const estimatedRevenue = wonDrafts.reduce((sum, d) => sum + (d.dealValue || 0), 0);
+
+  // Time metrics
+  const repliedDrafts = drafts.filter(d => d.replyDetectedAt && d.sentAt);
+  let avgReplyDays = 0;
+  if (repliedDrafts.length > 0) {
+    const totalDays = repliedDrafts.reduce((sum, d) => {
+      return sum + ((new Date(d.replyDetectedAt) - new Date(d.sentAt)) / 86400000);
+    }, 0);
+    avgReplyDays = (totalDays / repliedDrafts.length).toFixed(1);
+  }
+
+  // Tier comparison
+  const t1Sent = drafts.filter(d => d.tier === 'tier1' && (d.status === 'sent' || d.pipelineStatus)).length;
+  const t1Replied = drafts.filter(d => d.tier === 'tier1' && (d.pipelineStatus === 'replied' || d.replyDetected)).length;
+  const t2Sent = drafts.filter(d => d.tier === 'tier2' && (d.status === 'sent' || d.pipelineStatus)).length;
+  const t2Replied = drafts.filter(d => d.tier === 'tier2' && (d.pipelineStatus === 'replied' || d.replyDetected)).length;
+
+  return {
+    funnel: { total, pending, sent: sentTotal, skipped, replied, meeting, quoted, won, lost, cold, followUps },
+    rates: { replyRate, meetingRate, closeRate },
+    revenue: { estimated: estimatedRevenue, wonDeals: wonDrafts.length },
+    timing: { avgReplyDays },
+    tiers: {
+      tier1: { sent: t1Sent, replied: t1Replied, rate: t1Sent > 0 ? (t1Replied / t1Sent * 100).toFixed(1) : 0 },
+      tier2: { sent: t2Sent, replied: t2Replied, rate: t2Sent > 0 ? (t2Replied / t2Sent * 100).toFixed(1) : 0 },
+    },
+    totalArchitects: pickedList.keys.length,
+  };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PHASE 6: SMART RE-ENGAGEMENT — recognize returning architects
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function draftReEngagementEmail(architect, previousContact) {
+  const firstName = architect.firstName;
+  const project = architect.triggerProject;
+  const addr = `${project.house_no} ${titleCase(cleanStreetName(project.street_name).toLowerCase())}`;
+  const neighborhood = titleCase((project.nta || project.borough || '').toLowerCase());
+  const prevAddr = previousContact.triggerAddress || 'a previous project';
+  const monthsAgo = Math.round((Date.now() - new Date(previousContact.pickedDate).getTime()) / (30 * 86400000));
+
+  const subject = `Great to see your new project at ${addr} — MetroGlass Pro`;
+  const body = `Hi ${firstName},
+
+We reached out about ${monthsAgo} months ago regarding ${prevAddr}, and I wanted to reconnect now that I see your new filing at ${addr} in ${neighborhood}.
+
+MetroGlass Pro specializes in custom frameless shower doors, mirrors, and glass partitions for high-end residential renovations. If glass or mirrors are in the scope on this one, I'd love to share photos of recent work and provide a quick estimate.
+
+Our latest projects: metroglasspro.com
+
+Best,
+Donald Lena
+MetroGlass Pro
+(332) 999-3846
+operations@metroglasspro.com
+metroglasspro.com`;
+
+  return { subject, body };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -935,7 +1272,9 @@ async function handleGmailRoutes(request, env) {
     if (!env.GOOGLE_SERVICE_ACCOUNT) return jsonRes({ error: 'Gmail not configured. Set GOOGLE_SERVICE_ACCOUNT secret.' }, 400);
     try {
       const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env });
-      await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId });
+      await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId, gmailThreadId: result.threadId, pipelineStatus: 'awaiting_reply', followUpCount: 0 });
+      // Update CRM
+      await upsertArchitectCRMFromDraft(env.PERMIT_PULSE, draft, 'sent');
       return jsonRes({ success: true, messageId: result.messageId });
     } catch (err) { return jsonRes({ error: `Send failed: ${err.message}` }, 500); }
   }
@@ -960,6 +1299,74 @@ async function handleGmailRoutes(request, env) {
       return jsonRes(updated);
     } catch (err) { return jsonRes({ error: err.message }, 400); }
   }
+
+  // Phase 1: Update pipeline status (no_reply, replied, meeting, quoted, won, lost, cold)
+  if (url.pathname.match(/^\/drafts\/[^/]+\/status$/) && request.method === 'POST') {
+    const rawId = url.pathname.split('/')[2];
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    const { pipelineStatus, dealValue, notes } = await request.json();
+    const validStatuses = ['awaiting_reply', 'replied', 'meeting', 'quoted', 'won', 'lost', 'cold'];
+    if (!validStatuses.includes(pipelineStatus)) return jsonRes({ error: `Invalid status. Use: ${validStatuses.join(', ')}` }, 400);
+    try {
+      const updates = { pipelineStatus, statusUpdatedAt: new Date().toISOString() };
+      if (dealValue !== undefined) updates.dealValue = parseFloat(dealValue) || 0;
+      if (notes) updates.notes = notes;
+      const updated = await queue.updateDraft(`draft:${rawId}`, updates);
+      // Update CRM
+      await upsertArchitectCRMFromDraft(env.PERMIT_PULSE, updated, pipelineStatus);
+      return jsonRes(updated);
+    } catch (err) { return jsonRes({ error: err.message }, 400); }
+  }
+
+  // Phase 1: Add notes to a draft
+  if (url.pathname.match(/^\/drafts\/[^/]+\/notes$/) && request.method === 'POST') {
+    const rawId = url.pathname.split('/')[2];
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    const { notes } = await request.json();
+    try {
+      const updated = await queue.updateDraft(`draft:${rawId}`, { notes });
+      return jsonRes(updated);
+    } catch (err) { return jsonRes({ error: err.message }, 400); }
+  }
+
+  // Phase 4: Analytics endpoint
+  if (url.pathname === '/analytics' && request.method === 'GET') {
+    const analytics = await getPipelineAnalytics(env.PERMIT_PULSE);
+    return jsonRes(analytics);
+  }
+
+  // Phase 5: Architect CRM endpoints
+  if (url.pathname === '/crm' && request.method === 'GET') {
+    const records = await getAllArchitectCRMs(env.PERMIT_PULSE);
+    return jsonRes(records);
+  }
+  if (url.pathname.match(/^\/crm\/[^/]+$/) && request.method === 'GET') {
+    const license = url.pathname.split('/')[2];
+    const record = await getArchitectCRM(env.PERMIT_PULSE, license);
+    if (!record) return jsonRes({ error: 'Architect not found' }, 404);
+    // Also fetch all drafts for this architect
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    const allDrafts = await queue.getAllDrafts();
+    const archDrafts = allDrafts.filter(d => d.architectLicense === license);
+    return jsonRes({ ...record, drafts: archDrafts });
+  }
+
+  // Phase 2: Manual reply check trigger
+  if (url.pathname === '/check-replies' && request.method === 'POST') {
+    try {
+      const result = await checkForReplies(env);
+      return jsonRes(result);
+    } catch (err) { return jsonRes({ error: err.message }, 500); }
+  }
+
+  // Phase 3: Manual follow-up generation trigger
+  if (url.pathname === '/generate-followups' && request.method === 'POST') {
+    try {
+      const result = await generateFollowUps(env);
+      return jsonRes(result);
+    } catch (err) { return jsonRes({ error: err.message }, 500); }
+  }
+
   return null;
 }
 
@@ -969,7 +1376,17 @@ async function handleGmailRoutes(request, env) {
 
 export default {
   async scheduled(event, env) {
+    console.log('⚡ PermitPulse scheduled run');
+    // Run main scan pipeline
     await runDailyPipeline(env);
+    // Phase 2: Check for replies to sent emails
+    console.log('\n📬 Checking for replies...');
+    const replyResult = await checkForReplies(env);
+    console.log(`   Checked ${replyResult.checked}, found ${replyResult.replies} replies`);
+    // Phase 3: Generate follow-ups for unreplied emails
+    console.log('\n📝 Generating follow-ups...');
+    const followUpResult = await generateFollowUps(env);
+    console.log(`   Generated ${followUpResult.generated} follow-up drafts`);
   },
 
   async fetch(request, env) {
@@ -1063,15 +1480,22 @@ export default {
     }
 
     return jsonRes({
-      name: 'PermitPulse v3 — Architect Relationship Engine',
+      name: 'PermitPulse v4 — Architect Relationship Engine',
       endpoints: {
         '/': 'Review + approve dashboard',
         '/scan': 'Trigger daily pipeline',
         '/picked': 'View picked architects',
-        '/drafts': 'List pending email drafts',
+        '/drafts': 'List all email drafts',
         '/drafts/:id/edit': 'Edit draft (POST: {recipientEmail, subject, body})',
         '/drafts/:id/approve': 'Approve + send via Gmail (POST)',
         '/drafts/:id/skip': 'Skip a draft (POST)',
+        '/drafts/:id/status': 'Update pipeline status (POST: {pipelineStatus, dealValue?, notes?})',
+        '/drafts/:id/notes': 'Add notes (POST: {notes})',
+        '/analytics': 'Pipeline funnel analytics (GET)',
+        '/crm': 'All architect CRM records (GET)',
+        '/crm/:license': 'Single architect CRM + draft history (GET)',
+        '/check-replies': 'Check Gmail for replies (POST)',
+        '/generate-followups': 'Generate follow-up drafts (POST)',
         '/gmail-test': 'Send test email to yourself (POST)',
       },
     });
@@ -1105,7 +1529,10 @@ function getDashboardHTML() {
   --text:#2A241F;--text-muted:#716254;--text-dim:#948372;
   --accent:#B88A52;--accent-light:rgba(184,138,82,0.12);--accent-dark:#946C40;
   --green:#16a34a;--green-bg:rgba(22,163,74,0.08);
+  --blue:#2563eb;--blue-bg:rgba(37,99,235,0.08);
+  --purple:#7c3aed;--purple-bg:rgba(124,58,237,0.08);
   --red:#dc2626;--red-bg:rgba(220,38,38,0.06);
+  --orange:#ea580c;--orange-bg:rgba(234,88,12,0.08);
   --shadow:0 10px 30px -22px rgba(26,22,19,0.28),0 14px 40px -30px rgba(59,51,45,0.22);
   --shadow-hover:0 18px 44px -28px rgba(26,22,19,0.34),0 24px 52px -36px rgba(59,51,45,0.24);
   --shadow-soft:0 8px 24px -20px rgba(26,22,19,0.24);
@@ -1116,6 +1543,10 @@ function getDashboardHTML() {
   --border:#3A332D;--border-light:#3A332D;
   --text:#F6F1E8;--text-muted:#B2A697;--text-dim:#8A7D6E;
   --accent:#D2A86E;--accent-light:rgba(210,168,110,0.15);--accent-dark:#E8C08A;
+  --green:#22c55e;--green-bg:rgba(34,197,94,0.12);
+  --blue:#60a5fa;--blue-bg:rgba(96,165,250,0.12);
+  --purple:#a78bfa;--purple-bg:rgba(167,139,250,0.12);
+  --orange:#fb923c;--orange-bg:rgba(251,146,60,0.12);
   --shadow:0 20px 50px -34px rgba(0,0,0,0.6),0 10px 26px -18px rgba(0,0,0,0.45);
   --shadow-hover:0 24px 56px -30px rgba(0,0,0,0.7);
 }}
@@ -1127,71 +1558,276 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);-webkit-font
 .hero-eyebrow{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.28em;color:var(--accent-dark)}
 .hero-title{font-size:2rem;font-weight:600;letter-spacing:-0.03em;margin-top:12px}
 .hero-desc{font-size:14px;color:var(--text-muted);margin-top:8px;line-height:1.6;max-width:520px}
-.hero-actions{display:flex;gap:8px;align-self:flex-start;margin-top:8px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:20px 20px 0}
-.stat-card{border-radius:28px;border:1px solid var(--border);background:var(--bg-card);padding:18px 20px;box-shadow:var(--shadow-soft);backdrop-filter:blur(8px)}
+.hero-actions{display:flex;gap:8px;align-self:flex-start;margin-top:8px;flex-wrap:wrap}
+.tabs{display:flex;gap:4px;margin:20px 20px 0;background:var(--bg-card);border:1px solid var(--border);border-radius:28px;padding:4px;box-shadow:var(--shadow-soft)}
+.tab{flex:1;padding:10px 16px;border-radius:24px;text-align:center;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;color:var(--text-muted);letter-spacing:0.02em}
+.tab.active{background:var(--accent);color:#fff;box-shadow:var(--shadow-soft)}
+.tab:hover:not(.active){background:var(--accent-light)}
+.tab .tab-count{display:inline-block;font-size:10px;background:rgba(0,0,0,0.1);padding:1px 6px;border-radius:10px;margin-left:4px}
+.tab.active .tab-count{background:rgba(255,255,255,0.25)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:20px 20px 0}
+.stat-card{border-radius:28px;border:1px solid var(--border);background:var(--bg-card);padding:18px 20px;box-shadow:var(--shadow-soft);backdrop-filter:blur(8px);transition:transform .2s}
+.stat-card:hover{transform:translateY(-2px)}
 .stat-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.18em;color:var(--text-muted)}
 .stat-value{font-size:22px;font-weight:600;letter-spacing:-0.02em;margin-top:4px}
-.container{padding:20px;max-width:800px;margin:0 auto}
-.draft{border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-card);padding:24px;margin-bottom:14px;box-shadow:var(--shadow);backdrop-filter:blur(8px);transition:all 0.3s ease;animation:fadeUp .35s ease-out both}
-.draft:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
-.draft.sent{opacity:.5}.draft.skipped{opacity:.35}
+.container{padding:20px;max-width:900px;margin:0 auto}
+.card{border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-card);padding:24px;margin-bottom:14px;box-shadow:var(--shadow);backdrop-filter:blur(8px);transition:all 0.3s ease;animation:fadeUp .35s ease-out both}
+.card:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
+.card.sent{border-left:3px solid var(--green)}.card.skipped{opacity:.35}.card.replied{border-left:3px solid var(--blue)}.card.meeting{border-left:3px solid var(--purple)}.card.quoted{border-left:3px solid var(--orange)}.card.won{border-left:3px solid var(--green);background:var(--green-bg)}.card.lost{opacity:.4}.card.cold{opacity:.3}.card.followup{border-left:3px dashed var(--accent)}
 @keyframes fadeUp{0%{opacity:0;transform:translateY(12px)}100%{opacity:1;transform:translateY(0)}}
-.draft-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
+.card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
 .arch-name{font-size:18px;font-weight:600;letter-spacing:-0.02em}
 .arch-meta{font-size:12px;color:var(--text-dim);margin-top:3px}
 .score-pill{font-size:13px;font-weight:700;color:var(--accent-dark);background:var(--accent-light);padding:6px 14px;border-radius:20px;white-space:nowrap}
 .badge-row{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
 .badge{font-size:10px;padding:3px 10px;border-radius:20px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px}
-.badge-t1{background:var(--accent-light);color:var(--accent-dark)}
-.badge-t2{background:rgba(148,131,114,0.1);color:var(--text-dim)}
+.badge-tier1{background:var(--accent-light);color:var(--accent-dark)}
+.badge-tier2{background:rgba(148,131,114,0.1);color:var(--text-dim)}
 .badge-pending{background:var(--accent-light);color:var(--accent-dark)}
 .badge-sent{background:var(--green-bg);color:var(--green)}
 .badge-skipped{background:rgba(148,131,114,0.1);color:var(--text-dim)}
+.badge-replied{background:var(--blue-bg);color:var(--blue)}
+.badge-meeting{background:var(--purple-bg);color:var(--purple)}
+.badge-quoted{background:var(--orange-bg);color:var(--orange)}
+.badge-won{background:var(--green-bg);color:var(--green)}
+.badge-lost{background:var(--red-bg);color:var(--red)}
+.badge-cold{background:rgba(148,131,114,0.1);color:var(--text-dim)}
+.badge-awaiting_reply{background:rgba(148,131,114,0.08);color:var(--text-muted)}
+.badge-followup{background:var(--accent-light);color:var(--accent-dark);border:1px dashed var(--accent)}
 .links{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .links a{font-size:12px;color:var(--accent-dark);text-decoration:none;background:var(--accent-light);padding:6px 14px;border-radius:20px;font-weight:500;transition:all .2s}
 .links a:hover{background:var(--accent);color:#fff}
 .enrich-row{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
 .enrich-tag{font-size:11px;padding:4px 12px;border-radius:16px;background:rgba(148,131,114,0.08);color:var(--text-muted);font-weight:500}
 label{display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.18em;color:var(--text-muted);margin-bottom:6px}
-input,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:12px 16px;border-radius:16px;font-family:var(--font);font-size:13px;resize:vertical;transition:border .2s}
-input:focus,textarea:focus{outline:none;border-color:var(--accent)}
-textarea{min-height:180px;line-height:1.6}
+input,textarea,select{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:12px 16px;border-radius:16px;font-family:var(--font);font-size:13px;resize:vertical;transition:border .2s}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+textarea{min-height:160px;line-height:1.6}
+select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23948372' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 16px center}
 .field{margin-bottom:14px}
 .btn{padding:10px 20px;border-radius:20px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;font-weight:500;transition:all .2s;box-shadow:var(--shadow-soft)}
 .btn:hover{box-shadow:var(--shadow);transform:translateY(-1px)}
 .btn:active{transform:scale(0.98)}
+.btn-sm{padding:6px 14px;font-size:11px;border-radius:16px}
 .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn-primary:hover{filter:brightness(1.1)}
 .btn-danger{color:var(--red);border-color:rgba(220,38,38,0.2)}
 .btn-danger:hover{background:var(--red-bg)}
-.draft-actions{display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);flex-wrap:wrap}
+.btn-green{color:var(--green);border-color:rgba(22,163,74,0.2)}
+.btn-blue{color:var(--blue);border-color:rgba(37,99,235,0.2)}
+.card-actions{display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);flex-wrap:wrap}
 .empty{text-align:center;padding:60px 20px;color:var(--text-dim)}
 .empty h3{font-size:18px;font-weight:600;color:var(--text);margin:12px 0 6px}
 .loading{text-align:center;padding:60px;color:var(--text-muted);font-size:14px}
-@media(max-width:600px){.hero{margin:12px;padding:20px;border-radius:24px}.hero-title{font-size:1.5rem}.stats{margin:12px;grid-template-columns:1fr 1fr}.container{padding:12px}.draft{padding:18px;border-radius:20px}.draft-actions{flex-direction:column}.draft-actions .btn{width:100%;text-align:center}}
+.funnel{display:flex;gap:2px;margin:20px 0;align-items:flex-end}
+.funnel-step{flex:1;text-align:center;padding:12px 8px;border-radius:12px;border:1px solid var(--border);background:var(--bg-card)}
+.funnel-num{font-size:28px;font-weight:700;letter-spacing:-0.02em}
+.funnel-label{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-muted);margin-top:4px}
+.funnel-arrow{color:var(--text-dim);font-size:16px;padding:0 2px;align-self:center}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:20px 0}
+.metric{border-radius:20px;border:1px solid var(--border);background:var(--bg-card);padding:20px;box-shadow:var(--shadow-soft)}
+.metric-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-muted)}
+.metric-value{font-size:32px;font-weight:700;margin-top:6px;letter-spacing:-0.03em}
+.metric-sub{font-size:12px;color:var(--text-dim);margin-top:4px}
+.crm-card{border-radius:20px;border:1px solid var(--border);background:var(--bg-card);padding:20px;margin-bottom:12px;box-shadow:var(--shadow-soft);cursor:pointer;transition:all .2s}
+.crm-card:hover{box-shadow:var(--shadow);transform:translateY(-1px)}
+.touchpoint{font-size:12px;padding:6px 0;border-bottom:1px solid var(--border);color:var(--text-muted)}
+.touchpoint:last-child{border-bottom:none}
+.pipeline-select{width:auto;display:inline-block;padding:6px 32px 6px 12px;border-radius:14px;font-size:11px;font-weight:600}
+.notes-area{font-size:12px;min-height:60px;border-radius:12px;padding:10px 14px}
+@media(max-width:600px){.hero{margin:12px;padding:20px;border-radius:24px}.hero-title{font-size:1.5rem}.tabs{margin:12px;border-radius:20px}.tabs .tab{font-size:11px;padding:8px 8px}.stats{margin:12px;grid-template-columns:1fr 1fr}.container{padding:12px}.card{padding:18px;border-radius:20px}.card-actions{flex-direction:column}.card-actions .btn{width:100%;text-align:center}.funnel{flex-wrap:wrap}.funnel-step{min-width:60px}.funnel-arrow{display:none}}
 </style>
 </head><body>
 <div class="hero"><div class="hero-inner"><div>
-<p class="hero-eyebrow">PermitPulse</p>
-<h1 class="hero-title">Architect outreach</h1>
-<p class="hero-desc">Review draft emails, add the architect's email, edit to your voice, and send.</p>
+<p class="hero-eyebrow">PermitPulse v4</p>
+<h1 class="hero-title">Architect pipeline</h1>
+<p class="hero-desc">Scan permits, draft outreach, track replies, close deals.</p>
 </div><div class="hero-actions">
-<button class="btn" onclick="loadDrafts()">Refresh</button>
+<button class="btn" onclick="refresh()">Refresh</button>
+<button class="btn btn-blue" onclick="doCheckReplies()">Check replies</button>
+<button class="btn" onclick="doGenFollowups()">Gen follow-ups</button>
 <button class="btn btn-primary" onclick="triggerScan()">Run scan</button>
 </div></div></div>
+
+<div class="tabs" id="tabs">
+<div class="tab active" data-tab="drafts">Drafts</div>
+<div class="tab" data-tab="pipeline">Pipeline</div>
+<div class="tab" data-tab="analytics">Analytics</div>
+<div class="tab" data-tab="crm">CRM</div>
+</div>
+
 <div class="stats" id="stats"></div>
-<div class="container" id="app"><div class="loading">Loading drafts...</div></div>
+<div class="container" id="app"><div class="loading">Loading...</div></div>
+
 <script>
-var API=window.location.origin,drafts=[];
-async function loadDrafts(){document.getElementById('app').innerHTML='<div class="loading">Loading...</div>';try{var r=await fetch(API+'/drafts');drafts=await r.json();renderStats();render()}catch(e){document.getElementById('app').innerHTML='<div class="empty"><h3>Could not load</h3><p>'+e.message+'</p></div>'}}
-function renderStats(){var pending=drafts.filter(function(d){return d.status==='pending'}).length,sent=drafts.filter(function(d){return d.status==='sent'}).length,skipped=drafts.filter(function(d){return d.status==='skipped'}).length,t1=drafts.filter(function(d){return d.tier==='tier1'&&d.status==='pending'}).length;document.getElementById('stats').innerHTML='<div class="stat-card"><p class="stat-label">Pending</p><p class="stat-value" style="color:var(--accent-dark)">'+pending+'</p></div><div class="stat-card"><p class="stat-label">Priority</p><p class="stat-value">'+t1+'</p></div><div class="stat-card"><p class="stat-label">Sent</p><p class="stat-value" style="color:var(--green)">'+sent+'</p></div><div class="stat-card"><p class="stat-label">Skipped</p><p class="stat-value">'+skipped+'</p></div>'}
-async function triggerScan(){if(!confirm('Run scan now?'))return;document.getElementById('app').innerHTML='<div class="loading">Scanning DOB filings...</div>';try{var r=await fetch(API+'/scan'),d=await r.json();alert(d.picks+' new picks from '+d.scanned+' filings');loadDrafts()}catch(e){alert('Failed: '+e.message)}}
-function render(){var app=document.getElementById('app');app.innerHTML='';if(!drafts.length){app.innerHTML='<div class="empty"><h3>No drafts yet</h3><p>Run a scan or wait for the morning cron at 7am.</p></div>';return}drafts.sort(function(a,b){var so={'pending':0,'sent':1,'skipped':2};if(so[a.status]!==so[b.status])return so[a.status]-so[b.status];if(a.tier==='tier1'&&b.tier!=='tier1')return-1;if(b.tier==='tier1'&&a.tier!=='tier1')return 1;return(b.score||0)-(a.score||0)});drafts.forEach(function(d,i){var sid=d.id.replace('draft:',''),div=document.createElement('div');div.className='draft '+d.status;div.style.animationDelay=(i*40)+'ms';var enrichHtml='';if(d.firmName)enrichHtml+='<span class="enrich-tag">'+d.firmName+'</span>';if(d.linkedin)enrichHtml+='<a href="'+d.linkedin+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">LinkedIn</a>';if(d.phone)enrichHtml+='<span class="enrich-tag">'+d.phone+'</span>';if(d.firmWebsite)enrichHtml+='<a href="'+d.firmWebsite+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">Website</a>';div.innerHTML='<div class="draft-top"><div style="flex:1"><div class="badge-row"><span class="badge badge-'+(d.tier||'t2')+'">'+(d.tier==='tier1'?'Priority':'Standard')+'</span><span class="badge badge-'+d.status+'">'+d.status+'</span></div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(d.score||0)+'</div></div>'+(enrichHtml?'<div class="enrich-row">'+enrichHtml+'</div>':'')+'<div class="links"><a class="lk-e" target="_blank">Find email</a><a class="lk-f" target="_blank">Find firm</a></div><div class="field"><label>Architect email</label><input class="f-email" placeholder="architect@firm.com"></div><div class="field"><label>Subject</label><input class="f-subj"></div><div class="field"><label>Email body</label><textarea class="f-body"></textarea></div><div class="draft-actions"><button class="btn btn-primary js-a">Send via Gmail</button><button class="btn js-s">Save edits</button><button class="btn btn-danger js-k">Skip</button></div>';div.querySelector('.arch-name').textContent=d.architectName||'Unknown';div.querySelector('.arch-meta').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'')+' · Score: '+(d.score||0);div.querySelector('.lk-e').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect NYC email');div.querySelector('.lk-f').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect portfolio NYC');div.querySelector('.f-email').value=d.recipientEmail||'';div.querySelector('.f-subj').value=d.subject||'';div.querySelector('.f-body').value=d.body||'';if(d.status!=='pending'){div.querySelectorAll('input,textarea').forEach(function(el){el.disabled=true});var a=div.querySelector('.draft-actions');if(a)a.style.display='none'}div.querySelector('.js-a').addEventListener('click',function(){doA(sid,div)});div.querySelector('.js-s').addEventListener('click',function(){doS(sid,div)});div.querySelector('.js-k').addEventListener('click',function(){doK(sid)});app.appendChild(div)})}
+var API=window.location.origin,drafts=[],analytics=null,crmData=[],currentTab='drafts';
+
+// Tab switching
+document.getElementById('tabs').addEventListener('click',function(e){
+  if(!e.target.classList.contains('tab'))return;
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});
+  e.target.classList.add('active');
+  currentTab=e.target.getAttribute('data-tab');
+  renderAll();
+});
+
+function refresh(){loadDrafts()}
+
+async function loadDrafts(){
+  document.getElementById('app').innerHTML='<div class="loading">Loading...</div>';
+  try{
+    var r=await fetch(API+'/drafts');drafts=await r.json();
+    try{var ar=await fetch(API+'/analytics');analytics=await ar.json()}catch(e){analytics=null}
+    try{var cr=await fetch(API+'/crm');crmData=await cr.json()}catch(e){crmData=[]}
+    renderAll();
+  }catch(e){document.getElementById('app').innerHTML='<div class="empty"><h3>Could not load</h3><p>'+e.message+'</p></div>'}
+}
+
+function renderAll(){renderStats();renderTab()}
+
+function renderStats(){
+  var p=drafts.filter(function(d){return d.status==='pending'}).length;
+  var s=drafts.filter(function(d){return d.status==='sent'||d.pipelineStatus}).length;
+  var re=drafts.filter(function(d){return d.pipelineStatus==='replied'||d.replyDetected}).length;
+  var w=drafts.filter(function(d){return d.pipelineStatus==='won'}).length;
+  document.getElementById('stats').innerHTML=
+    '<div class="stat-card"><p class="stat-label">Pending</p><p class="stat-value" style="color:var(--accent-dark)">'+p+'</p></div>'+
+    '<div class="stat-card"><p class="stat-label">Sent</p><p class="stat-value" style="color:var(--green)">'+s+'</p></div>'+
+    '<div class="stat-card"><p class="stat-label">Replies</p><p class="stat-value" style="color:var(--blue)">'+re+'</p></div>'+
+    '<div class="stat-card"><p class="stat-label">Won</p><p class="stat-value" style="color:var(--green)">'+w+'</p></div>';
+  // Update tab counts
+  var pending=drafts.filter(function(d){return d.status==='pending'}).length;
+  var pipeline=drafts.filter(function(d){return d.status==='sent'||d.pipelineStatus}).length;
+  var tabs=document.querySelectorAll('.tab');
+  tabs[0].innerHTML='Drafts<span class="tab-count">'+pending+'</span>';
+  tabs[1].innerHTML='Pipeline<span class="tab-count">'+pipeline+'</span>';
+  tabs[2].innerHTML='Analytics';
+  tabs[3].innerHTML='CRM<span class="tab-count">'+crmData.length+'</span>';
+}
+
+function renderTab(){
+  if(currentTab==='drafts')renderDrafts();
+  else if(currentTab==='pipeline')renderPipeline();
+  else if(currentTab==='analytics')renderAnalytics();
+  else if(currentTab==='crm')renderCRM();
+}
+
+// ── DRAFTS TAB ──
+function renderDrafts(){
+  var app=document.getElementById('app');app.innerHTML='';
+  var pending=drafts.filter(function(d){return d.status==='pending'});
+  if(!pending.length){app.innerHTML='<div class="empty"><h3>No pending drafts</h3><p>Run a scan or wait for the morning cron.</p></div>';return}
+  pending.sort(function(a,b){if(a.tier==='tier1'&&b.tier!=='tier1')return-1;if(b.tier==='tier1'&&a.tier!=='tier1')return 1;return(b.score||0)-(a.score||0)});
+  pending.forEach(function(d,i){renderDraftCard(app,d,i)});
+}
+
+function renderDraftCard(app,d,i){
+  var sid=d.id.replace('draft:',''),div=document.createElement('div');
+  div.className='card'+(d.isFollowUp?' followup':'');div.style.animationDelay=(i*40)+'ms';
+  var enrichHtml='';
+  if(d.firmName)enrichHtml+='<span class="enrich-tag">'+esc(d.firmName)+'</span>';
+  if(d.linkedin)enrichHtml+='<a href="'+esc(d.linkedin)+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">LinkedIn</a>';
+  if(d.phone)enrichHtml+='<span class="enrich-tag">'+esc(d.phone)+'</span>';
+  if(d.firmWebsite)enrichHtml+='<a href="'+esc(d.firmWebsite)+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">Website</a>';
+  var tierBadge=d.tier==='tier1'?'tier1':'tier2';
+  var fuBadge=d.isFollowUp?'<span class="badge badge-followup">Follow-up #'+(d.followUpNumber||1)+'</span>':'';
+  div.innerHTML='<div class="card-top"><div style="flex:1"><div class="badge-row"><span class="badge badge-'+tierBadge+'">'+(d.tier==='tier1'?'Priority':'Standard')+'</span>'+fuBadge+'</div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(d.score||0)+'</div></div>'+(enrichHtml?'<div class="enrich-row">'+enrichHtml+'</div>':'')+'<div class="links"><a class="lk-e" target="_blank">Find email</a><a class="lk-f" target="_blank">Find firm</a></div><div class="field"><label>Architect email</label><input class="f-email" placeholder="architect@firm.com"></div><div class="field"><label>Subject</label><input class="f-subj"></div><div class="field"><label>Email body</label><textarea class="f-body"></textarea></div><div class="card-actions"><button class="btn btn-primary js-a">Send via Gmail</button><button class="btn js-s">Save edits</button><button class="btn btn-danger js-k">Skip</button></div>';
+  div.querySelector('.arch-name').textContent=d.architectName||'Unknown';
+  div.querySelector('.arch-meta').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'');
+  div.querySelector('.lk-e').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect NYC email');
+  div.querySelector('.lk-f').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect portfolio NYC');
+  div.querySelector('.f-email').value=d.recipientEmail||'';
+  div.querySelector('.f-subj').value=d.subject||'';
+  div.querySelector('.f-body').value=d.body||'';
+  div.querySelector('.js-a').addEventListener('click',function(){doApprove(sid,div)});
+  div.querySelector('.js-s').addEventListener('click',function(){doSave(sid,div)});
+  div.querySelector('.js-k').addEventListener('click',function(){doSkip(sid)});
+  app.appendChild(div);
+}
+
+// ── PIPELINE TAB ──
+function renderPipeline(){
+  var app=document.getElementById('app');app.innerHTML='';
+  var pipelineDrafts=drafts.filter(function(d){return d.status==='sent'||d.pipelineStatus});
+  if(!pipelineDrafts.length){app.innerHTML='<div class="empty"><h3>No sent emails yet</h3><p>Send some drafts first, then track them here.</p></div>';return}
+  var statusOrder={awaiting_reply:0,replied:1,meeting:2,quoted:3,won:4,lost:5,cold:6};
+  pipelineDrafts.sort(function(a,b){var sa=statusOrder[a.pipelineStatus]||0,sb=statusOrder[b.pipelineStatus]||0;return sa-sb});
+  pipelineDrafts.forEach(function(d,i){
+    var sid=d.id.replace('draft:',''),div=document.createElement('div');
+    var ps=d.pipelineStatus||'awaiting_reply';
+    div.className='card '+ps;div.style.animationDelay=(i*30)+'ms';
+    div.innerHTML='<div class="card-top"><div style="flex:1"><div class="badge-row"><span class="badge badge-'+ps+'">'+ps.replace(/_/g,' ')+'</span>'+(d.replyDetected?'<span class="badge badge-replied">reply detected</span>':'')+(d.followUpCount?'<span class="badge badge-followup">'+d.followUpCount+' follow-up'+(d.followUpCount>1?'s':'')+'</span>':'')+'</div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(d.score||0)+'</div></div><div class="field"><label>Pipeline status</label><select class="pipeline-select ps-sel"><option value="awaiting_reply">Awaiting reply</option><option value="replied">Replied</option><option value="meeting">Meeting scheduled</option><option value="quoted">Quoted</option><option value="won">Won</option><option value="lost">Lost</option><option value="cold">Cold / No response</option></select></div>'+(ps==='quoted'||ps==='won'?'<div class="field"><label>Deal value ($)</label><input class="dv-input" type="number" placeholder="e.g. 4500" value="'+(d.dealValue||'')+'"></div>':'')+'<div class="field"><label>Notes</label><textarea class="notes-area n-input" placeholder="Add notes about this lead...">'+(d.notes||'')+'</textarea></div><div class="card-actions"><button class="btn btn-primary btn-sm js-save-status">Save status</button>'+(d.recipientEmail?'<span style="font-size:11px;color:var(--text-dim);padding:6px">Sent to '+esc(d.recipientEmail)+' on '+(d.sentAt?d.sentAt.slice(0,10):'?')+'</span>':'')+'</div>';
+    div.querySelector('.arch-name').textContent=d.architectName||'Unknown';
+    div.querySelector('.arch-meta').textContent=(d.projectAddress||'')+' · Sent '+(d.sentAt?timeAgo(d.sentAt):'?');
+    div.querySelector('.ps-sel').value=ps;
+    div.querySelector('.js-save-status').addEventListener('click',function(){
+      var newStatus=div.querySelector('.ps-sel').value;
+      var dv=div.querySelector('.dv-input');
+      var notes=div.querySelector('.n-input').value;
+      doUpdateStatus(sid,newStatus,dv?dv.value:'',notes);
+    });
+    app.appendChild(div);
+  });
+}
+
+// ── ANALYTICS TAB ──
+function renderAnalytics(){
+  var app=document.getElementById('app');
+  if(!analytics){app.innerHTML='<div class="loading">Loading analytics...</div>';return}
+  var f=analytics.funnel,r=analytics.rates,rev=analytics.revenue,t=analytics.timing,ti=analytics.tiers;
+  app.innerHTML='<div style="margin-bottom:24px"><h2 style="font-size:20px;font-weight:600;margin-bottom:16px;letter-spacing:-0.02em">Pipeline funnel</h2><div class="funnel"><div class="funnel-step"><div class="funnel-num">'+f.total+'</div><div class="funnel-label">Drafted</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--green)">'+f.sent+'</div><div class="funnel-label">Sent</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--blue)">'+f.replied+'</div><div class="funnel-label">Replied</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--purple)">'+f.meeting+'</div><div class="funnel-label">Meeting</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--orange)">'+f.quoted+'</div><div class="funnel-label">Quoted</div></div><div class="funnel-arrow">→</div><div class="funnel-step"><div class="funnel-num" style="color:var(--green)">'+f.won+'</div><div class="funnel-label">Won</div></div></div></div><div class="metric-grid"><div class="metric"><div class="metric-label">Reply rate</div><div class="metric-value" style="color:var(--blue)">'+r.replyRate+'%</div><div class="metric-sub">of sent emails got a reply</div></div><div class="metric"><div class="metric-label">Meeting rate</div><div class="metric-value" style="color:var(--purple)">'+r.meetingRate+'%</div><div class="metric-sub">of replies led to meetings</div></div><div class="metric"><div class="metric-label">Close rate</div><div class="metric-value" style="color:var(--green)">'+r.closeRate+'%</div><div class="metric-sub">of quotes turned into wins</div></div><div class="metric"><div class="metric-label">Avg reply time</div><div class="metric-value">'+t.avgReplyDays+'d</div><div class="metric-sub">business days to first reply</div></div><div class="metric"><div class="metric-label">Revenue attributed</div><div class="metric-value" style="color:var(--green)">$'+rev.estimated.toLocaleString()+'</div><div class="metric-sub">'+rev.wonDeals+' closed deal'+(rev.wonDeals!==1?'s':'')+'</div></div><div class="metric"><div class="metric-label">Follow-ups sent</div><div class="metric-value">'+f.followUps+'</div><div class="metric-sub">auto-generated sequences</div></div></div><div style="margin-top:24px"><h2 style="font-size:20px;font-weight:600;margin-bottom:16px;letter-spacing:-0.02em">Tier comparison</h2><div class="metric-grid"><div class="metric"><div class="metric-label">Tier 1 (Priority)</div><div class="metric-value">'+ti.tier1.rate+'%</div><div class="metric-sub">'+ti.tier1.replied+' replies from '+ti.tier1.sent+' sent</div></div><div class="metric"><div class="metric-label">Tier 2 (Standard)</div><div class="metric-value">'+ti.tier2.rate+'%</div><div class="metric-sub">'+ti.tier2.replied+' replies from '+ti.tier2.sent+' sent</div></div></div></div><div style="margin-top:24px"><div class="metric-grid"><div class="metric"><div class="metric-label">Total architects tracked</div><div class="metric-value">'+analytics.totalArchitects+'</div><div class="metric-sub">in 180-day database</div></div><div class="metric"><div class="metric-label">Cold / no response</div><div class="metric-value" style="color:var(--text-dim)">'+f.cold+'</div><div class="metric-sub">after '+2+' follow-ups</div></div><div class="metric"><div class="metric-label">Skipped</div><div class="metric-value">'+f.skipped+'</div><div class="metric-sub">manually skipped drafts</div></div></div></div>';
+}
+
+// ── CRM TAB ──
+function renderCRM(){
+  var app=document.getElementById('app');
+  if(!crmData.length){app.innerHTML='<div class="empty"><h3>No architect records yet</h3><p>CRM records are created when you send emails.</p></div>';return}
+  app.innerHTML='';
+  crmData.sort(function(a,b){return(b.updatedAt||'').localeCompare(a.updatedAt||'')});
+  crmData.forEach(function(c,i){
+    var div=document.createElement('div');div.className='crm-card';div.style.animationDelay=(i*30)+'ms';
+    var statusBadge=c.lastStatus?'<span class="badge badge-'+(c.lastStatus||'')+'">'+esc(c.lastStatus||'').replace(/_/g,' ')+'</span>':'';
+    var contactInfo='';
+    if(c.email)contactInfo+='<span class="enrich-tag">'+esc(c.email)+'</span>';
+    if(c.phone)contactInfo+='<span class="enrich-tag">'+esc(c.phone)+'</span>';
+    if(c.firmName)contactInfo+='<span class="enrich-tag">'+esc(c.firmName)+'</span>';
+    if(c.linkedin)contactInfo+='<a href="'+esc(c.linkedin)+'" target="_blank" class="enrich-tag" style="text-decoration:none;color:var(--accent-dark)">LinkedIn</a>';
+    var tps=(c.touchpoints||[]).slice(-5).reverse().map(function(tp){return '<div class="touchpoint"><strong>'+esc(tp.type)+'</strong> — '+timeAgo(tp.at)+(tp.detail?' · '+esc(tp.detail):'')+'</div>'}).join('');
+    div.innerHTML='<div class="card-top"><div style="flex:1"><div class="badge-row">'+statusBadge+'</div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(c.score||'—')+'</div></div>'+(contactInfo?'<div class="enrich-row">'+contactInfo+'</div>':'')+(tps?'<div style="margin-top:12px"><label>Recent touchpoints</label>'+tps+'</div>':'');
+    div.querySelector('.arch-name').textContent=c.name||'Unknown';
+    div.querySelector('.arch-meta').textContent='RA #'+(c.license||'?')+' · '+(c.projectAddress||'');
+    app.appendChild(div);
+  });
+}
+
+// ── HELPERS ──
+function esc(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function timeAgo(d){if(!d)return'?';var s=Math.floor((Date.now()-new Date(d).getTime())/1000);if(s<60)return'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago'}
+
 function gF(d){return{email:d.querySelector('.f-email').value.trim(),subject:d.querySelector('.f-subj').value.trim(),body:d.querySelector('.f-body').value.trim()}}
-async function doS(id,div){var f=gF(div);try{await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});alert('Saved')}catch(e){alert(e.message)}}
-async function doA(id,div){var f=gF(div);if(!f.email||f.email.indexOf('@')<0){alert('Add email first');return}await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});if(!confirm('Send to '+f.email+'?'))return;try{var r=await fetch(API+'/drafts/'+id+'/approve',{method:'POST'}),d=await r.json();if(d.success){alert('Sent!');loadDrafts()}else alert(d.error||'Failed')}catch(e){alert(e.message)}}
-async function doK(id){if(!confirm('Skip?'))return;await fetch(API+'/drafts/'+id+'/skip',{method:'POST'});loadDrafts()}
+
+async function doSave(id,div){var f=gF(div);try{await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});alert('Saved')}catch(e){alert(e.message)}}
+
+async function doApprove(id,div){var f=gF(div);if(!f.email||f.email.indexOf('@')<0){alert('Add email first');return}await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});if(!confirm('Send to '+f.email+'?'))return;try{var r=await fetch(API+'/drafts/'+id+'/approve',{method:'POST'}),d=await r.json();if(d.success){alert('Sent!');loadDrafts()}else alert(d.error||'Failed')}catch(e){alert(e.message)}}
+
+async function doSkip(id){if(!confirm('Skip?'))return;await fetch(API+'/drafts/'+id+'/skip',{method:'POST'});loadDrafts()}
+
+async function doUpdateStatus(id,status,dealValue,notes){
+  try{
+    var body={pipelineStatus:status};
+    if(dealValue)body.dealValue=dealValue;
+    if(notes)body.notes=notes;
+    await fetch(API+'/drafts/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    loadDrafts();
+  }catch(e){alert(e.message)}
+}
+
+async function triggerScan(){if(!confirm('Run scan now?'))return;document.getElementById('app').innerHTML='<div class="loading">Scanning DOB filings...</div>';try{var r=await fetch(API+'/scan'),d=await r.json();alert(d.picks+' new picks from '+d.scanned+' filings');loadDrafts()}catch(e){alert('Failed: '+e.message)}}
+
+async function doCheckReplies(){try{var r=await fetch(API+'/check-replies',{method:'POST'}),d=await r.json();alert('Checked '+d.checked+' threads, found '+d.replies+' replies');loadDrafts()}catch(e){alert(e.message)}}
+
+async function doGenFollowups(){try{var r=await fetch(API+'/generate-followups',{method:'POST'}),d=await r.json();alert('Generated '+d.generated+' follow-up drafts');loadDrafts()}catch(e){alert(e.message)}}
+
 loadDrafts();
 </script>
 </body></html>`;
