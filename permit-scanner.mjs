@@ -795,8 +795,10 @@ async function runDailyPipeline(env = {}) {
 
 function base64UrlEncode(data) {
   if (typeof data === 'string') data = new TextEncoder().encode(data);
-  return btoa(String.fromCharCode(...new Uint8Array(data)))
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const bytes = new Uint8Array(data);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 function str2ab(str) {
@@ -1023,6 +1025,25 @@ export default {
       return jsonRes(all);
     }
 
+    // Gmail test — sends a test email to yourself to verify the service account works
+    if (url.pathname === '/gmail-test' && request.method === 'POST') {
+      if (!env.GOOGLE_SERVICE_ACCOUNT) {
+        return jsonRes({ error: 'GOOGLE_SERVICE_ACCOUNT secret not set. Run: npx wrangler secret put GOOGLE_SERVICE_ACCOUNT' }, 400);
+      }
+      const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
+      try {
+        const result = await sendGmail({
+          to: sender,
+          subject: 'PermitPulse — Gmail test',
+          body: 'This is a test email from PermitPulse. If you received this, Gmail send is working correctly.\n\nSent at: ' + new Date().toISOString(),
+          env,
+        });
+        return jsonRes({ success: true, messageId: result.messageId, sentTo: sender });
+      } catch (err) {
+        return jsonRes({ error: `Gmail test failed: ${err.message}`, hint: 'Check that domain-wide delegation is enabled for the service account with gmail.send scope, and the service account can impersonate ' + sender }, 500);
+      }
+    }
+
     if (url.pathname === '/reset' && request.method === 'POST') {
       // Clear all picked architects and drafts
       const list = await env.PERMIT_PULSE.list();
@@ -1051,6 +1072,7 @@ export default {
         '/drafts/:id/edit': 'Edit draft (POST: {recipientEmail, subject, body})',
         '/drafts/:id/approve': 'Approve + send via Gmail (POST)',
         '/drafts/:id/skip': 'Skip a draft (POST)',
+        '/gmail-test': 'Send test email to yourself (POST)',
       },
     });
   },
