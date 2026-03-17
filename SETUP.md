@@ -1,149 +1,106 @@
-# ⚡ PermitPulse v3 — Setup Guide
+# ⚡ PermitPulse v4 — Setup & Operations Guide
 
 ## What This Does
 
-Every morning at 7am ET, PermitPulse:
+PermitPulse is a full architect outreach pipeline for MetroGlassPro:
 
-1. Scans all new DOB Job Application Filings from the last 72 hours
-2. Filters to architect-filed luxury residential alterations in Manhattan, Brooklyn, Queens ($75K+)
-3. Scores each architect based on: neighborhood fit, project cost, building type, filing history volume, Manhattan focus
-4. Removes anyone already picked (never repeats)
-5. Picks the **top 5 new architects** of the day
-6. Drafts a personalized outreach email for each one referencing their specific project
-7. Emails you the digest at operations@metroglasspro.com
+**7:00 AM ET** — Full scan + reply check + follow-ups
+**6:00 PM ET** — Reply check + follow-ups only
 
-You review the 5 drafts over coffee, edit to your voice, and send from your Gmail. 10 minutes, 5 high-quality architect contacts per day, ~25 per week.
+Dashboard: https://permit-pulse-scanner.donaldlena833.workers.dev/
 
 ---
 
-## Quick Deploy (20 minutes)
+## Gmail Setup (OAuth2 Refresh Token)
 
-### 1. Clone the repo
+Since Google Workspace org policy blocks service account key creation, use OAuth2 refresh tokens instead.
 
-```bash
-git clone https://x-access-token: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@github.com/donaldlena833-cyber/permit-pulse.git
-cd permit-pulse
+### Prerequisites
+
+Your OAuth client (already created):
+- Client ID: `272556579487-un45g92vfltmu3e2o0ipq3j4rcahr18l.apps.googleusercontent.com`
+- Client Secret: `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`
+
+### Step 1: Add redirect URI to OAuth client
+
+1. Google Cloud Console → APIs & Services → Credentials
+2. Click your OAuth client
+3. Under **Authorized redirect URIs**, add: `http://localhost:8080`
+4. Save
+
+### Step 2: Get authorization code
+
+Open this URL in your browser:
+
+```
+https://accounts.google.com/o/oauth2/v2/auth?client_id=272556579487-un45g92vfltmu3e2o0ipq3j4rcahr18l.apps.googleusercontent.com&redirect_uri=http://localhost:8080&response_type=code&scope=https://www.googleapis.com/auth/gmail.send%20https://www.googleapis.com/auth/gmail.readonly&access_type=offline&prompt=consent
 ```
 
-### 2. Login to Cloudflare
+Sign in with `operations@metroglasspro.com`, click Allow.
+
+Browser redirects to `http://localhost:8080?code=SOME_CODE_HERE` (page won't load — that's fine). Copy the `code` value from the URL bar.
+
+### Step 3: Exchange code for refresh token
 
 ```bash
-npm install -g wrangler
-wrangler login
+curl -s -X POST https://oauth2.googleapis.com/token \
+  -d "code=PASTE_AUTH_CODE" \
+  -d "client_id=272556579487-un45g92vfltmu3e2o0ipq3j4rcahr18l.apps.googleusercontent.com" \
+  -d "client_secret=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" \
+  -d "redirect_uri=http://localhost:8080" \
+  -d "grant_type=authorization_code"
 ```
 
-### 3. Create KV namespace (stores picked architects)
+Returns JSON with `refresh_token`. Save it.
+
+### Step 4: Store secrets
 
 ```bash
-npx wrangler kv namespace create PERMIT_PULSE
+npx wrangler secret put GMAIL_REFRESH_TOKEN
+# Paste the refresh_token
+
+npx wrangler secret put GMAIL_CLIENT_ID
+# Paste: 272556579487-un45g92vfltmu3e2o0ipq3j4rcahr18l.apps.googleusercontent.com
+
+npx wrangler secret put GMAIL_CLIENT_SECRET
+# Paste: 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
 ```
 
-This outputs an ID like `abc123def456`. Open `wrangler.toml` and replace `YOUR_KV_NAMESPACE_ID_HERE` with that ID.
-
-### 4. Set up Resend (email delivery)
-
-1. Go to [resend.com](https://resend.com) → Sign up (free)
-2. Add domain: `metroglasspro.com` → add the DNS records in Cloudflare
-3. Get your API key
-
-```bash
-npx wrangler secret put RESEND_API_KEY
-# paste your Resend API key
-```
-
-### 5. Deploy
+### Step 5: Deploy + test
 
 ```bash
 npx wrangler deploy
-```
-
-### 6. Test it
-
-```bash
-curl https://permit-pulse-scanner.YOUR_SUBDOMAIN.workers.dev/scan
-```
-
-You should see the pipeline run and get an email within 30 seconds with your first 5 architect picks.
-
----
-
-## Daily Workflow
-
-**7:00 AM** — PermitPulse runs automatically
-
-**~7:05 AM** — You get an email with 5 architect cards, each showing:
-- Architect name + RA license + filing history
-- The specific project that triggered the pick (address, cost, building, floor)
-- Why they scored high (reasons)
-- Their recent project list
-- A **draft outreach email** ready to edit
-- Links: Google search (find their firm), Maps, DOB BIS
-
-**Your 10-minute routine:**
-1. Open the digest email
-2. For each of the 5 picks:
-   - Click "Find firm + email" to Google the architect and find their contact
-   - Copy the draft email, paste into Gmail, edit to your voice
-   - Send from operations@metroglasspro.com
-3. Done. 5 new architect contacts made.
-
----
-
-## How Scoring Works
-
-Each architect gets scored 0-100 on two dimensions:
-
-### Current Filing Score (project quality)
-| Signal | Points | What it means |
-|--------|--------|--------------|
-| Tier 1 neighborhood | +15 | UES, UWS, Tribeca, SoHo, Chelsea, Park Slope, etc. |
-| Tier 2 neighborhood | +8 | Harlem, Astoria, LIC, Hudson Yards, etc. |
-| Sweet spot cost ($150K-$2M) | +12 | Luxury apartment renovation range |
-| Mega project ($2M+) | +8 | Large-scale, multi-trade project |
-| High-rise (10+ stories) | +6 | Co-op/condo building |
-| Residential building | +8 | Has dwelling units |
-| Penthouse | +5 | Premium unit, high-end client |
-
-### Architect History Score (practice quality)
-| Signal | Points | What it means |
-|--------|--------|--------------|
-| 10+ filings in 2 years | +30 | High-volume practice — ideal partner |
-| 5-9 filings in 2 years | +20 | Established practice |
-| 3-4 filings | +10 | Active |
-| 70%+ Manhattan-focused | +10 | Works your territory |
-| 3+ target neighborhoods | +5 | Diverse across your areas |
-| Avg project $150K+ | +8 | Consistent high-end work |
-
----
-
-## No Repeats
-
-The system uses Cloudflare KV to track every architect it has ever picked. Once picked, an architect won't appear again for 180 days. This means:
-
-- Week 1: 25 new architects
-- Month 1: ~100 new architects
-- Month 3: ~300 architects in your network pipeline
-
-After 6 months, an architect becomes eligible again — by then you either have a relationship or it's worth a re-introduction.
-
-To see everyone who's been picked:
-```bash
-curl https://permit-pulse-scanner.YOUR_SUBDOMAIN.workers.dev/picked
+curl -X POST https://permit-pulse-scanner.donaldlena833.workers.dev/gmail-test
 ```
 
 ---
 
-## Troubleshooting
+## All Secrets
 
-**No picks showing up?**
-The system needs at least 1 new qualifying filing in the last 3 days that hasn't been picked before. On slow filing days (weekends, holidays), you might get fewer than 5.
+| Secret | Required | How to set |
+|--------|----------|-----------|
+| `GMAIL_REFRESH_TOKEN` | Yes (for Gmail) | OAuth flow above |
+| `GMAIL_CLIENT_ID` | Yes (for Gmail) | OAuth client ID |
+| `GMAIL_CLIENT_SECRET` | Yes (for Gmail) | OAuth client secret |
+| `RESEND_API_KEY` | Optional | For digest notification emails |
+| `APOLLO_API_KEY` | Optional | For contact enrichment (free 10K/mo) |
 
-**Want to reset the picked list?**
-```bash
-npx wrangler kv key list --binding PERMIT_PULSE | jq -r '.[].name' | while read key; do
-  npx wrangler kv key delete --binding PERMIT_PULSE "$key"
-done
-```
+---
 
-**Want to change the number of daily picks?**
-Edit `DAILY_PICKS` at the top of `permit-scanner.mjs` and redeploy.
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Dashboard |
+| `/scan` | GET | Run full pipeline |
+| `/drafts` | GET | List all drafts |
+| `/drafts/:id/edit` | POST | Edit draft |
+| `/drafts/:id/approve` | POST | Send via Gmail |
+| `/drafts/:id/skip` | POST | Skip draft |
+| `/drafts/:id/status` | POST | Update pipeline status |
+| `/analytics` | GET | Funnel analytics |
+| `/crm` | GET | All architect CRM records |
+| `/crm/:license` | GET | Single architect history |
+| `/check-replies` | POST | Check Gmail for replies |
+| `/generate-followups` | POST | Generate follow-ups |
+| `/gmail-test` | POST | Test Gmail send |

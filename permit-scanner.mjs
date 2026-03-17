@@ -842,12 +842,43 @@ async function getGoogleAccessToken(serviceAccountJson, impersonateEmail, scopes
   return (await tokenRes.json()).access_token;
 }
 
+// OAuth2 refresh token method — for when service account keys are blocked by org policy
+async function getAccessTokenFromRefreshToken(clientId, clientSecret, refreshToken) {
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}&refresh_token=${encodeURIComponent(refreshToken)}&grant_type=refresh_token`,
+  });
+  if (!tokenRes.ok) throw new Error(`OAuth2 refresh failed: ${await tokenRes.text()}`);
+  return (await tokenRes.json()).access_token;
+}
+
+// Unified: get Gmail access token using whichever auth method is configured
+async function getGmailAccessToken(env) {
+  // Method 1: OAuth2 refresh token (preferred — works without service account keys)
+  if (env.GMAIL_REFRESH_TOKEN && env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET) {
+    return getAccessTokenFromRefreshToken(env.GMAIL_CLIENT_ID, env.GMAIL_CLIENT_SECRET, env.GMAIL_REFRESH_TOKEN);
+  }
+  // Method 2: Service account with domain-wide delegation
+  if (env.GOOGLE_SERVICE_ACCOUNT) {
+    const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
+    return getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT, sender);
+  }
+  throw new Error('No Gmail auth configured. Set either GMAIL_REFRESH_TOKEN + GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET, or GOOGLE_SERVICE_ACCOUNT.');
+}
+
+function hasGmailAuth(env) {
+  return !!(env.GMAIL_REFRESH_TOKEN && env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET) || !!env.GOOGLE_SERVICE_ACCOUNT;
+}
+
 async function sendGmail({ to, subject, body, env }) {
   const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
-  const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT, sender);
+  const accessToken = await getGmailAccessToken(env);
+  // Use 'me' for OAuth refresh token (user is directly authenticated), or sender email for service account
+  const gmailUser = (env.GMAIL_REFRESH_TOKEN) ? 'me' : sender;
   const rawEmail = [`From: MetroGlass Pro <${sender}>`, `To: ${to}`, `Subject: ${subject}`,
     'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\r\n');
-  const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${sender}/messages/send`, {
+  const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${gmailUser}/messages/send`, {
     method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw: base64UrlEncode(rawEmail) }),
   });
@@ -861,9 +892,10 @@ async function sendGmail({ to, subject, body, env }) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function checkForReplies(env) {
-  if (!env.GOOGLE_SERVICE_ACCOUNT) return { checked: 0, replies: 0 };
+  if (!hasGmailAuth(env)) return { checked: 0, replies: 0 };
   const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
-  const accessToken = await getGoogleAccessToken(env.GOOGLE_SERVICE_ACCOUNT, sender);
+  const gmailUser = env.GMAIL_REFRESH_TOKEN ? 'me' : sender;
+  const accessToken = await getGmailAccessToken(env);
   const queue = new DraftQueue(env.PERMIT_PULSE);
   const allDrafts = await queue.getAllDrafts();
   const sentDrafts = allDrafts.filter(d => d.status === 'sent' && d.gmailThreadId && !d.replyDetected);
@@ -872,7 +904,7 @@ async function checkForReplies(env) {
   for (const draft of sentDrafts) {
     try {
       const threadRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/${sender}/threads/${draft.gmailThreadId}?format=metadata&metadataHeaders=From`,
+        `https://gmail.googleapis.com/gmail/v1/users/${gmailUser}/threads/${draft.gmailThreadId}?format=metadata&metadataHeaders=From`,
         { headers: { 'Authorization': `Bearer ${accessToken}` } }
       );
       if (!threadRes.ok) continue;
@@ -1269,7 +1301,7 @@ async function handleGmailRoutes(request, env) {
     const draft = await queue.getDraft(`draft:${rawId}`);
     if (!draft) return jsonRes({ error: 'Draft not found' }, 404);
     if (!draft.recipientEmail) return jsonRes({ error: 'No recipient email. Edit draft first.' }, 400);
-    if (!env.GOOGLE_SERVICE_ACCOUNT) return jsonRes({ error: 'Gmail not configured. Set GOOGLE_SERVICE_ACCOUNT secret.' }, 400);
+    if (!hasGmailAuth(env)) return jsonRes({ error: 'Gmail not configured. Set GMAIL_REFRESH_TOKEN + GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET secrets.' }, 400);
     try {
       const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env });
       await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId, gmailThreadId: result.threadId, pipelineStatus: 'awaiting_reply', followUpCount: 0 });
@@ -1444,8 +1476,8 @@ export default {
 
     // Gmail test — sends a test email to yourself to verify the service account works
     if (url.pathname === '/gmail-test' && request.method === 'POST') {
-      if (!env.GOOGLE_SERVICE_ACCOUNT) {
-        return jsonRes({ error: 'GOOGLE_SERVICE_ACCOUNT secret not set. Run: npx wrangler secret put GOOGLE_SERVICE_ACCOUNT' }, 400);
+      if (!hasGmailAuth(env)) {
+        return jsonRes({ error: 'Gmail not configured. Set GMAIL_REFRESH_TOKEN + GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET (or GOOGLE_SERVICE_ACCOUNT).' }, 400);
       }
       const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
       try {
@@ -1457,7 +1489,7 @@ export default {
         });
         return jsonRes({ success: true, messageId: result.messageId, sentTo: sender });
       } catch (err) {
-        return jsonRes({ error: `Gmail test failed: ${err.message}`, hint: 'Check that domain-wide delegation is enabled for the service account with gmail.send scope, and the service account can impersonate ' + sender }, 500);
+        return jsonRes({ error: `Gmail test failed: ${err.message}`, hint: 'Check that GMAIL_REFRESH_TOKEN is set and the OAuth consent was granted for ' + sender }, 500);
       }
     }
 
