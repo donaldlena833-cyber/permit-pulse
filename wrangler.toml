@@ -1,0 +1,13 @@
+name = "permit-pulse-scanner"
+main = "permit-scanner.mjs"
+compatibility_date = "2024-01-01"
+
+# Runs at 8am ET and 6pm ET (13:00 UTC and 23:00 UTC)
+[triggers]
+crons = ["0 13 * * *", "0 23 * * *"]
+
+[vars]
+NOTIFY_EMAIL = "info@metroglasspro.com"
+
+# Add your Resend API key as a secret:
+# npx wrangler secret put RESEND_API_KEY
