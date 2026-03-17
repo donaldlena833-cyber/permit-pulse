@@ -20,3 +20,4 @@ id = "YOUR_KV_NAMESPACE_ID_HERE"
 # SECRETS (set via CLI):
 # npx wrangler secret put RESEND_API_KEY          — for the digest notification email
 # npx wrangler secret put GOOGLE_SERVICE_ACCOUNT  — JSON key for Gmail API (domain-wide delegation)
+# npx wrangler secret put APOLLO_API_KEY          — for contact enrichment (free tier: 10K/mo)

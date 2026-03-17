@@ -128,6 +128,90 @@ async function fetchPermitForBuilding(bin, borough) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// APOLLO ENRICHMENT
+// Free tier: 10,000 lookups/month — more than enough for 30 picks/day
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function enrichWithApollo(architect, apiKey) {
+  // Try to figure out the firm domain from the filing representative
+  // If filing_representative_business_name matches architect name pattern, it might be their firm
+  const filingRep = (architect.filings[0]?.filing_representative_business_name || '').trim();
+  const archLastName = (architect.lastName || '').toLowerCase();
+
+  // Heuristic: if the filing rep business contains the architect's last name, it's likely their firm
+  let firmHint = null;
+  if (filingRep && archLastName.length > 2 && filingRep.toLowerCase().includes(archLastName)) {
+    firmHint = filingRep;
+  }
+
+  // Apollo People Match API
+  const payload = {
+    first_name: architect.firstName,
+    last_name: architect.lastName,
+    organization_name: firmHint || undefined,
+    title: 'architect',
+    // Help Apollo find the right person by giving location context
+    person_locations: ['New York, New York, United States'],
+    reveal_personal_emails: false,
+    reveal_phone_number: true,
+  };
+
+  // Clean undefined values
+  Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+
+  const res = await fetch('https://api.apollo.io/api/v1/people/match', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache',
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Apollo API ${res.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const person = data.person;
+
+  if (!person) return null;
+
+  return {
+    apolloId: person.id || null,
+    email: person.email || null,
+    phone: person.phone_numbers?.[0]?.sanitized_number || person.organization?.phone || null,
+    linkedin: person.linkedin_url || null,
+    title: person.title || null,
+    organization: person.organization?.name || null,
+    domain: person.organization?.website_url ? new URL(person.organization.website_url).hostname : (person.organization?.primary_domain || null),
+    website: person.organization?.website_url || null,
+    city: person.city || null,
+    state: person.state || null,
+    photoUrl: person.photo_url || null,
+    headline: person.headline || null,
+    employmentHistory: (person.employment_history || []).slice(0, 3).map(e => ({
+      title: e.title,
+      org: e.organization_name,
+      current: e.current,
+    })),
+  };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// NYSED LICENSE VERIFICATION (bonus data layer — free)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// NYSED doesn't have a public API, but we store the verification URL for manual lookup
+function getNYSEDVerificationUrl(raLicense) {
+  // Pad license to 6 digits
+  const padded = String(raLicense).padStart(6, '0');
+  return `https://eservices.nysed.gov/professions/verification-search?t=RA&n=${padded}`;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // SCORING ENGINE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -551,6 +635,34 @@ async function runDailyPipeline(env = {}) {
   }
   if (topPicks.length > 10) console.log(`   ... and ${topPicks.length - 10} more`);
 
+  // Step 5.5: Enrich with Apollo (email, phone, LinkedIn, firm)
+  console.log('\n🔍 Step 5.5: Enriching contacts via Apollo...');
+  let enriched = 0, enrichFailed = 0;
+  for (const pick of topPicks) {
+    pick.enrichment = null;
+    if (env.APOLLO_API_KEY) {
+      try {
+        const data = await enrichWithApollo(pick, env.APOLLO_API_KEY);
+        if (data) {
+          pick.enrichment = data;
+          enriched++;
+          console.log(`   ✅ ${pick.name}: ${data.email || 'no email'} | ${data.linkedin || 'no LinkedIn'} | ${data.organization || 'no firm'}`);
+        } else {
+          enrichFailed++;
+          console.log(`   ⚠️  ${pick.name}: no match in Apollo`);
+        }
+      } catch (err) {
+        enrichFailed++;
+        console.log(`   ❌ ${pick.name}: enrichment error — ${err.message}`);
+      }
+    }
+  }
+  if (!env.APOLLO_API_KEY) {
+    console.log('   ⚠️  No APOLLO_API_KEY set — skipping enrichment. Add it: npx wrangler secret put APOLLO_API_KEY');
+  } else {
+    console.log(`   ${enriched} enriched, ${enrichFailed} not found`);
+  }
+
   // Step 6: Draft outreach emails + save to queue
   console.log('\n✉️  Step 6: Drafting outreach emails + saving to queue...');
   for (const pick of topPicks) {
@@ -558,15 +670,25 @@ async function runDailyPipeline(env = {}) {
 
     if (env.PERMIT_PULSE) {
       const queue = new DraftQueue(env.PERMIT_PULSE);
+      const e = pick.enrichment || {};
       await queue.addDraft({
         architectName: pick.name,
         architectLicense: pick.raLicense,
-        recipientEmail: null,
+        recipientEmail: e.email || null,
         subject: pick.draftEmail.subject,
         body: pick.draftEmail.body,
         projectAddress: `${pick.triggerProject.house_no} ${pick.triggerProject.street_name}, ${pick.triggerProject.borough}`,
         score: pick.totalScore,
         tier: pick.tier || 'tier2',
+        // Enriched contact data
+        phone: e.phone || null,
+        linkedin: e.linkedin || null,
+        firmName: e.organization || null,
+        firmDomain: e.domain || null,
+        firmWebsite: e.website || null,
+        title: e.title || null,
+        apolloId: e.apolloId || null,
+        enrichmentSource: e.email ? 'apollo' : 'none',
       });
     }
   }
@@ -685,7 +807,16 @@ class DraftQueue {
       architectName: draft.architectName, architectLicense: draft.architectLicense,
       recipientEmail: draft.recipientEmail || null, subject: draft.subject,
       body: draft.body, projectAddress: draft.projectAddress, score: draft.score,
-      tier: draft.tier || 'tier2' };
+      tier: draft.tier || 'tier2',
+      // Enrichment data
+      phone: draft.phone || null,
+      linkedin: draft.linkedin || null,
+      firmName: draft.firmName || null,
+      firmDomain: draft.firmDomain || null,
+      firmWebsite: draft.firmWebsite || null,
+      title: draft.title || null,
+      enrichmentSource: draft.enrichmentSource || 'none',
+    };
     await this.kv.put(id, JSON.stringify(record), { expirationTtl: 30 * 86400 });
     return record;
   }
@@ -903,6 +1034,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);-webkit-font
 .links{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .links a{font-size:12px;color:var(--accent-dark);text-decoration:none;background:var(--accent-light);padding:6px 14px;border-radius:20px;font-weight:500;transition:all .2s}
 .links a:hover{background:var(--accent);color:#fff}
+.enrich-row{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.enrich-tag{font-size:11px;padding:4px 12px;border-radius:16px;background:rgba(148,131,114,0.08);color:var(--text-muted);font-weight:500}
 label{display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.18em;color:var(--text-muted);margin-bottom:6px}
 input,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:12px 16px;border-radius:16px;font-family:var(--font);font-size:13px;resize:vertical;transition:border .2s}
 input:focus,textarea:focus{outline:none;border-color:var(--accent)}
