@@ -86,10 +86,11 @@ async function fetchRecentFilings(daysBack = 3) {
   dateFrom.setDate(dateFrom.getDate() - daysBack);
   const dateStr = dateFrom.toISOString().split('T')[0] + 'T00:00:00';
 
+  // NOTE: initial_cost is a text field in the API, so we can't filter numerically server-side.
+  // We fetch all RA alterations and filter by cost client-side.
   const where = [
     `applicant_professional_title='RA'`,
     `filing_date>'${dateStr}'`,
-    `initial_cost>'${PROFILE.highEndSignals.minCost}'`,
     `job_type='Alteration'`,
     `general_construction_work_type_='1'`,
     `(borough='MANHATTAN' OR borough='BROOKLYN' OR borough='QUEENS')`,
@@ -98,7 +99,10 @@ async function fetchRecentFilings(daysBack = 3) {
   const url = `${FILINGS_API}?$where=${encodeURIComponent(where)}&$order=filing_date DESC&$limit=200`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Filings API error: ${res.status}`);
-  return res.json();
+  const data = await res.json();
+
+  // Filter by cost client-side (initial_cost is text, needs parseFloat)
+  return data.filter(f => (parseFloat(f.initial_cost) || 0) >= PROFILE.highEndSignals.minCost);
 }
 
 async function fetchArchitectHistory(raLicense, lookbackYears = 2) {
