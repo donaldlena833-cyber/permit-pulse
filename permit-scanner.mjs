@@ -709,53 +709,45 @@ class DraftQueue {
 // GMAIL API ROUTES
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-function handleGmailRoutes(request, env) {
+async function handleGmailRoutes(request, env) {
   const url = new URL(request.url);
   if (url.pathname === '/drafts' && request.method === 'GET') {
-    return (async () => {
-      const queue = new DraftQueue(env.PERMIT_PULSE);
-      return jsonRes(await queue.getPendingDrafts());
-    })();
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    return jsonRes(await queue.getPendingDrafts());
   }
   if (url.pathname.match(/^\/drafts\/[^/]+\/approve$/) && request.method === 'POST') {
     const rawId = url.pathname.split('/')[2];
-    return (async () => {
-      const queue = new DraftQueue(env.PERMIT_PULSE);
-      const draft = await queue.getDraft(`draft:${rawId}`);
-      if (!draft) return jsonRes({ error: 'Draft not found' }, 404);
-      if (!draft.recipientEmail) return jsonRes({ error: 'No recipient email. Edit draft first.' }, 400);
-      if (!env.GOOGLE_SERVICE_ACCOUNT) return jsonRes({ error: 'Gmail not configured. Set GOOGLE_SERVICE_ACCOUNT secret.' }, 400);
-      try {
-        const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env });
-        await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId });
-        return jsonRes({ success: true, messageId: result.messageId });
-      } catch (err) { return jsonRes({ error: `Send failed: ${err.message}` }, 500); }
-    })();
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    const draft = await queue.getDraft(`draft:${rawId}`);
+    if (!draft) return jsonRes({ error: 'Draft not found' }, 404);
+    if (!draft.recipientEmail) return jsonRes({ error: 'No recipient email. Edit draft first.' }, 400);
+    if (!env.GOOGLE_SERVICE_ACCOUNT) return jsonRes({ error: 'Gmail not configured. Set GOOGLE_SERVICE_ACCOUNT secret.' }, 400);
+    try {
+      const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env });
+      await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId });
+      return jsonRes({ success: true, messageId: result.messageId });
+    } catch (err) { return jsonRes({ error: `Send failed: ${err.message}` }, 500); }
   }
   if (url.pathname.match(/^\/drafts\/[^/]+\/edit$/) && request.method === 'POST') {
     const rawId = url.pathname.split('/')[2];
-    return (async () => {
-      const queue = new DraftQueue(env.PERMIT_PULSE);
-      const updates = await request.json();
-      try {
-        const updated = await queue.updateDraft(`draft:${rawId}`, {
-          ...(updates.recipientEmail && { recipientEmail: updates.recipientEmail }),
-          ...(updates.subject && { subject: updates.subject }),
-          ...(updates.body && { body: updates.body }),
-        });
-        return jsonRes(updated);
-      } catch (err) { return jsonRes({ error: err.message }, 400); }
-    })();
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    const updates = await request.json();
+    try {
+      const updated = await queue.updateDraft(`draft:${rawId}`, {
+        ...(updates.recipientEmail && { recipientEmail: updates.recipientEmail }),
+        ...(updates.subject && { subject: updates.subject }),
+        ...(updates.body && { body: updates.body }),
+      });
+      return jsonRes(updated);
+    } catch (err) { return jsonRes({ error: err.message }, 400); }
   }
   if (url.pathname.match(/^\/drafts\/[^/]+\/skip$/) && request.method === 'POST') {
     const rawId = url.pathname.split('/')[2];
-    return (async () => {
-      const queue = new DraftQueue(env.PERMIT_PULSE);
-      try {
-        const updated = await queue.updateDraft(`draft:${rawId}`, { status: 'skipped' });
-        return jsonRes(updated);
-      } catch (err) { return jsonRes({ error: err.message }, 400); }
-    })();
+    const queue = new DraftQueue(env.PERMIT_PULSE);
+    try {
+      const updated = await queue.updateDraft(`draft:${rawId}`, { status: 'skipped' });
+      return jsonRes(updated);
+    } catch (err) { return jsonRes({ error: err.message }, 400); }
   }
   return null;
 }
@@ -784,7 +776,7 @@ export default {
     }
 
     // Gmail / Draft routes
-    const gmailResponse = handleGmailRoutes(request, env);
+    const gmailResponse = await handleGmailRoutes(request, env);
     if (gmailResponse) return gmailResponse;
 
     // Scanner routes
