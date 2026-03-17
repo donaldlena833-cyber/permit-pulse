@@ -103,7 +103,16 @@ async function fetchRecentFilings(daysBack = 7) {
   if (!res.ok) throw new Error(`Filings API error: ${res.status}`);
   const data = await res.json();
 
-  return data.filter(f => (parseFloat(f.initial_cost) || 0) >= PROFILE.highEndSignals.minCost);
+  console.log(`   Raw API returned ${data.length} filings`);
+  // Log a sample of costs to debug
+  if (data.length > 0) {
+    const sample = data.slice(0, 5).map(f => `${f.applicant_first_name} ${f.applicant_last_name}: cost="${f.initial_cost}" parsed=${parseFloat(f.initial_cost)}`);
+    console.log(`   Cost samples: ${sample.join(' | ')}`);
+  }
+
+  const filtered = data.filter(f => (parseFloat(f.initial_cost) || 0) >= PROFILE.highEndSignals.minCost);
+  console.log(`   After $${PROFILE.highEndSignals.minCost} cost filter: ${filtered.length} filings`);
+  return filtered;
 }
 
 async function fetchArchitectHistory(raLicense, lookbackYears = 2) {
@@ -929,7 +938,6 @@ export default {
     }
 
     if (url.pathname === '/debug') {
-      // Debug: test the DOB API query directly
       try {
         const dateFrom = new Date();
         dateFrom.setDate(dateFrom.getDate() - 14);
@@ -941,11 +949,12 @@ export default {
           `general_construction_work_type_='1'`,
           `(borough='MANHATTAN' OR borough='BROOKLYN' OR borough='QUEENS' OR borough='BRONX')`,
         ].join(' AND ');
-        const apiUrl = `https://data.cityofnewyork.us/resource/w9ak-ipjd.json?$where=${encodeURIComponent(where)}&$order=filing_date DESC&$limit=5`;
+        const apiUrl = `https://data.cityofnewyork.us/resource/w9ak-ipjd.json?$where=${encodeURIComponent(where)}&$order=filing_date DESC&$limit=10`;
         const res = await fetch(apiUrl);
-        const status = res.status;
-        const text = await res.text();
-        return jsonRes({ apiUrl, status, responseLength: text.length, first200chars: text.slice(0, 200), dateStr, now: new Date().toISOString() });
+        const data = await res.json();
+        const costs = data.map(f => ({ name: `${f.applicant_first_name} ${f.applicant_last_name}`, cost: f.initial_cost, parsed: parseFloat(f.initial_cost), passes40k: (parseFloat(f.initial_cost) || 0) >= 40000 }));
+        const totalPicked = env.PERMIT_PULSE ? (await env.PERMIT_PULSE.list({ prefix: 'picked:' })).keys.length : 'no KV';
+        return jsonRes({ total: data.length, costs, dateStr, now: new Date().toISOString(), totalPicked, minCost: PROFILE.highEndSignals.minCost });
       } catch (err) {
         return jsonRes({ error: err.message, stack: err.stack });
       }
