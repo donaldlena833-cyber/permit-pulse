@@ -848,171 +848,100 @@ function getDashboardHTML() {
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PermitPulse — Review Outreach</title>
+<title>PermitPulse</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'DM Sans',system-ui,sans-serif;background:#0C0C0E;color:#E8E6E3;-webkit-font-smoothing:antialiased;min-height:100vh}
-  .hdr{padding:20px 24px;border-bottom:1px solid #2A2A32;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(180deg,rgba(212,105,26,0.04) 0%,transparent 100%)}
-  .hdr h1{font-size:20px;font-weight:700}
-  .hdr p{font-size:12px;color:#8A8A96}
-  .hdr-actions{display:flex;gap:8px}
-  .btn{padding:8px 16px;border-radius:6px;border:1px solid #2A2A32;background:#1E1E24;color:#E8E6E3;font-size:13px;font-family:inherit;cursor:pointer;font-weight:500;transition:all .15s}
-  .btn:hover{border-color:#D4691A;color:#D4691A}
-  .btn-send{background:#D4691A;border-color:#D4691A;color:#fff}
-  .btn-send:hover{filter:brightness(1.15)}
-  .btn-send:disabled{opacity:.4;cursor:not-allowed}
-  .btn-skip{border-color:#35353F;color:#8A8A96}
-  .btn-skip:hover{border-color:#E84545;color:#E84545}
-  .container{padding:20px 24px;max-width:800px}
-  .draft{background:#151518;border:1px solid #2A2A32;border-radius:10px;padding:20px;margin-bottom:16px;border-left:3px solid #D4691A}
-  .draft.sent{border-left-color:#3A7D44;opacity:.6}
-  .draft.skipped{border-left-color:#5C5C68;opacity:.4}
-  .tier-label{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-right:6px}
-  .tier-label.tier1{background:rgba(212,105,26,0.2);color:#D4691A}
-  .tier-label.tier2{background:rgba(138,138,150,0.15);color:#8A8A96}
-  .draft-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
-  .arch-name{font-size:18px;font-weight:700}
-  .arch-meta{font-size:12px;color:#8A8A96;margin-top:2px}
-  .score{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#D4691A;background:rgba(212,105,26,0.1);padding:4px 10px;border-radius:6px}
-  .project{font-size:14px;margin-bottom:12px}
-  .project strong{color:#D4691A}
-  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#5C5C68;font-weight:500;margin-bottom:4px}
-  input,textarea{width:100%;background:#1E1E24;border:1px solid #2A2A32;color:#E8E6E3;padding:10px 12px;border-radius:6px;font-family:inherit;font-size:13px;resize:vertical}
-  input:focus,textarea:focus{outline:none;border-color:#D4691A}
-  textarea{min-height:200px;line-height:1.6}
-  .field{margin-bottom:12px}
-  .draft-actions{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid #2A2A32}
-  .status-badge{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;text-transform:uppercase}
-  .status-badge.sent{background:rgba(58,125,68,0.2);color:#6abf7b}
-  .status-badge.skipped{background:rgba(138,138,150,0.1);color:#5C5C68}
-  .status-badge.pending{background:rgba(212,105,26,0.1);color:#D4691A}
-  .empty{text-align:center;padding:60px;color:#5C5C68}
-  .empty-ico{font-size:48px;margin-bottom:16px}
-  .loading{text-align:center;padding:60px;color:#8A8A96}
-  .links{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-  .links a{font-size:12px;color:#D4691A;text-decoration:none;background:#1E1E24;padding:4px 10px;border-radius:4px;border:1px solid #2A2A32}
-  .links a:hover{border-color:#D4691A}
-  @media(max-width:600px){.container{padding:12px}.draft{padding:14px}.draft-header{flex-direction:column;gap:8px}.draft-actions{flex-direction:column}}
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#FFFCF7;--bg-card:rgba(255,255,255,0.88);--bg-card-hover:rgba(255,255,255,0.95);
+  --border:rgba(238,230,216,0.9);--border-light:#EEE6D8;
+  --text:#2A241F;--text-muted:#716254;--text-dim:#948372;
+  --accent:#B88A52;--accent-light:rgba(184,138,82,0.12);--accent-dark:#946C40;
+  --green:#16a34a;--green-bg:rgba(22,163,74,0.08);
+  --red:#dc2626;--red-bg:rgba(220,38,38,0.06);
+  --shadow:0 10px 30px -22px rgba(26,22,19,0.28),0 14px 40px -30px rgba(59,51,45,0.22);
+  --shadow-hover:0 18px 44px -28px rgba(26,22,19,0.34),0 24px 52px -36px rgba(59,51,45,0.24);
+  --shadow-soft:0 8px 24px -20px rgba(26,22,19,0.24);
+  --radius:1.5rem;--font:"Avenir Next",Avenir,"Helvetica Neue","Segoe UI",Arial,sans-serif;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#161412;--bg-card:rgba(34,30,26,0.9);--bg-card-hover:rgba(40,36,32,0.95);
+  --border:#3A332D;--border-light:#3A332D;
+  --text:#F6F1E8;--text-muted:#B2A697;--text-dim:#8A7D6E;
+  --accent:#D2A86E;--accent-light:rgba(210,168,110,0.15);--accent-dark:#E8C08A;
+  --shadow:0 20px 50px -34px rgba(0,0,0,0.6),0 10px 26px -18px rgba(0,0,0,0.45);
+  --shadow-hover:0 24px 56px -30px rgba(0,0,0,0.7);
+}}
+body{font-family:var(--font);background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;min-height:100vh;
+  background-image:radial-gradient(circle at top left,rgba(184,138,82,0.12),transparent 30%),radial-gradient(circle at bottom right,rgba(59,51,45,0.08),transparent 28%)}
+.hero{position:relative;margin:20px 20px 0;padding:28px;border-radius:34px;border:1px solid var(--border);background:var(--bg-card);box-shadow:var(--shadow);overflow:hidden;backdrop-filter:blur(8px)}
+.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at top right,rgba(184,138,82,0.18),transparent 28%),radial-gradient(circle at bottom left,rgba(59,51,45,0.08),transparent 32%);pointer-events:none}
+.hero-inner{position:relative;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px}
+.hero-eyebrow{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.28em;color:var(--accent-dark)}
+.hero-title{font-size:2rem;font-weight:600;letter-spacing:-0.03em;margin-top:12px}
+.hero-desc{font-size:14px;color:var(--text-muted);margin-top:8px;line-height:1.6;max-width:520px}
+.hero-actions{display:flex;gap:8px;align-self:flex-start;margin-top:8px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:20px 20px 0}
+.stat-card{border-radius:28px;border:1px solid var(--border);background:var(--bg-card);padding:18px 20px;box-shadow:var(--shadow-soft);backdrop-filter:blur(8px)}
+.stat-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.18em;color:var(--text-muted)}
+.stat-value{font-size:22px;font-weight:600;letter-spacing:-0.02em;margin-top:4px}
+.container{padding:20px;max-width:800px;margin:0 auto}
+.draft{border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-card);padding:24px;margin-bottom:14px;box-shadow:var(--shadow);backdrop-filter:blur(8px);transition:all 0.3s ease;animation:fadeUp .35s ease-out both}
+.draft:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
+.draft.sent{opacity:.5}.draft.skipped{opacity:.35}
+@keyframes fadeUp{0%{opacity:0;transform:translateY(12px)}100%{opacity:1;transform:translateY(0)}}
+.draft-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
+.arch-name{font-size:18px;font-weight:600;letter-spacing:-0.02em}
+.arch-meta{font-size:12px;color:var(--text-dim);margin-top:3px}
+.score-pill{font-size:13px;font-weight:700;color:var(--accent-dark);background:var(--accent-light);padding:6px 14px;border-radius:20px;white-space:nowrap}
+.badge-row{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.badge{font-size:10px;padding:3px 10px;border-radius:20px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px}
+.badge-t1{background:var(--accent-light);color:var(--accent-dark)}
+.badge-t2{background:rgba(148,131,114,0.1);color:var(--text-dim)}
+.badge-pending{background:var(--accent-light);color:var(--accent-dark)}
+.badge-sent{background:var(--green-bg);color:var(--green)}
+.badge-skipped{background:rgba(148,131,114,0.1);color:var(--text-dim)}
+.links{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.links a{font-size:12px;color:var(--accent-dark);text-decoration:none;background:var(--accent-light);padding:6px 14px;border-radius:20px;font-weight:500;transition:all .2s}
+.links a:hover{background:var(--accent);color:#fff}
+label{display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.18em;color:var(--text-muted);margin-bottom:6px}
+input,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:12px 16px;border-radius:16px;font-family:var(--font);font-size:13px;resize:vertical;transition:border .2s}
+input:focus,textarea:focus{outline:none;border-color:var(--accent)}
+textarea{min-height:180px;line-height:1.6}
+.field{margin-bottom:14px}
+.btn{padding:10px 20px;border-radius:20px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;font-weight:500;transition:all .2s;box-shadow:var(--shadow-soft)}
+.btn:hover{box-shadow:var(--shadow);transform:translateY(-1px)}
+.btn:active{transform:scale(0.98)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{filter:brightness(1.1)}
+.btn-danger{color:var(--red);border-color:rgba(220,38,38,0.2)}
+.btn-danger:hover{background:var(--red-bg)}
+.draft-actions{display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);flex-wrap:wrap}
+.empty{text-align:center;padding:60px 20px;color:var(--text-dim)}
+.empty h3{font-size:18px;font-weight:600;color:var(--text);margin:12px 0 6px}
+.loading{text-align:center;padding:60px;color:var(--text-muted);font-size:14px}
+@media(max-width:600px){.hero{margin:12px;padding:20px;border-radius:24px}.hero-title{font-size:1.5rem}.stats{margin:12px;grid-template-columns:1fr 1fr}.container{padding:12px}.draft{padding:18px;border-radius:20px}.draft-actions{flex-direction:column}.draft-actions .btn{width:100%;text-align:center}}
 </style>
 </head><body>
-<div class="hdr">
-  <div><h1>⚡ PermitPulse — Review Outreach</h1><p>Edit emails, add architect's email, approve to send from Gmail</p></div>
-  <div class="hdr-actions"><button class="btn" onclick="loadDrafts()">Refresh</button><button class="btn" onclick="triggerScan()">Run Scan</button></div>
-</div>
+<div class="hero"><div class="hero-inner"><div>
+<p class="hero-eyebrow">PermitPulse</p>
+<h1 class="hero-title">Architect outreach</h1>
+<p class="hero-desc">Review draft emails, add the architect's email, edit to your voice, and send.</p>
+</div><div class="hero-actions">
+<button class="btn" onclick="loadDrafts()">Refresh</button>
+<button class="btn btn-primary" onclick="triggerScan()">Run scan</button>
+</div></div></div>
+<div class="stats" id="stats"></div>
 <div class="container" id="app"><div class="loading">Loading drafts...</div></div>
-
 <script>
-const API = window.location.origin;
-let drafts = [];
-
-async function loadDrafts() {
-  document.getElementById('app').innerHTML = '<div class="loading">Loading...</div>';
-  try {
-    const res = await fetch(API + '/drafts');
-    drafts = await res.json();
-    render();
-  } catch(e) {
-    document.getElementById('app').innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><p>Failed to load: ' + e.message + '</p></div>';
-  }
-}
-
-async function triggerScan() {
-  if(!confirm('Run the daily scan now?')) return;
-  document.getElementById('app').innerHTML = '<div class="loading">Running scan...</div>';
-  try {
-    const res = await fetch(API + '/scan');
-    const data = await res.json();
-    alert('Done: ' + data.picks + ' new picks, ' + data.scanned + ' scanned');
-    loadDrafts();
-  } catch(e) { alert('Scan failed: ' + e.message); }
-}
-
-function render() {
-  const app = document.getElementById('app');
-  app.innerHTML = '';
-  if (drafts.length === 0) {
-    app.innerHTML = '<div class="empty"><div class="empty-ico">📋</div><h3 style="font-size:18px;font-weight:600;margin-bottom:8px">No pending drafts</h3><p>Run a scan to generate picks, or check back after morning cron.</p></div>';
-    return;
-  }
-  drafts.forEach(function(d) {
-    var sid = d.id.replace('draft:','');
-    var div = document.createElement('div');
-    div.className = 'draft ' + d.status;
-    var h = '<div class="draft-header"><div>'
-      + '<span class="tier-label ' + (d.tier||'tier2') + '">' + (d.tier === 'tier1' ? 'Priority' : 'Standard') + '</span>'
-      + '<span class="status-badge ' + d.status + '">' + d.status + '</span>'
-      + '<div class="arch-name"></div>'
-      + '<div class="arch-meta"></div>'
-      + '</div><div class="score">' + (d.score||0) + '</div></div>'
-      + '<div class="links">'
-      + '<a class="find-email-link" target="_blank">🔍 Find email</a> '
-      + '<a class="find-firm-link" target="_blank">🏢 Find firm</a></div>'
-      + '<div class="field"><label>Architect email (required to send)</label>'
-      + '<input class="f-email" placeholder="architect@firm.com"></div>'
-      + '<div class="field"><label>Subject</label>'
-      + '<input class="f-subj"></div>'
-      + '<div class="field"><label>Email body</label>'
-      + '<textarea class="f-body"></textarea></div>'
-      + '<div class="draft-actions">'
-      + '<button class="btn btn-send js-approve">Send via Gmail</button> '
-      + '<button class="btn js-save">Save edits</button> '
-      + '<button class="btn btn-skip js-skip">Skip</button></div>';
-    div.innerHTML = h;
-    // Set text content safely (no XSS from architect names)
-    div.querySelector('.arch-name').textContent = d.architectName || 'Unknown';
-    div.querySelector('.arch-meta').textContent = 'RA #' + (d.architectLicense||'?') + ' · ' + (d.projectAddress||'') + ' · Score: ' + (d.score||0);
-    div.querySelector('.find-email-link').href = 'https://www.google.com/search?q=' + encodeURIComponent((d.architectName||'') + ' architect NYC email');
-    div.querySelector('.find-firm-link').href = 'https://www.google.com/search?q=' + encodeURIComponent((d.architectName||'') + ' architect portfolio NYC');
-    div.querySelector('.f-email').value = d.recipientEmail || '';
-    div.querySelector('.f-subj').value = d.subject || '';
-    div.querySelector('.f-body').value = d.body || '';
-    if (d.status !== 'pending') {
-      div.querySelectorAll('input,textarea').forEach(function(el){el.disabled=true;});
-      div.querySelector('.draft-actions').style.display='none';
-    }
-    div.querySelector('.js-approve').addEventListener('click', function(){ doApprove(sid, div); });
-    div.querySelector('.js-save').addEventListener('click', function(){ doSave(sid, div); });
-    div.querySelector('.js-skip').addEventListener('click', function(){ doSkip(sid); });
-    app.appendChild(div);
-  });
-}
-
-function getFields(div) {
-  return {
-    email: div.querySelector('.f-email').value.trim(),
-    subject: div.querySelector('.f-subj').value.trim(),
-    body: div.querySelector('.f-body').value.trim()
-  };
-}
-
-async function doSave(id, div) {
-  var f = getFields(div);
-  try {
-    await fetch(API+'/drafts/'+id+'/edit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});
-    alert('Saved');
-  } catch(e) { alert('Error: '+e.message); }
-}
-
-async function doApprove(id, div) {
-  var f = getFields(div);
-  if (!f.email || f.email.indexOf('@')<0) { alert('Add architect email first'); return; }
-  await fetch(API+'/drafts/'+id+'/edit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});
-  if (!confirm('Send to '+f.email+' from operations@metroglasspro.com?')) return;
-  try {
-    var res = await fetch(API+'/drafts/'+id+'/approve', {method:'POST'});
-    var data = await res.json();
-    if (data.success) { alert('Sent!'); loadDrafts(); }
-    else { alert(data.error || 'Failed'); }
-  } catch(e) { alert('Error: '+e.message); }
-}
-
-async function doSkip(id) {
-  if (!confirm('Skip this architect?')) return;
-  await fetch(API+'/drafts/'+id+'/skip', {method:'POST'});
-  loadDrafts();
-}
-
+var API=window.location.origin,drafts=[];
+async function loadDrafts(){document.getElementById('app').innerHTML='<div class="loading">Loading...</div>';try{var r=await fetch(API+'/drafts');drafts=await r.json();renderStats();render()}catch(e){document.getElementById('app').innerHTML='<div class="empty"><h3>Could not load</h3><p>'+e.message+'</p></div>'}}
+function renderStats(){var t1=drafts.filter(function(d){return d.tier==='tier1'}).length,t2=drafts.length-t1,avg=drafts.length?Math.round(drafts.reduce(function(s,d){return s+(d.score||0)},0)/drafts.length):0;document.getElementById('stats').innerHTML='<div class="stat-card"><p class="stat-label">Total</p><p class="stat-value">'+drafts.length+'</p></div><div class="stat-card"><p class="stat-label">Priority</p><p class="stat-value" style="color:var(--accent-dark)">'+t1+'</p></div><div class="stat-card"><p class="stat-label">Standard</p><p class="stat-value">'+t2+'</p></div><div class="stat-card"><p class="stat-label">Avg score</p><p class="stat-value">'+avg+'</p></div>'}
+async function triggerScan(){if(!confirm('Run scan now?'))return;document.getElementById('app').innerHTML='<div class="loading">Scanning DOB filings...</div>';try{var r=await fetch(API+'/scan'),d=await r.json();alert(d.picks+' new picks from '+d.scanned+' filings');loadDrafts()}catch(e){alert('Failed: '+e.message)}}
+function render(){var app=document.getElementById('app');app.innerHTML='';if(!drafts.length){app.innerHTML='<div class="empty"><h3>No pending drafts</h3><p>Run a scan or wait for the morning cron at 7am.</p></div>';return}drafts.sort(function(a,b){if(a.tier==='tier1'&&b.tier!=='tier1')return-1;if(b.tier==='tier1'&&a.tier!=='tier1')return 1;return(b.score||0)-(a.score||0)});drafts.forEach(function(d,i){var sid=d.id.replace('draft:',''),div=document.createElement('div');div.className='draft '+d.status;div.style.animationDelay=(i*40)+'ms';div.innerHTML='<div class="draft-top"><div style="flex:1"><div class="badge-row"><span class="badge badge-'+(d.tier||'t2')+'">'+(d.tier==='tier1'?'Priority':'Standard')+'</span><span class="badge badge-'+d.status+'">'+d.status+'</span></div><div class="arch-name"></div><div class="arch-meta"></div></div><div class="score-pill">'+(d.score||0)+'</div></div><div class="links"><a class="lk-e" target="_blank">Find email</a><a class="lk-f" target="_blank">Find firm</a></div><div class="field"><label>Architect email</label><input class="f-email" placeholder="architect@firm.com"></div><div class="field"><label>Subject</label><input class="f-subj"></div><div class="field"><label>Email body</label><textarea class="f-body"></textarea></div><div class="draft-actions"><button class="btn btn-primary js-a">Send via Gmail</button><button class="btn js-s">Save edits</button><button class="btn btn-danger js-k">Skip</button></div>';div.querySelector('.arch-name').textContent=d.architectName||'Unknown';div.querySelector('.arch-meta').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'')+' · Score: '+(d.score||0);div.querySelector('.lk-e').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect NYC email');div.querySelector('.lk-f').href='https://www.google.com/search?q='+encodeURIComponent((d.architectName||'')+' architect portfolio NYC');div.querySelector('.f-email').value=d.recipientEmail||'';div.querySelector('.f-subj').value=d.subject||'';div.querySelector('.f-body').value=d.body||'';if(d.status!=='pending'){div.querySelectorAll('input,textarea').forEach(function(el){el.disabled=true});var a=div.querySelector('.draft-actions');if(a)a.style.display='none'}div.querySelector('.js-a').addEventListener('click',function(){doA(sid,div)});div.querySelector('.js-s').addEventListener('click',function(){doS(sid,div)});div.querySelector('.js-k').addEventListener('click',function(){doK(sid)});app.appendChild(div)})}
+function gF(d){return{email:d.querySelector('.f-email').value.trim(),subject:d.querySelector('.f-subj').value.trim(),body:d.querySelector('.f-body').value.trim()}}
+async function doS(id,div){var f=gF(div);try{await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});alert('Saved')}catch(e){alert(e.message)}}
+async function doA(id,div){var f=gF(div);if(!f.email||f.email.indexOf('@')<0){alert('Add email first');return}await fetch(API+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});if(!confirm('Send to '+f.email+'?'))return;try{var r=await fetch(API+'/drafts/'+id+'/approve',{method:'POST'}),d=await r.json();if(d.success){alert('Sent!');loadDrafts()}else alert(d.error||'Failed')}catch(e){alert(e.message)}}
+async function doK(id){if(!confirm('Skip?'))return;await fetch(API+'/drafts/'+id+'/skip',{method:'POST'});loadDrafts()}
 loadDrafts();
 </script>
 </body></html>`;
