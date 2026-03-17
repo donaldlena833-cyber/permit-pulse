@@ -2,19 +2,21 @@ name = "permit-pulse-scanner"
 main = "permit-scanner.mjs"
 compatibility_date = "2024-01-01"
 
-# Runs daily at 7am ET (12:00 UTC, accounting for EDT)
+# Daily at 7am ET (12:00 UTC during EDT)
 [triggers]
 crons = ["0 12 * * *"]
 
 [vars]
 NOTIFY_EMAIL = "operations@metroglasspro.com"
+GMAIL_SENDER = "operations@metroglasspro.com"
 
-# KV namespace for tracking picked architects (no repeats)
-# Create with: npx wrangler kv namespace create PERMIT_PULSE
+# KV namespace — stores picked architects + email draft queue
+# Create: npx wrangler kv namespace create PERMIT_PULSE
 # Then paste the ID below
 [[kv_namespaces]]
 binding = "PERMIT_PULSE"
 id = "YOUR_KV_NAMESPACE_ID_HERE"
 
-# SECRETS (set via CLI, not in this file):
-# npx wrangler secret put RESEND_API_KEY
+# SECRETS (set via CLI):
+# npx wrangler secret put RESEND_API_KEY          — for the digest notification email
+# npx wrangler secret put GOOGLE_SERVICE_ACCOUNT  — JSON key for Gmail API (domain-wide delegation)

@@ -542,11 +542,25 @@ async function runDailyPipeline(env = {}) {
     console.log(`      Reasons: ${pick.allReasons.join(' · ')}`);
   }
 
-  // Step 6: Draft outreach emails
-  console.log('\n✉️  Step 6: Drafting outreach emails...');
+  // Step 6: Draft outreach emails + save to queue
+  console.log('\n✉️  Step 6: Drafting outreach emails + saving to queue...');
   for (const pick of topPicks) {
     pick.draftEmail = draftOutreachEmail(pick);
     console.log(`   Draft for ${pick.name}: "${pick.draftEmail.subject}"`);
+
+    // Save to draft queue for review/approve in dashboard
+    if (env.PERMIT_PULSE) {
+      const queue = new DraftQueue(env.PERMIT_PULSE);
+      await queue.addDraft({
+        architectName: pick.name,
+        architectLicense: pick.raLicense,
+        recipientEmail: null, // User will add this after Googling the architect
+        subject: pick.draftEmail.subject,
+        body: pick.draftEmail.body,
+        projectAddress: `${pick.triggerProject.house_no} ${pick.triggerProject.street_name}, ${pick.triggerProject.borough}`,
+        score: pick.totalScore,
+      });
+    }
   }
 
   // Step 7: Mark as picked (no repeats)
@@ -588,6 +602,12 @@ async function runDailyPipeline(env = {}) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GMAIL INTEGRATION IMPORTS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+import { DraftQueue, handleGmailRoutes, sendGmail } from './gmail-integration.mjs';
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CLOUDFLARE WORKER EXPORTS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -599,30 +619,234 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    // CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        },
+      });
+    }
+
+    // Gmail / Draft routes
+    const gmailResponse = handleGmailRoutes(request, env);
+    if (gmailResponse) return gmailResponse;
+
+    // Scanner routes
     if (url.pathname === '/scan') {
       const results = await runDailyPipeline(env);
-      return new Response(JSON.stringify(results, null, 2), {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return jsonRes(results);
     }
 
     if (url.pathname === '/picked') {
       const tracker = new PickTracker(env.PERMIT_PULSE || null);
       const all = await tracker.getAllPicked();
-      return new Response(JSON.stringify(all, null, 2), {
-        headers: { 'Content-Type': 'application/json' },
+      return jsonRes(all);
+    }
+
+    // Dashboard HTML (review + approve interface)
+    if (url.pathname === '/' || url.pathname === '/dashboard') {
+      return new Response(getDashboardHTML(), {
+        headers: { 'Content-Type': 'text/html' },
       });
     }
 
-    return new Response(JSON.stringify({
+    return jsonRes({
       name: 'PermitPulse v3 — Architect Relationship Engine',
       endpoints: {
-        '/scan': 'Trigger daily pipeline manually',
-        '/picked': 'View all previously picked architects',
+        '/': 'Review + approve dashboard',
+        '/scan': 'Trigger daily pipeline',
+        '/picked': 'View picked architects',
+        '/drafts': 'List pending email drafts',
+        '/drafts/:id/edit': 'Edit draft (POST: {recipientEmail, subject, body})',
+        '/drafts/:id/approve': 'Approve + send via Gmail (POST)',
+        '/drafts/:id/skip': 'Skip a draft (POST)',
       },
-    }), { headers: { 'Content-Type': 'application/json' } });
+    });
   },
 };
+
+function jsonRes(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// REVIEW + APPROVE DASHBOARD (served at /)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function getDashboardHTML() {
+  return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PermitPulse — Review Outreach</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'DM Sans',system-ui,sans-serif;background:#0C0C0E;color:#E8E6E3;-webkit-font-smoothing:antialiased;min-height:100vh}
+  .hdr{padding:20px 24px;border-bottom:1px solid #2A2A32;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(180deg,rgba(212,105,26,0.04) 0%,transparent 100%)}
+  .hdr h1{font-size:20px;font-weight:700}
+  .hdr p{font-size:12px;color:#8A8A96}
+  .hdr-actions{display:flex;gap:8px}
+  .btn{padding:8px 16px;border-radius:6px;border:1px solid #2A2A32;background:#1E1E24;color:#E8E6E3;font-size:13px;font-family:inherit;cursor:pointer;font-weight:500;transition:all .15s}
+  .btn:hover{border-color:#D4691A;color:#D4691A}
+  .btn-send{background:#D4691A;border-color:#D4691A;color:#fff}
+  .btn-send:hover{filter:brightness(1.15)}
+  .btn-send:disabled{opacity:.4;cursor:not-allowed}
+  .btn-skip{border-color:#35353F;color:#8A8A96}
+  .btn-skip:hover{border-color:#E84545;color:#E84545}
+  .container{padding:20px 24px;max-width:800px}
+  .draft{background:#151518;border:1px solid #2A2A32;border-radius:10px;padding:20px;margin-bottom:16px;border-left:3px solid #D4691A}
+  .draft.sent{border-left-color:#3A7D44;opacity:.6}
+  .draft.skipped{border-left-color:#5C5C68;opacity:.4}
+  .draft-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+  .arch-name{font-size:18px;font-weight:700}
+  .arch-meta{font-size:12px;color:#8A8A96;margin-top:2px}
+  .score{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#D4691A;background:rgba(212,105,26,0.1);padding:4px 10px;border-radius:6px}
+  .project{font-size:14px;margin-bottom:12px}
+  .project strong{color:#D4691A}
+  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#5C5C68;font-weight:500;margin-bottom:4px}
+  input,textarea{width:100%;background:#1E1E24;border:1px solid #2A2A32;color:#E8E6E3;padding:10px 12px;border-radius:6px;font-family:inherit;font-size:13px;resize:vertical}
+  input:focus,textarea:focus{outline:none;border-color:#D4691A}
+  textarea{min-height:200px;line-height:1.6}
+  .field{margin-bottom:12px}
+  .draft-actions{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid #2A2A32}
+  .status-badge{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;text-transform:uppercase}
+  .status-badge.sent{background:rgba(58,125,68,0.2);color:#6abf7b}
+  .status-badge.skipped{background:rgba(138,138,150,0.1);color:#5C5C68}
+  .status-badge.pending{background:rgba(212,105,26,0.1);color:#D4691A}
+  .empty{text-align:center;padding:60px;color:#5C5C68}
+  .empty-ico{font-size:48px;margin-bottom:16px}
+  .loading{text-align:center;padding:60px;color:#8A8A96}
+  .links{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .links a{font-size:12px;color:#D4691A;text-decoration:none;background:#1E1E24;padding:4px 10px;border-radius:4px;border:1px solid #2A2A32}
+  .links a:hover{border-color:#D4691A}
+  @media(max-width:600px){.container{padding:12px}.draft{padding:14px}.draft-header{flex-direction:column;gap:8px}.draft-actions{flex-direction:column}}
+</style>
+</head><body>
+<div class="hdr">
+  <div><h1>⚡ PermitPulse — Review Outreach</h1><p>Edit emails, add architect's email, approve to send from Gmail</p></div>
+  <div class="hdr-actions"><button class="btn" onclick="loadDrafts()">Refresh</button><button class="btn" onclick="triggerScan()">Run Scan</button></div>
+</div>
+<div class="container" id="app"><div class="loading">Loading drafts...</div></div>
+
+<script>
+const API = window.location.origin;
+let drafts = [];
+
+async function loadDrafts() {
+  document.getElementById('app').innerHTML = '<div class="loading">Loading...</div>';
+  try {
+    const res = await fetch(API + '/drafts');
+    drafts = await res.json();
+    render();
+  } catch(e) {
+    document.getElementById('app').innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><p>Failed to load drafts</p></div>';
+  }
+}
+
+async function triggerScan() {
+  if(!confirm('Run the daily scan now? This will fetch new filings and create draft emails.')) return;
+  document.getElementById('app').innerHTML = '<div class="loading">⏳ Running scan...</div>';
+  try {
+    const res = await fetch(API + '/scan');
+    const data = await res.json();
+    alert('Scan complete: ' + data.picks + ' new picks');
+    loadDrafts();
+  } catch(e) { alert('Scan failed: ' + e.message); }
+}
+
+function render() {
+  const app = document.getElementById('app');
+  if (drafts.length === 0) {
+    app.innerHTML = '<div class="empty"><div class="empty-ico">📋</div><h3 style="font-size:18px;font-weight:600;margin-bottom:8px">No pending drafts</h3><p>Run a scan to generate new architect picks, or check back after the morning cron.</p></div>';
+    return;
+  }
+  app.innerHTML = drafts.map((d, i) => draftCard(d, i)).join('');
+}
+
+function draftCard(d, i) {
+  const id = d.id.replace('draft:', '');
+  const statusClass = d.status;
+  const disabled = d.status !== 'pending';
+  return '<div class="draft ' + statusClass + '" id="card-' + id + '">'
+    + '<div class="draft-header"><div>'
+    + '<span class="status-badge ' + d.status + '">' + d.status + '</span> '
+    + '<div class="arch-name">' + (d.architectName || 'Unknown') + '</div>'
+    + '<div class="arch-meta">RA #' + (d.architectLicense || '?') + ' · ' + (d.projectAddress || '') + ' · Score: ' + (d.score || 0) + '</div>'
+    + '</div><div class="score">' + (d.score || 0) + '</div></div>'
+    + '<div class="links">'
+    + '<a href="https://www.google.com/search?q=' + encodeURIComponent((d.architectName || '') + ' architect NYC email') + '" target="_blank">🔍 Find email</a>'
+    + '<a href="https://www.google.com/search?q=' + encodeURIComponent((d.architectName || '') + ' architect portfolio') + '" target="_blank">🏢 Find firm</a>'
+    + '</div>'
+    + '<div class="field"><label>Architect email (required to send)</label>'
+    + '<input id="email-' + id + '" value="' + (d.recipientEmail || '') + '" placeholder="architect@firm.com" ' + (disabled ? 'disabled' : '') + '></div>'
+    + '<div class="field"><label>Subject</label>'
+    + '<input id="subj-' + id + '" value="' + escHtml(d.subject || '') + '" ' + (disabled ? 'disabled' : '') + '></div>'
+    + '<div class="field"><label>Email body (edit to your voice)</label>'
+    + '<textarea id="body-' + id + '" ' + (disabled ? 'disabled' : '') + '>' + escHtml(d.body || '') + '</textarea></div>'
+    + (disabled ? '' : '<div class="draft-actions">'
+    + '<button class="btn btn-send" onclick="approveDraft(\'' + id + '\')">✉️ Save & Send via Gmail</button>'
+    + '<button class="btn" onclick="saveDraft(\'' + id + '\')">💾 Save edits</button>'
+    + '<button class="btn btn-skip" onclick="skipDraft(\'' + id + '\')">Skip</button>'
+    + '</div>')
+    + '</div>';
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function saveDraft(id) {
+  const email = document.getElementById('email-' + id).value.trim();
+  const subject = document.getElementById('subj-' + id).value.trim();
+  const body = document.getElementById('body-' + id).value.trim();
+  try {
+    await fetch(API + '/drafts/' + id + '/edit', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ recipientEmail: email, subject, body })
+    });
+    alert('Draft saved');
+    loadDrafts();
+  } catch(e) { alert('Save failed: ' + e.message); }
+}
+
+async function approveDraft(id) {
+  const email = document.getElementById('email-' + id).value.trim();
+  if (!email || !email.includes('@')) { alert('Add the architect email first'); return; }
+  // Save edits first
+  const subject = document.getElementById('subj-' + id).value.trim();
+  const body = document.getElementById('body-' + id).value.trim();
+  await fetch(API + '/drafts/' + id + '/edit', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ recipientEmail: email, subject, body })
+  });
+  // Then approve (send)
+  if (!confirm('Send this email to ' + email + ' from operations@metroglasspro.com?')) return;
+  try {
+    const res = await fetch(API + '/drafts/' + id + '/approve', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) { alert('✅ Sent! Message ID: ' + data.messageId); }
+    else { alert('❌ ' + (data.error || 'Send failed')); }
+    loadDrafts();
+  } catch(e) { alert('Send failed: ' + e.message); }
+}
+
+async function skipDraft(id) {
+  if (!confirm('Skip this architect?')) return;
+  await fetch(API + '/drafts/' + id + '/skip', { method: 'POST' });
+  loadDrafts();
+}
+
+loadDrafts();
+</script>
+</body></html>`;
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CLI MODE
