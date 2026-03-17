@@ -893,98 +893,102 @@ async function loadDrafts() {
     drafts = await res.json();
     render();
   } catch(e) {
-    document.getElementById('app').innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><p>Failed to load drafts</p></div>';
+    document.getElementById('app').innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><p>Failed to load: ' + e.message + '</p></div>';
   }
 }
 
 async function triggerScan() {
-  if(!confirm('Run the daily scan now? This will fetch new filings and create draft emails.')) return;
-  document.getElementById('app').innerHTML = '<div class="loading">⏳ Running scan...</div>';
+  if(!confirm('Run the daily scan now?')) return;
+  document.getElementById('app').innerHTML = '<div class="loading">Running scan...</div>';
   try {
     const res = await fetch(API + '/scan');
     const data = await res.json();
-    alert('Scan complete: ' + data.picks + ' new picks');
+    alert('Done: ' + data.picks + ' new picks, ' + data.scanned + ' scanned');
     loadDrafts();
   } catch(e) { alert('Scan failed: ' + e.message); }
 }
 
 function render() {
   const app = document.getElementById('app');
+  app.innerHTML = '';
   if (drafts.length === 0) {
-    app.innerHTML = '<div class="empty"><div class="empty-ico">📋</div><h3 style="font-size:18px;font-weight:600;margin-bottom:8px">No pending drafts</h3><p>Run a scan to generate new architect picks, or check back after the morning cron.</p></div>';
+    app.innerHTML = '<div class="empty"><div class="empty-ico">📋</div><h3 style="font-size:18px;font-weight:600;margin-bottom:8px">No pending drafts</h3><p>Run a scan to generate picks, or check back after morning cron.</p></div>';
     return;
   }
-  app.innerHTML = drafts.map((d, i) => draftCard(d, i)).join('');
-}
-
-function draftCard(d, i) {
-  const id = d.id.replace('draft:', '');
-  const statusClass = d.status;
-  const disabled = d.status !== 'pending';
-  return '<div class="draft ' + statusClass + '" id="card-' + id + '">'
-    + '<div class="draft-header"><div>'
-    + '<span class="status-badge ' + d.status + '">' + d.status + '</span> '
-    + '<div class="arch-name">' + (d.architectName || 'Unknown') + '</div>'
-    + '<div class="arch-meta">RA #' + (d.architectLicense || '?') + ' · ' + (d.projectAddress || '') + ' · Score: ' + (d.score || 0) + '</div>'
-    + '</div><div class="score">' + (d.score || 0) + '</div></div>'
-    + '<div class="links">'
-    + '<a href="https://www.google.com/search?q=' + encodeURIComponent((d.architectName || '') + ' architect NYC email') + '" target="_blank">🔍 Find email</a>'
-    + '<a href="https://www.google.com/search?q=' + encodeURIComponent((d.architectName || '') + ' architect portfolio') + '" target="_blank">🏢 Find firm</a>'
-    + '</div>'
-    + '<div class="field"><label>Architect email (required to send)</label>'
-    + '<input id="email-' + id + '" value="' + (d.recipientEmail || '') + '" placeholder="architect@firm.com" ' + (disabled ? 'disabled' : '') + '></div>'
-    + '<div class="field"><label>Subject</label>'
-    + '<input id="subj-' + id + '" value="' + escHtml(d.subject || '') + '" ' + (disabled ? 'disabled' : '') + '></div>'
-    + '<div class="field"><label>Email body (edit to your voice)</label>'
-    + '<textarea id="body-' + id + '" ' + (disabled ? 'disabled' : '') + '>' + escHtml(d.body || '') + '</textarea></div>'
-    + (disabled ? '' : '<div class="draft-actions">'
-    + '<button class="btn btn-send" onclick="approveDraft(\'' + id + '\')">✉️ Save & Send via Gmail</button>'
-    + '<button class="btn" onclick="saveDraft(\'' + id + '\')">💾 Save edits</button>'
-    + '<button class="btn btn-skip" onclick="skipDraft(\'' + id + '\')">Skip</button>'
-    + '</div>')
-    + '</div>';
-}
-
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-async function saveDraft(id) {
-  const email = document.getElementById('email-' + id).value.trim();
-  const subject = document.getElementById('subj-' + id).value.trim();
-  const body = document.getElementById('body-' + id).value.trim();
-  try {
-    await fetch(API + '/drafts/' + id + '/edit', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ recipientEmail: email, subject, body })
-    });
-    alert('Draft saved');
-    loadDrafts();
-  } catch(e) { alert('Save failed: ' + e.message); }
-}
-
-async function approveDraft(id) {
-  const email = document.getElementById('email-' + id).value.trim();
-  if (!email || !email.includes('@')) { alert('Add the architect email first'); return; }
-  // Save edits first
-  const subject = document.getElementById('subj-' + id).value.trim();
-  const body = document.getElementById('body-' + id).value.trim();
-  await fetch(API + '/drafts/' + id + '/edit', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ recipientEmail: email, subject, body })
+  drafts.forEach(function(d) {
+    var sid = d.id.replace('draft:','');
+    var div = document.createElement('div');
+    div.className = 'draft ' + d.status;
+    var h = '<div class="draft-header"><div>'
+      + '<span class="status-badge ' + d.status + '">' + d.status + '</span>'
+      + '<div class="arch-name"></div>'
+      + '<div class="arch-meta"></div>'
+      + '</div><div class="score">' + (d.score||0) + '</div></div>'
+      + '<div class="links">'
+      + '<a class="find-email-link" target="_blank">🔍 Find email</a> '
+      + '<a class="find-firm-link" target="_blank">🏢 Find firm</a></div>'
+      + '<div class="field"><label>Architect email (required to send)</label>'
+      + '<input class="f-email" placeholder="architect@firm.com"></div>'
+      + '<div class="field"><label>Subject</label>'
+      + '<input class="f-subj"></div>'
+      + '<div class="field"><label>Email body</label>'
+      + '<textarea class="f-body"></textarea></div>'
+      + '<div class="draft-actions">'
+      + '<button class="btn btn-send js-approve">Send via Gmail</button> '
+      + '<button class="btn js-save">Save edits</button> '
+      + '<button class="btn btn-skip js-skip">Skip</button></div>';
+    div.innerHTML = h;
+    // Set text content safely (no XSS from architect names)
+    div.querySelector('.arch-name').textContent = d.architectName || 'Unknown';
+    div.querySelector('.arch-meta').textContent = 'RA #' + (d.architectLicense||'?') + ' · ' + (d.projectAddress||'') + ' · Score: ' + (d.score||0);
+    div.querySelector('.find-email-link').href = 'https://www.google.com/search?q=' + encodeURIComponent((d.architectName||'') + ' architect NYC email');
+    div.querySelector('.find-firm-link').href = 'https://www.google.com/search?q=' + encodeURIComponent((d.architectName||'') + ' architect portfolio NYC');
+    div.querySelector('.f-email').value = d.recipientEmail || '';
+    div.querySelector('.f-subj').value = d.subject || '';
+    div.querySelector('.f-body').value = d.body || '';
+    if (d.status !== 'pending') {
+      div.querySelectorAll('input,textarea').forEach(function(el){el.disabled=true;});
+      div.querySelector('.draft-actions').style.display='none';
+    }
+    div.querySelector('.js-approve').addEventListener('click', function(){ doApprove(sid, div); });
+    div.querySelector('.js-save').addEventListener('click', function(){ doSave(sid, div); });
+    div.querySelector('.js-skip').addEventListener('click', function(){ doSkip(sid); });
+    app.appendChild(div);
   });
-  // Then approve (send)
-  if (!confirm('Send this email to ' + email + ' from operations@metroglasspro.com?')) return;
-  try {
-    const res = await fetch(API + '/drafts/' + id + '/approve', { method: 'POST' });
-    const data = await res.json();
-    if (data.success) { alert('✅ Sent! Message ID: ' + data.messageId); }
-    else { alert('❌ ' + (data.error || 'Send failed')); }
-    loadDrafts();
-  } catch(e) { alert('Send failed: ' + e.message); }
 }
 
-async function skipDraft(id) {
+function getFields(div) {
+  return {
+    email: div.querySelector('.f-email').value.trim(),
+    subject: div.querySelector('.f-subj').value.trim(),
+    body: div.querySelector('.f-body').value.trim()
+  };
+}
+
+async function doSave(id, div) {
+  var f = getFields(div);
+  try {
+    await fetch(API+'/drafts/'+id+'/edit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});
+    alert('Saved');
+  } catch(e) { alert('Error: '+e.message); }
+}
+
+async function doApprove(id, div) {
+  var f = getFields(div);
+  if (!f.email || f.email.indexOf('@')<0) { alert('Add architect email first'); return; }
+  await fetch(API+'/drafts/'+id+'/edit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});
+  if (!confirm('Send to '+f.email+' from operations@metroglasspro.com?')) return;
+  try {
+    var res = await fetch(API+'/drafts/'+id+'/approve', {method:'POST'});
+    var data = await res.json();
+    if (data.success) { alert('Sent!'); loadDrafts(); }
+    else { alert(data.error || 'Failed'); }
+  } catch(e) { alert('Error: '+e.message); }
+}
+
+async function doSkip(id) {
   if (!confirm('Skip this architect?')) return;
-  await fetch(API + '/drafts/' + id + '/skip', { method: 'POST' });
+  await fetch(API+'/drafts/'+id+'/skip', {method:'POST'});
   loadDrafts();
 }
 
