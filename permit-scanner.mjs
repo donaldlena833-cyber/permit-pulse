@@ -150,52 +150,73 @@ async function fetchPermitForBuilding(bin, borough) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function enrichWithApollo(architect, apiKey) {
-  // Try to figure out the firm domain from the filing representative
-  // If filing_representative_business_name matches architect name pattern, it might be their firm
-  const filingRep = (architect.filings[0]?.filing_representative_business_name || '').trim();
+  // Try multiple firm name sources from DOB filing data
+  const filing = architect.filings[0] || {};
+  const filingRep = (filing.filing_representative_business_name || '').trim();
+  const applicantBiz = (filing.applicant_business_name || '').trim();
   const archLastName = (architect.lastName || '').toLowerCase();
 
-  // Heuristic: if the filing rep business contains the architect's last name, it's likely their firm
-  let firmHint = null;
-  if (filingRep && archLastName.length > 2 && filingRep.toLowerCase().includes(archLastName)) {
+  // Use applicant_business_name first (this is usually the architect's firm)
+  // Fall back to filing_representative_business_name if it contains architect's last name
+  let firmHint = applicantBiz || null;
+  if (!firmHint && filingRep && archLastName.length > 2 && filingRep.toLowerCase().includes(archLastName)) {
     firmHint = filingRep;
   }
 
-  // Apollo People Match API
-  const payload = {
+  // Strategy 1: People Match (exact match, best data)
+  const matchPayload = {
     first_name: architect.firstName,
     last_name: architect.lastName,
     organization_name: firmHint || undefined,
     title: 'architect',
-    // Help Apollo find the right person by giving location context
     person_locations: ['New York, New York, United States'],
-    reveal_personal_emails: false,
+    reveal_personal_emails: true,
     reveal_phone_number: true,
   };
+  Object.keys(matchPayload).forEach(k => matchPayload[k] === undefined && delete matchPayload[k]);
 
-  // Clean undefined values
-  Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+  try {
+    const res = await fetch('https://api.apollo.io/api/v1/people/match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': apiKey },
+      body: JSON.stringify(matchPayload),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.person) return parseApolloResult(data.person);
+    }
+  } catch (e) { /* fall through to search */ }
 
-  const res = await fetch('https://api.apollo.io/api/v1/people/match', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache',
-      'x-api-key': apiKey,
-    },
-    body: JSON.stringify(payload),
-  });
+  // Strategy 2: People Search (fuzzy match, broader results)
+  try {
+    const searchPayload = {
+      q_keywords: `${architect.firstName} ${architect.lastName} architect`,
+      person_locations: ['New York, New York, United States'],
+      per_page: 1,
+    };
+    if (firmHint) searchPayload.q_organization_name = firmHint;
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Apollo API ${res.status}: ${errText.slice(0, 200)}`);
-  }
+    const res = await fetch('https://api.apollo.io/api/v1/mixed_people/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': apiKey },
+      body: JSON.stringify(searchPayload),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const person = data.people?.[0];
+      if (person) {
+        // Verify it's actually an architect (not some random match)
+        const title = (person.title || '').toLowerCase();
+        const isArchitect = title.includes('architect') || title.includes('principal') || title.includes('design') || title.includes('partner');
+        if (isArchitect || !person.title) return parseApolloResult(person);
+      }
+    }
+  } catch (e) { /* no match */ }
 
-  const data = await res.json();
-  const person = data.person;
+  return null;
+}
 
-  if (!person) return null;
-
+function parseApolloResult(person) {
   return {
     apolloId: person.id || null,
     email: person.email || null,
@@ -1648,6 +1669,22 @@ export default {
       const tracker = new PickTracker(env.PERMIT_PULSE || null);
       const all = await tracker.getAllPicked();
       return jsonRes(all);
+    }
+
+    // Apollo test — test enrichment on a known architect
+    if (url.pathname === '/test-apollo' && request.method === 'GET') {
+      if (!env.APOLLO_API_KEY) return jsonRes({ error: 'APOLLO_API_KEY not set' }, 400);
+      const testArchitect = {
+        firstName: 'Peter', lastName: 'Pennoyer', name: 'Peter Pennoyer',
+        raLicense: '018386',
+        filings: [{ filing_representative_business_name: '', applicant_business_name: 'Peter Pennoyer Architects' }],
+      };
+      try {
+        const result = await enrichWithApollo(testArchitect, env.APOLLO_API_KEY);
+        return jsonRes({ success: true, testName: 'Peter Pennoyer', result, apiKeySet: true });
+      } catch (err) {
+        return jsonRes({ error: err.message, apiKeySet: true });
+      }
     }
 
     // Gmail test — sends a test email to yourself to verify the service account works
