@@ -34,9 +34,9 @@ const FILINGS_API = 'https://data.cityofnewyork.us/resource/w9ak-ipjd.json';
 const PERMITS_API = 'https://data.cityofnewyork.us/resource/rbx6-tga4.json';
 
 // Tiered daily picks
-const TIER1_PICKS = 10;  // Best matches — you review + edit each one
-const TIER2_PICKS = 20;  // Good matches — you batch review, light edits
-const TOTAL_MAX = 30;    // Max per scan
+const TIER1_PICKS = 15;  // Best matches — you review + personalize
+const TIER2_PICKS = 20;  // Good matches — batch review, light edits
+const TOTAL_MAX = 35;    // Max per scan (30+ per Donald's preference)
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // METROGLASSPRO ARCHITECT SCORING PROFILE
@@ -412,54 +412,79 @@ function draftOutreachEmail(architect) {
   const stories = parseInt(project.existing_stories) || 0;
   const units = parseInt(project.existing_dwelling_units) || 0;
 
-  // Detect project type for tailored messaging
+  // Detect project type
   const isPenthouse = floor.includes('penthouse') || floor.includes('ph');
   const isHighRiseCoop = stories >= 10 && units > 0;
   const isTownhouse = stories <= 4 && stories >= 2 && units <= 4;
   const isBathScope = floor.includes('bath') || floor.includes('shower') || floor.includes('master');
   const isMega = cost >= 500000;
-  const firmName = architect.enrichment?.organization;
 
-  // Build the core value proposition based on what THEY need, not what we do
-  let hook = '';
-  let valueAdd = '';
-  let subject = '';
-
+  // Project-type context for the render offer
+  let projectContext = 'your project at ' + addr;
+  let renderOffer = 'shower enclosure configurations and finish options';
   if (isPenthouse) {
-    subject = `Penthouse glass work in ${neighborhood}`;
-    hook = `I work with architects on penthouse renovations in ${neighborhood} and wanted to connect in case custom glass is part of the scope at ${addr}.`;
-    valueAdd = `For penthouses we typically handle oversized frameless shower enclosures, custom mirror walls, and glass partitions — all field-measured to account for the tolerances you get in high-rise construction.`;
+    projectContext = 'the penthouse renovation at ' + addr;
+    renderOffer = 'oversized shower enclosures and custom mirror walls in different finish options';
   } else if (isHighRiseCoop) {
-    subject = `Glass sub for your ${neighborhood} co-op project`;
-    hook = `We specialize in co-op and condo renovation glass work in ${neighborhood}, and I wanted to introduce MetroGlass Pro for your project at ${addr}.`;
-    valueAdd = `We handle building management coordination, COI requirements, and freight elevator scheduling — the logistical side that saves you headaches on co-op jobs.`;
+    projectContext = 'the co-op renovation at ' + addr;
+    renderOffer = 'glass configurations with different hardware finishes so your client can visualize before committing';
   } else if (isTownhouse) {
-    subject = `Custom glass for ${addr}`;
-    hook = `I noticed your renovation at ${addr} and thought I'd reach out. We do a lot of townhouse glass work in ${neighborhood} — frameless showers, custom mirrors, glass partitions.`;
-    valueAdd = `Townhouse jobs give us more room for custom design work. Happy to share photos of recent installations with similar scope.`;
+    projectContext = 'your townhouse project at ' + addr;
+    renderOffer = 'shower enclosures, partitions, or statement mirrors in different finish options';
   } else if (isBathScope) {
-    subject = `Frameless shower enclosures — ${neighborhood}`;
-    hook = `We handle custom frameless shower enclosures for residential renovations in ${neighborhood}, and I wanted to introduce MetroGlass Pro for your project at ${addr}.`;
-    valueAdd = `We work directly with the architect on hardware finishes, glass thickness, and configurations — and we field-measure after tile to get it right the first time.`;
+    projectContext = 'the bathroom renovation at ' + addr;
+    renderOffer = 'frameless shower configurations — different door styles, glass types, and hardware finishes';
   } else if (isMega) {
-    subject = `Glass + mirrors for your ${neighborhood} project`;
-    hook = `I wanted to connect about your renovation at ${addr}. We work with architects on high-end residential glass installations across ${neighborhood}.`;
-    valueAdd = `For larger-scope projects we can handle frameless showers, mirror walls, glass partitions, and wine room enclosures — all custom to spec.`;
-  } else {
-    subject = `${firstName} — MetroGlass Pro intro`;
-    hook = `I'm Donald with MetroGlass Pro. We do custom frameless glass work for residential renovations in ${neighborhood}, and I wanted to connect about your project at ${addr}.`;
-    valueAdd = `We specialize in shower enclosures, mirrors, and glass partitions — and we work directly with architects to match hardware and specifications to the design intent.`;
+    projectContext = 'the renovation at ' + addr;
+    renderOffer = 'glass partitions, shower enclosures, and mirror walls with finish options your client can review';
   }
+
+  const subject = `Free glass visualization renders — ${addr}`;
 
   const body = `Hi ${firstName},
 
-${hook}
+I'm Donald with MetroGlass Pro. If glass or mirrors are part of the scope on ${projectContext}, we offer something most glass companies don't — free 3D visualization renders.
 
-${valueAdd}
+Send us the floor plans and we'll create renders showing ${renderOffer}. It helps your client decide faster and makes the approval process smoother.
 
-Happy to send over photos of relevant work or a quick ballpark if it's useful. Our recent projects: metroglasspro.com
+A few other things we do differently:
+- 5-7 business day install from measurement (most of our competitors are 2+ weeks)
+- Full 1-year warranty on materials and workmanship
+- We coordinate directly with building management on COIs and access
+
+Our recent work: metroglasspro.com
+
+Happy to chat if it's useful.
 
 Best,
+Donald Lena
+MetroGlass Pro
+(332) 999-3846
+operations@metroglasspro.com`;
+
+  // LinkedIn connect message (short, under 300 chars)
+  const linkedin = `Hi ${firstName} — I'm Donald with MetroGlass Pro, we do custom glass work for residential renovations in NYC. If glass is part of the scope on your ${neighborhood} project, we offer free 3D renders to help your client visualize. Happy to connect.`;
+
+  // Phone script (for if Apollo finds a number)
+  const phone = `Hi ${firstName}, this is Donald from MetroGlass Pro. I'm reaching out because I saw you have a project at ${addr} — we do custom frameless glass work for residential renovations and I wanted to see if glass or mirrors are part of the scope. We offer free 3D visualization renders if you send us the floor plans. Can I send you some info?`;
+
+  return { subject, body, linkedin, phone };
+}
+
+// Generate GC-specific outreach (price-focused, thinner margins)
+function draftGCOutreachEmail(gcName, gcFirstName, project) {
+  const addr = `${project.house_no} ${titleCase(cleanStreetName(project.street_name).toLowerCase())}`;
+  const neighborhood = titleCase((project.nta || project.borough || '').toLowerCase());
+
+  const subject = `Glass sub for ${addr} — competitive pricing`;
+  const body = `Hi ${gcFirstName},
+
+I'm Donald with MetroGlass Pro. We sub glass work for residential renovations in NYC — frameless shower doors, mirrors, glass partitions.
+
+If you need a glass sub for ${addr}, happy to provide a competitive bid. We do 5-7 business day turnaround from measurement, handle our own COIs, and warranty everything for a year.
+
+We keep pricing straightforward and work well with GC schedules. Recent work: metroglasspro.com
+
 Donald Lena
 MetroGlass Pro
 (332) 999-3846
@@ -792,6 +817,8 @@ async function runDailyPipeline(env = {}) {
         recipientEmail: e.email || null,
         subject: pick.draftEmail.subject,
         body: pick.draftEmail.body,
+        linkedinMessage: pick.draftEmail.linkedin || null,
+        phoneScript: pick.draftEmail.phone || null,
         projectAddress: `${pick.triggerProject.house_no} ${cleanStreetName(pick.triggerProject.street_name)}, ${pick.triggerProject.borough}`,
         projectCost: parseFloat(pick.triggerProject.initial_cost) || 0,
         projectStories: parseInt(pick.triggerProject.existing_stories) || 0,
@@ -1848,7 +1875,11 @@ function mD(a,d,i){
   var reasonsHtml=reasons?'<div style="margin:4px 0">'+reasons+'</div>':'';
   // Email body is collapsible — show first 2 lines by default
   var bodyId='body-'+sid;
-  v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+tb+fb+'</div><div class="nm"></div><div class="mt"></div>'+projLine+reasonsHtml+'</div><div class="pl">'+(d.score||0)+'</div></div>'+(en?'<div class="en">'+en+'</div>':'')+'<div class="lk">'+(ny?'<a href="'+ny+'" target="_blank">NYSED</a>':'')+(mapsUrl?'<a href="'+mapsUrl+'" target="_blank">Maps</a>':'')+'<a class="le" target="_blank">Email</a><a class="ll" target="_blank">LinkedIn</a><a class="lf" target="_blank">Firm</a></div><div class="fd"><label>Email</label><input class="fe" placeholder="architect@firm.com"></div><div class="fd"><label>Subject</label><input class="fs2"></div><div class="fd"><label>Body <span class="tog" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[expand]</span></label><textarea class="fb" style="min-height:48px;max-height:48px;overflow:hidden"></textarea></div><div class="ac"><button class="btn bp ja">Send</button><button class="btn jv">Save</button><button class="btn bd jk">Skip</button></div>';
+  // Multi-channel sections (LinkedIn + phone)
+  var channels='';
+  if(d.linkedinMessage)channels+='<div class="fd" style="margin-top:4px"><label>LinkedIn message <span style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0" onclick="navigator.clipboard.writeText(this.parentElement.nextElementSibling.value);toast(\'Copied\',\'ok\')">[copy]</span></label><textarea class="lm" style="min-height:36px;max-height:36px;overflow:hidden;font-size:11px">'+X(d.linkedinMessage)+'</textarea></div>';
+  if(d.phoneScript)channels+='<div class="fd"><label>Phone script <span style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0" onclick="navigator.clipboard.writeText(this.parentElement.nextElementSibling.value);toast(\'Copied\',\'ok\')">[copy]</span></label><textarea class="ps2" style="min-height:36px;max-height:36px;overflow:hidden;font-size:11px">'+X(d.phoneScript)+'</textarea></div>';
+  v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+tb+fb+'</div><div class="nm"></div><div class="mt"></div>'+projLine+reasonsHtml+'</div><div class="pl">'+(d.score||0)+'</div></div>'+(en?'<div class="en">'+en+'</div>':'')+'<div class="lk">'+(ny?'<a href="'+ny+'" target="_blank">NYSED</a>':'')+(mapsUrl?'<a href="'+mapsUrl+'" target="_blank">Maps</a>':'')+'<a class="le" target="_blank">Email</a><a class="ll" target="_blank">LinkedIn</a><a class="lf" target="_blank">Firm</a></div><div class="fd"><label>Email</label><input class="fe" placeholder="architect@firm.com"></div><div class="fd"><label>Subject</label><input class="fs2"></div><div class="fd"><label>Body <span class="tog" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[expand]</span></label><textarea class="fb" style="min-height:48px;max-height:48px;overflow:hidden"></textarea></div>'+channels+'<div class="ac"><button class="btn bp ja">Send email</button><button class="btn jv">Save</button><button class="btn bd jk">Skip</button></div>';
   v.querySelector('.nm').textContent=d.architectName||'Unknown';
   v.querySelector('.mt').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'');
   var n=d.architectName||'';
@@ -1913,7 +1944,13 @@ function gF(d){return{email:d.querySelector('.fe').value.trim(),subject:d.queryS
 async function doV(id,v){var f=gF(v);try{await fetch(A+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});toast('Saved','ok')}catch(e){toast(e.message,'err')}}
 async function doA(id,v){var f=gF(v);if(!f.email||!f.email.includes('@')){toast('Add email first','err');return}await fetch(A+'/drafts/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipientEmail:f.email,subject:f.subject,body:f.body})});try{var r=await(await fetch(A+'/drafts/'+id+'/approve',{method:'POST'})).json();if(r.success){toast('Sent!','ok');v.style.opacity='.2';setTimeout(ld,600)}else toast(r.error||'Failed','err')}catch(e){toast(e.message,'err')}}
 async function doK(id){try{await fetch(A+'/drafts/'+id+'/skip',{method:'POST'});toast('Skipped','');ld()}catch(e){toast(e.message,'err')}}
-async function doSt(id,s,dv,n){try{var b={pipelineStatus:s};if(dv)b.dealValue=dv;if(n)b.notes=n;await fetch(A+'/drafts/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});toast('→ '+s.replace(/_/g,' '),'ok');ld()}catch(e){toast(e.message,'err')}}
+async function doSt(id,s,dv,n,or,qs){try{var b={pipelineStatus:s};if(dv)b.dealValue=dv;if(n)b.notes=n;if(or)b.outcomeReason=or;if(qs)b.quoteScope=qs;await fetch(A+'/drafts/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});toast('→ '+s.replace(/_/g,' '),'ok');ld()}catch(e){toast(e.message,'err')}}
+
+// Pre-drafted reply template for "already have a glass sub"
+function getCompetitiveBidReply(name){
+  var fn=(name||'').split(' ')[0];
+  return'Hi '+fn+',\\n\\nTotally understand. If it\\'s ever useful to have a second option or competitive bid on a future project, we\\'d be happy to provide one. We offer free 3D visualization renders to help clients decide on glass configurations — might be a good complement to what you already have.\\n\\nEither way, keeping your info on file. Good luck with the project.\\n\\nBest,\\nDonald';
+}
 async function doBatch(){var n=D.filter(function(d){return d.status==='pending'&&d.recipientEmail&&d.recipientEmail.includes('@')}).length;if(!confirm('Send '+n+' emails?'))return;toast('Sending...','');try{var r=await(await fetch(A+'/batch-send',{method:'POST'})).json();toast(r.sent+' sent'+(r.failed?' ('+r.failed+' failed)':''),'ok');ld()}catch(e){toast(e.message,'err')}}
 async function doScan(){document.getElementById('app').innerHTML='<div class="ld">Scanning...</div>';try{var r=await(await fetch(A+'/scan')).json();toast(r.picks+' picks from '+r.scanned+' filings','ok');ld()}catch(e){toast('Failed','err')}}
 async function doReplies(){toast('Checking...','');try{var r=await(await fetch(A+'/check-replies',{method:'POST'})).json();toast(r.replies+' replies ('+r.checked+' checked)','ok');if(r.replies>0)ld()}catch(e){toast(e.message,'err')}}
