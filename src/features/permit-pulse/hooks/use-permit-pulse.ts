@@ -1,0 +1,513 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { toast } from "sonner"
+
+import { DEFAULT_FILTERS, METROGLASSPRO_PROFILE } from "@/features/permit-pulse/data/profile"
+import { loadStore, saveStore } from "@/features/permit-pulse/lib/storage"
+import {
+  buildLeadFromPermit,
+  createActivity,
+  generateDraftFromLead,
+  refreshDerivedLead,
+} from "@/features/permit-pulse/lib/scoring"
+import {
+  countForRule,
+  ENRICHMENT_QUEUE_PRESETS,
+  getDashboardStats,
+  getFilteredLeads,
+  getQueueLeads,
+  getRecentActivities,
+  isOutreachReady,
+  OUTREACH_QUEUE_PRESETS,
+  SYSTEM_SAVED_VIEWS,
+  sortLeads,
+} from "@/features/permit-pulse/lib/views"
+import type {
+  AppTheme,
+  EnrichmentData,
+  LeadFilters,
+  LeadStatus,
+  MainSection,
+  OutreachDraft,
+  PermitLead,
+  PermitPulseStore,
+  PermitRecord,
+  SavedView,
+  TenantProfile,
+} from "@/types/permit-pulse"
+
+const API_BASE = "https://data.cityofnewyork.us/resource/rbx6-tga4.json"
+
+function mapById(leads: PermitLead[]): Record<string, PermitLead> {
+  return leads.reduce<Record<string, PermitLead>>((result, lead) => {
+    result[lead.id] = lead
+    return result
+  }, {})
+}
+
+function buildSodaUrl(profile: TenantProfile, filters: LeadFilters): string {
+  const dateFrom = new Date()
+  dateFrom.setDate(dateFrom.getDate() - filters.daysBack)
+  const dateString = `${dateFrom.toISOString().split("T")[0]}T00:00:00`
+
+  const boroughFilter = [...profile.primaryBoroughs, ...profile.secondaryBoroughs]
+    .map((borough) => `borough='${borough}'`)
+    .join(" OR ")
+  const workTypeFilter = profile.workTypes.map((workType) => `work_type='${workType}'`).join(" OR ")
+
+  const where = [
+    `issued_date>'${dateString}'`,
+    `estimated_job_costs>'${filters.minCost}'`,
+    `permit_status='Permit Issued'`,
+    `filing_reason='Initial Permit'`,
+    `(${boroughFilter})`,
+    `(${workTypeFilter})`,
+  ].join(" AND ")
+
+  return `${API_BASE}?$where=${encodeURIComponent(where)}&$order=issued_date DESC&$limit=500`
+}
+
+type LeadUpdater = (lead: PermitLead) => PermitLead
+
+export function usePermitPulse() {
+  const [store, setStore] = useState<PermitPulseStore>(() => loadStore(METROGLASSPRO_PROFILE))
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const initialScanRef = useRef(false)
+
+  const profile = store.profile
+  const allLeads = useMemo(() => sortLeads(Object.values(store.leads), "priority"), [store.leads])
+  const activeView = useMemo<SavedView>(
+    () => SYSTEM_SAVED_VIEWS.find((view) => view.id === store.activeViewId) ?? SYSTEM_SAVED_VIEWS[0],
+    [store.activeViewId],
+  )
+  const activeEnrichmentPreset = useMemo(
+    () => ENRICHMENT_QUEUE_PRESETS.find((preset) => preset.id === store.enrichmentQueueId) ?? ENRICHMENT_QUEUE_PRESETS[0],
+    [store.enrichmentQueueId],
+  )
+  const activeOutreachPreset = useMemo(
+    () => OUTREACH_QUEUE_PRESETS.find((preset) => preset.id === store.outreachQueueId) ?? OUTREACH_QUEUE_PRESETS[0],
+    [store.outreachQueueId],
+  )
+
+  const scannerLeads = useMemo(
+    () => getFilteredLeads(allLeads, store.filters, activeView),
+    [activeView, allLeads, store.filters],
+  )
+  const enrichmentLeads = useMemo(
+    () => getQueueLeads(allLeads, activeEnrichmentPreset, "priority"),
+    [activeEnrichmentPreset, allLeads],
+  )
+  const outreachLeads = useMemo(
+    () => getQueueLeads(allLeads, activeOutreachPreset, "priority"),
+    [activeOutreachPreset, allLeads],
+  )
+
+  const selectedLead =
+    allLeads.find((lead) => lead.id === store.selectedLeadId) ??
+    (store.section === "enrichment" ? enrichmentLeads[0] : undefined) ??
+    (store.section === "outreach" ? outreachLeads[0] : undefined) ??
+    scannerLeads[0] ??
+    allLeads[0] ??
+    null
+
+  const dashboardStats = useMemo(() => getDashboardStats(allLeads), [allLeads])
+  const dashboardActivities = useMemo(() => getRecentActivities(allLeads, 10), [allLeads])
+  const topOpportunities = useMemo(() => sortLeads(allLeads.filter((lead) => !lead.workflow.ignored), "priority").slice(0, 6), [allLeads])
+
+  const savedViews = useMemo(
+    () =>
+      SYSTEM_SAVED_VIEWS.map((view) => ({
+        ...view,
+        count: countForRule(allLeads, view.rule),
+      })),
+    [allLeads],
+  )
+
+  const enrichmentPresets = useMemo(
+    () =>
+      ENRICHMENT_QUEUE_PRESETS.map((preset) => ({
+        ...preset,
+        count: countForRule(allLeads, preset.rule),
+      })),
+    [allLeads],
+  )
+
+  const outreachPresets = useMemo(
+    () =>
+      OUTREACH_QUEUE_PRESETS.map((preset) => ({
+        ...preset,
+        count: countForRule(allLeads, preset.rule),
+      })),
+    [allLeads],
+  )
+
+  useEffect(() => {
+    saveStore(store)
+  }, [store])
+
+  useEffect(() => {
+    const isDark = store.theme === "dark"
+    document.documentElement.classList.toggle("dark", isDark)
+    document.documentElement.style.colorScheme = isDark ? "dark" : "light"
+  }, [store.theme])
+
+  const scanLeads = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+
+    try {
+      const response = await fetch(buildSodaUrl(profile, store.filters))
+
+      if (!response.ok) {
+        throw new Error(`DOB API returned ${response.status}`)
+      }
+
+      const data = (await response.json()) as PermitRecord[]
+      const scannedAt = new Date().toISOString()
+
+      setStore((currentStore) => {
+        const nextLeads = { ...currentStore.leads }
+
+        data.forEach((permit) => {
+          const id =
+            permit.job_filing_number || `${permit.block}-${permit.lot}-${permit.house_no}-${permit.street_name}`
+          const existingLead = currentStore.leads[id]
+          const nextLead = buildLeadFromPermit(permit, currentStore.profile, existingLead, scannedAt)
+
+          if (nextLead.score > 0) {
+            nextLeads[nextLead.id] = nextLead
+          }
+        })
+
+        const orderedLeads = sortLeads(Object.values(nextLeads), "priority")
+
+        return {
+          ...currentStore,
+          leads: mapById(orderedLeads),
+          lastScanAt: scannedAt,
+          selectedLeadId: currentStore.selectedLeadId ?? orderedLeads[0]?.id ?? null,
+        }
+      })
+
+      toast.success("Scan complete", {
+        description: `${data.length} permits checked against the MetroGlassPro profile.`,
+      })
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Failed to fetch permits"
+      setError(message)
+      toast.error("Scan failed", { description: message })
+    } finally {
+      setLoading(false)
+    }
+  }, [profile, store.filters])
+
+  useEffect(() => {
+    if (initialScanRef.current || allLeads.length > 0) {
+      return
+    }
+
+    initialScanRef.current = true
+    void scanLeads()
+  }, [allLeads.length, scanLeads])
+
+  useEffect(() => {
+    if (selectedLead?.id === store.selectedLeadId || !selectedLead) {
+      return
+    }
+
+    setStore((currentStore) => ({
+      ...currentStore,
+      selectedLeadId: selectedLead.id,
+    }))
+  }, [selectedLead, store.selectedLeadId])
+
+  const updateLead = useCallback((leadId: string, updater: LeadUpdater) => {
+    setStore((currentStore) => {
+      const existingLead = currentStore.leads[leadId]
+      if (!existingLead) {
+        return currentStore
+      }
+
+      const updatedLead = refreshDerivedLead(updater(existingLead), currentStore.profile)
+
+      return {
+        ...currentStore,
+        leads: {
+          ...currentStore.leads,
+          [leadId]: updatedLead,
+        },
+      }
+    })
+  }, [])
+
+  const setSection = useCallback((section: MainSection) => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      section,
+    }))
+  }, [])
+
+  const setTheme = useCallback((theme: AppTheme) => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      theme,
+    }))
+  }, [])
+
+  const toggleTheme = useCallback(() => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      theme: currentStore.theme === "dark" ? "light" : "dark",
+    }))
+  }, [])
+
+  const setSelectedLeadId = useCallback((leadId: string) => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      selectedLeadId: leadId,
+    }))
+  }, [])
+
+  const setFilters = useCallback((patch: Partial<LeadFilters>) => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      filters: {
+        ...currentStore.filters,
+        ...patch,
+      },
+    }))
+  }, [])
+
+  const resetFilters = useCallback(() => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      filters: DEFAULT_FILTERS,
+      activeViewId: "hot-today",
+    }))
+  }, [])
+
+  const setActiveViewId = useCallback((viewId: string) => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      activeViewId: viewId,
+      section: "scanner",
+    }))
+  }, [])
+
+  const setEnrichmentQueueId = useCallback((queueId: string) => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      enrichmentQueueId: queueId,
+      section: "enrichment",
+    }))
+  }, [])
+
+  const setOutreachQueueId = useCallback((queueId: string) => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      outreachQueueId: queueId,
+      section: "outreach",
+    }))
+  }, [])
+
+  const updateLeadStatus = useCallback((leadId: string, status: LeadStatus) => {
+    updateLead(leadId, (lead) => {
+      const nextActivity = createActivity(
+        "status-changed",
+        "Pipeline status updated",
+        `Lead moved to ${status}.`,
+      )
+
+      return {
+        ...lead,
+        workflow: {
+          ...lead.workflow,
+          status,
+          lastReviewedAt: new Date().toISOString(),
+        },
+        activities: [nextActivity, ...lead.activities].slice(0, 40),
+      }
+    })
+  }, [updateLead])
+
+  const updateEnrichment = useCallback((leadId: string, patch: Partial<EnrichmentData>) => {
+    updateLead(leadId, (lead) => {
+      const nextEnrichment = {
+        ...lead.enrichment,
+        ...patch,
+      }
+
+      let activity = lead.activities
+      const addedContact =
+        (!lead.enrichment.directEmail && nextEnrichment.directEmail) ||
+        (!lead.enrichment.genericEmail && nextEnrichment.genericEmail) ||
+        (!lead.enrichment.phone && nextEnrichment.phone)
+
+      if (addedContact) {
+        activity = [
+          createActivity("contact-found", "Contact route added", "A new phone or email path was saved."),
+          ...lead.activities,
+        ].slice(0, 40)
+      } else if (patch.notes || patch.researchNotes) {
+        activity = [
+          createActivity("note-added", "Research note added", "Lead notes were updated."),
+          ...lead.activities,
+        ].slice(0, 40)
+      }
+
+      const status =
+        isOutreachReady({ ...lead, enrichment: nextEnrichment }) && lead.workflow.status !== "contacted"
+          ? "outreach-ready"
+          : lead.workflow.status
+
+      return {
+        ...lead,
+        enrichment: nextEnrichment,
+        workflow: {
+          ...lead.workflow,
+          status,
+        },
+        activities: activity,
+      }
+    })
+  }, [updateLead])
+
+  const updateOutreachDraft = useCallback((leadId: string, patch: Partial<OutreachDraft>) => {
+    updateLead(leadId, (lead) => {
+      const draftWasEmpty = !lead.outreachDraft.shortEmail && !lead.outreachDraft.callOpener
+      const nextDraft = {
+        ...lead.outreachDraft,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      }
+
+      const nextActivities = draftWasEmpty
+        ? [createActivity("draft-created", "Outreach draft created", "A working draft was added."), ...lead.activities].slice(0, 40)
+        : lead.activities
+
+      return {
+        ...lead,
+        outreachDraft: nextDraft,
+        workflow: {
+          ...lead.workflow,
+          status: lead.workflow.status === "new" ? "drafted" : lead.workflow.status,
+        },
+        activities: nextActivities,
+      }
+    })
+  }, [updateLead])
+
+  const generateDraft = useCallback((leadId: string) => {
+    const lead = store.leads[leadId]
+    if (!lead) {
+      return
+    }
+
+    const draft = generateDraftFromLead(lead)
+    updateOutreachDraft(leadId, draft)
+    toast.success("Draft helper updated", {
+      description: "Practical outreach copy has been drafted for this lead.",
+    })
+  }, [store.leads, updateOutreachDraft])
+
+  const setFollowUpDate = useCallback((leadId: string, followUpDate: string) => {
+    updateLead(leadId, (lead) => ({
+      ...lead,
+      enrichment: {
+        ...lead.enrichment,
+        followUpDate,
+      },
+      workflow: {
+        ...lead.workflow,
+        nextActionDue: followUpDate,
+        status: followUpDate ? "follow-up-due" : lead.workflow.status,
+      },
+      activities: [
+        createActivity(
+          "follow-up-set",
+          "Follow-up scheduled",
+          followUpDate ? `Next action set for ${followUpDate}.` : "Follow-up date cleared.",
+        ),
+        ...lead.activities,
+      ].slice(0, 40),
+    }))
+  }, [updateLead])
+
+  const toggleIgnored = useCallback((leadId: string) => {
+    updateLead(leadId, (lead) => ({
+      ...lead,
+      workflow: {
+        ...lead.workflow,
+        ignored: !lead.workflow.ignored,
+        status: lead.workflow.ignored ? "reviewed" : "archived",
+      },
+    }))
+  }, [updateLead])
+
+  const updateProfile = useCallback((patch: Partial<TenantProfile>) => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      profile: {
+        ...currentStore.profile,
+        ...patch,
+      },
+      leads: mapById(Object.values(currentStore.leads).map((lead) => refreshDerivedLead(lead, {
+        ...currentStore.profile,
+        ...patch,
+      }))),
+    }))
+  }, [])
+
+  const resetProfile = useCallback(() => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      profile: METROGLASSPRO_PROFILE,
+      leads: mapById(Object.values(currentStore.leads).map((lead) => refreshDerivedLead(lead, METROGLASSPRO_PROFILE))),
+    }))
+    toast.success("Profile reset", {
+      description: "MetroGlassPro baseline scoring has been restored.",
+    })
+  }, [])
+
+  return {
+    theme: store.theme,
+    section: store.section,
+    filters: store.filters,
+    profile,
+    allLeads,
+    scannerLeads,
+    enrichmentLeads,
+    outreachLeads,
+    selectedLead,
+    lastScanAt: store.lastScanAt,
+    loading,
+    error,
+    dashboardStats,
+    dashboardActivities,
+    topOpportunities,
+    savedViews,
+    enrichmentPresets,
+    outreachPresets,
+    activeViewId: store.activeViewId,
+    activeEnrichmentQueueId: store.enrichmentQueueId,
+    activeOutreachQueueId: store.outreachQueueId,
+    setTheme,
+    toggleTheme,
+    setSection,
+    setSelectedLeadId,
+    setFilters,
+    resetFilters,
+    setActiveViewId,
+    setEnrichmentQueueId,
+    setOutreachQueueId,
+    scanLeads,
+    updateLeadStatus,
+    updateEnrichment,
+    updateOutreachDraft,
+    generateDraft,
+    setFollowUpDate,
+    toggleIgnored,
+    updateProfile,
+    resetProfile,
+  }
+}

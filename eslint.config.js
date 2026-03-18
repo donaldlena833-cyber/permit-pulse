@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', '.corepack/**', 'src/components/ui/**', 'src/hooks/use-toast.ts']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
