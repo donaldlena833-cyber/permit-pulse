@@ -1004,12 +1004,38 @@ async function sendGmail({ to, subject, body, env, threadId }) {
   const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
   const accessToken = await getGmailAccessToken(env);
   const gmailUser = (env.GMAIL_REFRESH_TOKEN) ? 'me' : sender;
-  // Add References/In-Reply-To headers for threading if this is a follow-up
-  const headers = [`From: MetroGlass Pro <${sender}>`, `To: ${to}`, `Subject: ${subject}`,
-    'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8'];
-  const rawEmail = [...headers, '', body].join('\r\n');
+
+  // Convert plain text body to clean HTML
+  const htmlBody = textToHtml(body, sender);
+
+  const boundary = 'permitpulse_' + Date.now();
+  const headers = [
+    `From: MetroGlass Pro <${sender}>`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  ];
+
+  // Send both plain text and HTML (email clients pick the best one)
+  const rawEmail = [
+    ...headers,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    '',
+    body,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    '',
+    htmlBody,
+    '',
+    `--${boundary}--`,
+  ].join('\r\n');
+
   const payload = { raw: base64UrlEncode(rawEmail) };
-  if (threadId) payload.threadId = threadId; // Puts follow-up in same thread
+  if (threadId) payload.threadId = threadId;
   const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${gmailUser}/messages/send`, {
     method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -1017,6 +1043,52 @@ async function sendGmail({ to, subject, body, env, threadId }) {
   if (!res.ok) throw new Error(`Gmail send failed: ${await res.text()}`);
   const result = await res.json();
   return { success: true, messageId: result.id, threadId: result.threadId };
+}
+
+function textToHtml(text, senderEmail) {
+  // Split body from signature
+  const lines = text.split('\\n');
+  let bodyLines = [];
+  let sigLines = [];
+  let inSig = false;
+
+  for (const line of lines) {
+    if (!inSig && (line.startsWith('Best,') || line.startsWith('Donald Lena') || line.startsWith('All the best'))) {
+      inSig = true;
+    }
+    if (inSig) {
+      sigLines.push(line);
+    } else {
+      bodyLines.push(line);
+    }
+  }
+
+  // Convert body paragraphs to HTML
+  const bodyHtml = bodyLines
+    .join('\\n')
+    .split('\\n\\n')
+    .map(para => {
+      const escaped = para.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // Convert single newlines within a paragraph to <br>
+      return '<p style="margin:0 0 16px 0;line-height:1.6">' + escaped.replace(/\\n/g, '<br>') + '</p>';
+    })
+    .join('');
+
+  // Build signature HTML
+  const sigHtml = sigLines.length > 0 ? '<div style="margin-top:24px;padding-top:16px;border-top:1px solid #e0e0e0;font-size:14px;color:#333">' +
+    '<p style="margin:0 0 2px 0"><strong>Donald Lena</strong></p>' +
+    '<p style="margin:0 0 2px 0;color:#666">MetroGlass Pro</p>' +
+    '<p style="margin:0 0 2px 0"><a href="tel:+13329993846" style="color:#D4691A;text-decoration:none">(332) 999-3846</a></p>' +
+    '<p style="margin:0 0 2px 0"><a href="mailto:' + senderEmail + '" style="color:#D4691A;text-decoration:none">' + senderEmail + '</a></p>' +
+    '<p style="margin:0"><a href="https://metroglasspro.com" style="color:#D4691A;text-decoration:none">metroglasspro.com</a></p>' +
+    '</div>' : '';
+
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>' +
+    '<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#1a1a1a;background:#fff">' +
+    '<div style="max-width:600px;margin:0 auto;padding:20px">' +
+    bodyHtml +
+    sigHtml +
+    '</div></body></html>';
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
