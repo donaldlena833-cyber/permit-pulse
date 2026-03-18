@@ -26,6 +26,8 @@
  * - KV namespace PERMIT_PULSE — stores everything (picks, drafts, CRM, analytics)
  */
 
+import { handlePermitPulseAutomationRequest, runPermitAutomationCycle } from './worker/permit-pulse/api.mjs';
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CONSTANTS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1662,6 +1664,12 @@ async function handleGmailRoutes(request, env) {
 
 export default {
   async scheduled(event, env) {
+    if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
+      console.log('⚡ PermitPulse automation cycle');
+      await runPermitAutomationCycle(env);
+      return;
+    }
+
     const hour = new Date().getUTCHours();
     // 12 UTC = 7am ET (morning scan), 23 UTC = 6pm ET (maintenance only)
     const isMorningScan = (hour >= 10 && hour <= 14);
@@ -1686,6 +1694,9 @@ export default {
 
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    const automationResponse = await handlePermitPulseAutomationRequest(request, env);
+    if (automationResponse) return automationResponse;
 
     // CORS preflight
     if (request.method === 'OPTIONS') {

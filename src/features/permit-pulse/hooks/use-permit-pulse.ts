@@ -2,6 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { DEFAULT_FILTERS, METROGLASSPRO_PROFILE } from "@/features/permit-pulse/data/profile"
+import {
+  fetchAutomationSnapshot,
+  persistLeadDraft,
+  persistLeadEnrichment,
+  persistLeadStatus,
+  triggerAutomationRun,
+} from "@/features/permit-pulse/lib/remote"
 import { loadStore, saveStore } from "@/features/permit-pulse/lib/storage"
 import {
   buildLeadFromPermit,
@@ -32,6 +39,7 @@ import type {
   PermitPulseStore,
   PermitRecord,
   SavedView,
+  SentLogEntry,
   TenantProfile,
 } from "@/types/permit-pulse"
 
@@ -72,6 +80,7 @@ export function usePermitPulse() {
   const [store, setStore] = useState<PermitPulseStore>(() => loadStore(METROGLASSPRO_PROFILE))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [remoteHydrating, setRemoteHydrating] = useState(true)
   const initialScanRef = useRef(false)
 
   const profile = store.profile
@@ -113,6 +122,27 @@ export function usePermitPulse() {
   const dashboardStats = useMemo(() => getDashboardStats(allLeads), [allLeads])
   const dashboardActivities = useMemo(() => getRecentActivities(allLeads, 10), [allLeads])
   const topOpportunities = useMemo(() => sortLeads(allLeads.filter((lead) => !lead.workflow.ignored), "priority").slice(0, 6), [allLeads])
+  const sentLog = useMemo<SentLogEntry[]>(
+    () =>
+      store.sentLog.length > 0
+        ? store.sentLog
+        : allLeads
+            .flatMap((lead) =>
+              lead.outreachHistory
+                .filter((item) => item.status === "sent")
+                .map((item) => ({
+                  id: item.id,
+                  leadId: lead.id,
+                  channel: item.channel,
+                  recipient: item.recipient,
+                  subject: item.subject,
+                  sentAt: item.sentAt,
+                  status: item.status,
+                })),
+            )
+            .sort((left, right) => new Date(right.sentAt ?? 0).getTime() - new Date(left.sentAt ?? 0).getTime()),
+    [allLeads, store.sentLog],
+  )
 
   const savedViews = useMemo(
     () =>
@@ -145,6 +175,39 @@ export function usePermitPulse() {
     saveStore(store)
   }, [store])
 
+  const applyRemoteSnapshot = useCallback((snapshot: { leads: PermitLead[]; sentLog: SentLogEntry[] }) => {
+    const orderedLeads = sortLeads(snapshot.leads, "priority")
+
+    setStore((currentStore) => ({
+      ...currentStore,
+      leads: mapById(orderedLeads),
+      sentLog: snapshot.sentLog,
+      lastScanAt: orderedLeads[0]?.lastScannedAt ?? currentStore.lastScanAt,
+      selectedLeadId:
+        currentStore.selectedLeadId && orderedLeads.some((lead) => lead.id === currentStore.selectedLeadId)
+          ? currentStore.selectedLeadId
+          : orderedLeads[0]?.id ?? null,
+    }))
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void (async () => {
+      const snapshot = await fetchAutomationSnapshot()
+      if (!cancelled && snapshot) {
+        applyRemoteSnapshot(snapshot)
+      }
+      if (!cancelled) {
+        setRemoteHydrating(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [applyRemoteSnapshot])
+
   useEffect(() => {
     const isDark = store.theme === "dark"
     document.documentElement.classList.toggle("dark", isDark)
@@ -156,6 +219,20 @@ export function usePermitPulse() {
     setError(null)
 
     try {
+      const remoteSnapshot = await fetchAutomationSnapshot()
+      if (remoteSnapshot) {
+        await triggerAutomationRun()
+        const refreshedSnapshot = await fetchAutomationSnapshot()
+        if (refreshedSnapshot) {
+          applyRemoteSnapshot(refreshedSnapshot)
+        }
+
+        toast.success("Automation cycle triggered", {
+          description: "Permit ingest, enrichment, and send rules ran through the worker pipeline.",
+        })
+        return
+      }
+
       const response = await fetch(buildSodaUrl(profile, store.filters))
 
       if (!response.ok) {
@@ -199,16 +276,20 @@ export function usePermitPulse() {
     } finally {
       setLoading(false)
     }
-  }, [profile, store.filters])
+  }, [applyRemoteSnapshot, profile, store.filters])
 
   useEffect(() => {
+    if (remoteHydrating) {
+      return
+    }
+
     if (initialScanRef.current || allLeads.length > 0) {
       return
     }
 
     initialScanRef.current = true
     void scanLeads()
-  }, [allLeads.length, scanLeads])
+  }, [allLeads.length, remoteHydrating, scanLeads])
 
   useEffect(() => {
     if (selectedLead?.id === store.selectedLeadId || !selectedLead) {
@@ -328,15 +409,18 @@ export function usePermitPulse() {
         activities: [nextActivity, ...lead.activities].slice(0, 40),
       }
     })
-  }, [updateLead])
+    void persistLeadStatus(leadId, status)
+      .then(applyRemoteSnapshot)
+      .catch(() => undefined)
+  }, [applyRemoteSnapshot, updateLead])
 
   const updateEnrichment = useCallback((leadId: string, patch: Partial<EnrichmentData>) => {
-    updateLead(leadId, (lead) => {
-      const nextEnrichment = {
-        ...lead.enrichment,
-        ...patch,
-      }
+    const nextEnrichment = {
+      ...store.leads[leadId]?.enrichment,
+      ...patch,
+    }
 
+    updateLead(leadId, (lead) => {
       let activity = lead.activities
       const addedContact =
         (!lead.enrichment.directEmail && nextEnrichment.directEmail) ||
@@ -370,16 +454,20 @@ export function usePermitPulse() {
         activities: activity,
       }
     })
-  }, [updateLead])
+    void persistLeadEnrichment(leadId, nextEnrichment)
+      .then(applyRemoteSnapshot)
+      .catch(() => undefined)
+  }, [applyRemoteSnapshot, store.leads, updateLead])
 
   const updateOutreachDraft = useCallback((leadId: string, patch: Partial<OutreachDraft>) => {
+    const nextDraft = {
+      ...store.leads[leadId]?.outreachDraft,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    }
+
     updateLead(leadId, (lead) => {
       const draftWasEmpty = !lead.outreachDraft.shortEmail && !lead.outreachDraft.callOpener
-      const nextDraft = {
-        ...lead.outreachDraft,
-        ...patch,
-        updatedAt: new Date().toISOString(),
-      }
 
       const nextActivities = draftWasEmpty
         ? [createActivity("draft-created", "Outreach draft created", "A working draft was added."), ...lead.activities].slice(0, 40)
@@ -395,7 +483,15 @@ export function usePermitPulse() {
         activities: nextActivities,
       }
     })
-  }, [updateLead])
+    void persistLeadDraft(leadId, {
+      subject: nextDraft.subject,
+      body: nextDraft.shortEmail,
+      callOpener: nextDraft.callOpener,
+      followUpNote: nextDraft.followUpNote,
+    })
+      .then(applyRemoteSnapshot)
+      .catch(() => undefined)
+  }, [applyRemoteSnapshot, store.leads, updateLead])
 
   const generateDraft = useCallback((leadId: string) => {
     const lead = store.leads[leadId]
@@ -480,6 +576,7 @@ export function usePermitPulse() {
     outreachLeads,
     selectedLead,
     lastScanAt: store.lastScanAt,
+    sentLog,
     loading,
     error,
     dashboardStats,

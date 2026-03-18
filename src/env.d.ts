@@ -1,0 +1,1 @@
+declare const __PERMIT_PULSE_WORKER_URL__: string

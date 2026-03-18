@@ -300,6 +300,77 @@ export function LeadDetailPanel({
             </div>
           </SectionCard>
 
+          <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
+            <SectionCard
+              description="Automation confidence, company match quality, and the chosen outbound lane."
+              title="Automation control"
+            >
+              <div className="space-y-5">
+                <SignalBar
+                  helper={lead.outreachReadiness.explanation}
+                  label="Outreach readiness"
+                  value={lead.outreachReadiness.score}
+                />
+                <SignalBar
+                  helper={lead.automationSummary.autoSendReason}
+                  label="Enrichment confidence"
+                  value={lead.automationSummary.enrichmentConfidence}
+                />
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <MetaField label="Primary channel" value={lead.channelDecision.primary} />
+                  <MetaField label="Company match" value={lead.companyProfile.matchStrength} />
+                  <MetaField label="Company domain" value={lead.companyProfile.domain || "—"} />
+                  <MetaField
+                    label="Auto-send"
+                    value={lead.automationSummary.autoSendEligible ? "Eligible" : "Needs review"}
+                  />
+                </div>
+
+                {lead.outreachReadiness.blockers.length > 0 ? (
+                  <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-navy-400 dark:text-dark-muted">
+                      Current blockers
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {lead.outreachReadiness.blockers.map((blocker) => (
+                        <span
+                          key={blocker}
+                          className="rounded-full border border-navy-200 bg-white/80 px-3 py-1 text-xs text-navy-600 dark:border-dark-border dark:bg-dark-card dark:text-dark-muted"
+                        >
+                          {blocker}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              description="Resolved property and company context from PLUTO, Maps, search, and website scraping."
+              title="Resolved context"
+            >
+              <div className="grid gap-3 md:grid-cols-2">
+                <MetaField label="Neighborhood" value={lead.propertyProfile.neighborhood || "—"} />
+                <MetaField label="Building type" value={lead.propertyProfile.buildingType || "—"} />
+                <MetaField label="Property class" value={lead.propertyProfile.propertyClass || "—"} />
+                <MetaField label="Company" value={lead.companyProfile.name || "—"} />
+                <MetaField label="Company role" value={lead.companyProfile.role || "—"} />
+                <MetaField label="Search query" value={lead.companyProfile.searchQuery || "—"} />
+              </div>
+
+              <div className="rounded-[22px] border border-navy-200/70 bg-white/80 p-4 dark:border-dark-border/70 dark:bg-dark-card/80">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-navy-400 dark:text-dark-muted">
+                  Automation summary
+                </div>
+                <p className="mt-3 text-sm leading-7 text-navy-600 dark:text-dark-muted">
+                  {lead.channelDecision.reason}
+                </p>
+              </div>
+            </SectionCard>
+          </div>
+
           <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
             <SectionCard
               description="Permit basics, fit explanation, and source-side context."
@@ -335,11 +406,11 @@ export function LeadDetailPanel({
                 {actionLinks.map((link) => (
                   <QuickActionButton key={link.label} icon={link.icon} label={link.label} onClick={link.action} />
                 ))}
-                {lead.enrichment.companyWebsite ? (
+                {lead.enrichment.companyWebsite || lead.companyProfile.website ? (
                   <QuickActionButton
                     icon={Globe}
                     label="Open website"
-                    onClick={() => openExternal(lead.enrichment.companyWebsite)}
+                    onClick={() => openExternal(lead.enrichment.companyWebsite || lead.companyProfile.website)}
                   />
                 ) : null}
               </div>
@@ -450,6 +521,92 @@ export function LeadDetailPanel({
                   />
                 </div>
               </div>
+            </SectionCard>
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+            <SectionCard
+              description="Best known people, emails, phones, forms, and social routes for this lead."
+              title="Resolved contacts"
+            >
+              {lead.contacts.length === 0 ? (
+                <EmptyState
+                  description="Automation has not resolved a clean route yet. Use the enrichment workbench to add one."
+                  icon={Mail}
+                  title="No contacts resolved"
+                />
+              ) : (
+                <div className="space-y-3">
+                  {lead.contacts.map((contact) => (
+                    <div
+                      key={contact.id}
+                      className="rounded-[22px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg"
+                    >
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="space-y-1">
+                          <div className="text-sm font-semibold text-navy-800 dark:text-dark-text">
+                            {contact.name || lead.companyProfile.name || "Unknown contact"}
+                          </div>
+                          <div className="text-xs text-navy-500 dark:text-dark-muted">
+                            {[contact.role, contact.type, `${contact.confidence}% confidence`, contact.source]
+                              .filter(Boolean)
+                              .join(" • ")}
+                          </div>
+                        </div>
+                        {contact.isPrimary ? (
+                          <span className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/20 dark:text-orange-200">
+                            Primary
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <MetaField label="Email" value={contact.email || "—"} />
+                        <MetaField label="Phone" value={contact.phone || "—"} />
+                        <MetaField label="Website" value={contact.website || "—"} />
+                        <MetaField label="Contact form" value={contact.contactFormUrl || "—"} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              description="Every drafted, queued, and sent touch tied back to this lead."
+              title="Outreach history"
+            >
+              {lead.outreachHistory.length === 0 ? (
+                <EmptyState
+                  description="Drafts and sends will show up here once the automation layer or manual edits create outreach records."
+                  icon={Sparkles}
+                  title="No outreach history yet"
+                />
+              ) : (
+                <div className="space-y-3">
+                  {lead.outreachHistory.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-[22px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg"
+                    >
+                      <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-navy-800 dark:text-dark-text">{item.subject || item.channel}</div>
+                          <div className="text-xs text-navy-500 dark:text-dark-muted">
+                            {[item.channel, item.status, item.recipient].filter(Boolean).join(" • ")}
+                          </div>
+                        </div>
+                        <div className="text-xs uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                          {formatDate(item.sentAt ?? item.createdAt)}
+                        </div>
+                      </div>
+                      {item.pluginLine ? (
+                        <p className="mt-3 text-sm leading-6 text-navy-500 dark:text-dark-muted">{item.pluginLine}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
             </SectionCard>
           </div>
 

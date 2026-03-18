@@ -1,14 +1,28 @@
 # ⚡ PermitPulse
 
-**NYC Construction Lead Intelligence Platform**
+**NYC construction lead intelligence and outbound automation for MetroGlass Pro**
 
-Scans NYC DOB permit data in real-time, scores leads against trade profiles, and surfaces hot opportunities for glass, tile, HVAC, plumbing, and other specialty subcontractors.
+PermitPulse now runs as a permit scanner, enrichment engine, contact resolver, channel selector, and Gmail sender for MetroGlass Pro's permit-driven outbound workflow.
 
 ## Architecture
 
-- **Dashboard** (`src/`) — React + TypeScript + Tailwind + shadcn/ui, deployed to Cloudflare Pages
-- **Scanner** (`permit-scanner.mjs`) — Cloudflare Worker with cron triggers, runs 2x daily
-- **API** — NYC Open Data SODA API (DOB NOW Approved Permits, dataset `rbx6-tga4`)
+- **Frontend** (`src/`) — React + TypeScript + Tailwind + shadcn/ui, deployed to Cloudflare Pages
+- **Automation Worker** (`permit-scanner.mjs`) — Cloudflare Worker with cron triggers and `/api/v2/*` automation routes
+- **Primary database** (`supabase/migrations/001_permit_pulse_automation.sql`) — Supabase/Postgres schema for leads, enrichment, contacts, outreach, and activity logs
+- **Public data + enrichment** — NYC Open Data, Google Maps, Brave Search, Firecrawl, ZeroBounce, Gmail OAuth
+
+## Automation Flow
+
+1. Scan DOB permits from `rbx6-tga4`
+2. Normalize address, borough, cost, work type, and description
+3. Enrich property context from PLUTO, HPD, ACRIS links, and Google Maps
+4. Resolve owner or applicant company with Brave Search
+5. Scrape high-value websites with Firecrawl
+6. Collect public emails and phones, then generate guessed email patterns
+7. Verify high-value emails with ZeroBounce before send
+8. Score lead fit, contactability, outreach readiness, and best channel
+9. Generate rotating email drafts with the project address inserted automatically
+10. Auto-send via Gmail when confidence, throttling, duplicate, and business-hour rules all pass
 
 ## Scoring Engine
 
@@ -27,28 +41,53 @@ Each permit is scored on 7 dimensions (max 100):
 
 ## Deployment
 
-### Dashboard (Cloudflare Pages)
+### Frontend (Cloudflare Pages)
 ```bash
 pnpm install
 pnpm build
-# Deploy dist/ to Cloudflare Pages
+bash deploy.sh
 ```
 
-### Scanner (Cloudflare Worker)
+### Worker + Automation APIs (Cloudflare Worker)
 ```bash
 npx wrangler deploy
-npx wrangler secret put RESEND_API_KEY
 ```
 
-Cron triggers: 8am ET + 6pm ET daily.
+Cron triggers: 7am ET and 6pm ET.
 
-## Multi-Tenant
+## Required Env Vars
 
-Built for multiple trade profiles. Currently configured:
-- 🪟 **MetroGlassPro LLC** — Glass, mirrors, shower doors, storefronts
-- 🧱 Tile & Stone (ready to configure)
-- ❄️ HVAC (ready to configure)
-- 🔧 Plumbing (ready to configure)
+Worker secrets or vars:
+
+- `BRAVE_API_KEY`
+- `GOOGLE_MAPS_API_KEY`
+- `ZEROBOUNCE_API_KEY`
+- `FIRECRAWL_API_KEY`
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `GMAIL_REFRESH_TOKEN`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+
+Optional frontend build var:
+
+- `PERMIT_PULSE_WORKER_URL`
+
+## Supabase Schema
+
+Apply the migration in:
+
+- `supabase/migrations/001_permit_pulse_automation.sql`
+
+Core tables:
+
+- `leads`
+- `property_profiles`
+- `company_profiles`
+- `contacts`
+- `enrichment_facts`
+- `outreach`
+- `activity_log`
 
 ## License
 

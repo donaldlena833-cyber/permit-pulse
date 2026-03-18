@@ -1,0 +1,120 @@
+export const NYC_TIME_ZONE = 'America/New_York';
+export const NYC_BUSINESS_HOURS = {
+  startHour: 9,
+  endHour: 17,
+};
+
+export const API_ENDPOINTS = {
+  permits: 'https://data.cityofnewyork.us/resource/rbx6-tga4.json',
+  pluto: 'https://data.cityofnewyork.us/resource/64uk-42ks.json',
+  hpdViolations: 'https://data.cityofnewyork.us/resource/csn4-vhvf.json',
+  braveSearch: 'https://api.search.brave.com/res/v1/web/search',
+  firecrawlScrape: 'https://api.firecrawl.dev/v1/scrape',
+  googleGeocode: 'https://maps.googleapis.com/maps/api/geocode/json',
+  zerobounceValidate: 'https://api.zerobounce.net/v2/validate',
+};
+
+export const METROGLASS_PROFILE = {
+  primaryBoroughs: ['MANHATTAN'],
+  secondaryBoroughs: ['BROOKLYN', 'QUEENS'],
+  workTypes: ['General Construction'],
+  minCost: 25000,
+  sweetSpotMin: 50000,
+  sweetSpotMax: 2000000,
+  directKeywords: [
+    'glass',
+    'mirror',
+    'glazing',
+    'storefront',
+    'shower door',
+    'shower enclosure',
+    'glass partition',
+    'glass railing',
+    'curtain wall',
+    'glass door',
+    'glass panel',
+    'frameless',
+    'tempered glass',
+    'glass divider',
+    'glass wall',
+    'window replacement',
+    'new storefront',
+    'pivot door',
+    'sliding glass',
+  ],
+  inferredKeywords: [
+    'bathroom renovation',
+    'bathroom remodel',
+    'gut renovation',
+    'full renovation',
+    'master bathroom',
+    'interior renovation',
+    'interior alteration',
+    'buildout',
+    'build-out',
+    'fit-out',
+    'fitout',
+    'tenant improvement',
+    'new finishes',
+    'luxury renovation',
+    'condo renovation',
+    'apartment renovation',
+    'brownstone renovation',
+    'retail renovation',
+    'office renovation',
+  ],
+  commercialKeywords: [
+    'storefront',
+    'retail',
+    'showroom',
+    'office',
+    'lobby',
+    'partition',
+    'restaurant',
+    'hotel',
+    'medical office',
+    'dental office',
+    'clinic',
+    'gallery',
+    'gym',
+    'fitness',
+    'salon',
+  ],
+  linkedinSignals: ['architect', 'design', 'interior', 'studio', 'atelier', 'hospitality', 'showroom'],
+  negativeKeywords: [
+    'demolition only',
+    'asbestos',
+    'abatement',
+    'sidewalk shed',
+    'scaffolding only',
+    'boiler replacement',
+    'elevator',
+    'fire escape',
+    'gas line',
+    'roofing only',
+    'waterproofing only',
+    'pointing only',
+  ],
+};
+
+export const PLUGIN_LINES = [
+  'We keep field coordination simple, which helps jobs move without extra back and forth.',
+  'Our team can quote quickly if the glass package is still being lined up.',
+  'We handle shower glass, mirrors, storefronts, and partitions in house across the city.',
+  'If drawings are available, we can turn around a practical number fast.',
+  'We are used to working with tight Manhattan access, board rules, and active jobsites.',
+  'If this scope is still open, we can help keep it clean on the install side.',
+  'We work well with GCs, designers, and ownership teams that need fast answers.',
+  'If the project needs custom glass or mirrors, we can step in without a heavy handoff.',
+  'We are set up for both residential renovation work and higher touch commercial build-outs.',
+  'We focus on clear pricing, clean installs, and straightforward coordination.',
+];
+
+export const AUTO_SEND_LIMITS = {
+  perDay: 50,
+  perHour: 10,
+};
+
+export const DEFAULT_SCAN_WINDOW_DAYS = 14;
+export const DEFAULT_SCAN_LIMIT = 150;
+export const HIGH_VALUE_SCORE = 60;

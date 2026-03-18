@@ -168,6 +168,9 @@ export function getSearchableLeadText(lead: PermitLead): string {
     lead.enrichment.contactPersonName,
     lead.enrichment.notes,
     lead.enrichment.researchNotes,
+    lead.companyProfile.name,
+    lead.companyProfile.domain,
+    lead.contacts.map((contact) => [contact.email, contact.phone, contact.name].filter(Boolean).join(" ")).join(" "),
   ]
     .filter(Boolean)
     .join(" ")

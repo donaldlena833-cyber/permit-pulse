@@ -185,10 +185,17 @@ export function isOutreachReady(lead: PermitLead): boolean {
     lead.enrichment.directEmail ||
       lead.enrichment.genericEmail ||
       lead.enrichment.phone ||
-      lead.enrichment.contactFormUrl,
+      lead.enrichment.contactFormUrl ||
+      lead.contacts.some((contact) => contact.email || contact.phone || contact.contactFormUrl),
   )
 
-  return hasRoute && lead.contactability.total >= 60 && lead.score >= 30 && !lead.workflow.ignored
+  return (
+    hasRoute &&
+    lead.contactability.total >= 60 &&
+    lead.score >= 30 &&
+    lead.outreachReadiness.label !== "Blocked" &&
+    !lead.workflow.ignored
+  )
 }
 
 export function needsEnrichment(lead: PermitLead): boolean {
@@ -201,7 +208,10 @@ export function needsEnrichment(lead: PermitLead): boolean {
   return (
     !lead.workflow.ignored &&
     lead.leadTier !== "cold" &&
-    (lead.contactability.total < 60 || missingCoreRoute || !lead.enrichment.companyWebsite)
+    (lead.contactability.total < 60 ||
+      missingCoreRoute ||
+      !lead.enrichment.companyWebsite ||
+      lead.outreachReadiness.label === "Needs Review")
   )
 }
 

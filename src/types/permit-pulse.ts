@@ -40,9 +40,27 @@ export type MainSection =
   | "workspace"
   | "enrichment"
   | "outreach"
+  | "sent-log"
   | "profile"
 
 export type AppTheme = "light" | "dark"
+
+export type ContactType = "verified" | "public" | "guessed"
+
+export type OutreachChannel = "email" | "phone" | "form" | "linkedin"
+
+export type OutreachStatus =
+  | "draft"
+  | "queued"
+  | "scheduled"
+  | "sent"
+  | "failed"
+  | "skipped"
+  | "needs-review"
+
+export type OutreachReadinessLabel = "Ready" | "Almost Ready" | "Needs Review" | "Blocked"
+
+export type CompanyMatchStrength = "strong" | "medium" | "weak"
 
 export type SortMode =
   | "priority"
@@ -160,6 +178,113 @@ export interface EnrichmentData {
   followUpDate: string
 }
 
+export interface PropertyProfile {
+  normalizedAddress: string
+  neighborhood: string
+  buildingType: string
+  propertyClass: string
+  boroughConfidence: number
+  placeName: string
+  placeId: string
+  bin: string
+  bbl: string
+  block: string
+  lot: string
+  hpdSignal: string
+  acrisSignal: string
+  confidence: number
+  sourceTags: string[]
+}
+
+export interface CompanyProfile {
+  name: string
+  normalizedName: string
+  role: string
+  website: string
+  domain: string
+  confidence: number
+  description: string
+  searchQuery: string
+  matchStrength: CompanyMatchStrength
+  linkedInUrl: string
+  instagramUrl: string
+}
+
+export interface ContactRecord {
+  id: string
+  name: string
+  role: string
+  email: string
+  phone: string
+  website: string
+  linkedInUrl: string
+  instagramUrl: string
+  contactFormUrl: string
+  source: string
+  confidence: number
+  type: ContactType
+  verified: boolean
+  isPrimary: boolean
+}
+
+export interface EnrichmentFact {
+  id: string
+  field: string
+  value: string
+  source: string
+  confidence: number
+  note: string
+}
+
+export interface OutreachReadiness {
+  score: number
+  label: OutreachReadinessLabel
+  explanation: string
+  blockers: string[]
+}
+
+export interface ChannelDecision {
+  primary: OutreachChannel
+  reason: string
+  alternatives: OutreachChannel[]
+  autoSendEligible: boolean
+}
+
+export interface OutreachHistoryItem {
+  id: string
+  channel: OutreachChannel
+  status: OutreachStatus
+  recipient: string
+  recipientType: string
+  subject: string
+  body: string
+  pluginLine: string
+  callOpener: string
+  followUpNote: string
+  sentAt: string | null
+  createdAt: string
+  scheduledFor: string | null
+  messageId: string
+}
+
+export interface AutomationSummary {
+  companyMatchStrength: CompanyMatchStrength
+  enrichmentConfidence: number
+  autoSendEligible: boolean
+  autoSendReason: string
+  lastAutomationRunAt: string | null
+}
+
+export interface SentLogEntry {
+  id: string
+  leadId: string
+  channel: OutreachChannel
+  recipient: string
+  subject: string
+  sentAt: string | null
+  status: string
+}
+
 export interface OutreachDraft {
   subject: string
   introLine: string
@@ -249,6 +374,14 @@ export interface PermitLead extends PermitRecord {
   workflow: LeadWorkflowState
   lastScannedAt: string
   scannedCount: number
+  propertyProfile: PropertyProfile
+  companyProfile: CompanyProfile
+  contacts: ContactRecord[]
+  enrichmentFacts: EnrichmentFact[]
+  outreachReadiness: OutreachReadiness
+  channelDecision: ChannelDecision
+  outreachHistory: OutreachHistoryItem[]
+  automationSummary: AutomationSummary
 }
 
 export interface LeadFilters {
@@ -333,6 +466,7 @@ export interface PermitPulseStore {
   filters: LeadFilters
   profile: TenantProfile
   leads: Record<string, PermitLead>
+  sentLog: SentLogEntry[]
   selectedLeadId: string | null
   lastScanAt: string | null
 }

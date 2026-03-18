@@ -1,14 +1,23 @@
+import { OUTREACH_PLUGIN_LINES } from "@/features/permit-pulse/data/plugin-lines"
 import {
+  type AutomationSummary,
+  type ChannelDecision,
+  type CompanyProfile,
   type ContactabilityBreakdown,
+  type ContactRecord,
   type EnrichmentData,
+  type EnrichmentFact,
   type LeadActivity,
   type LeadActivityType,
   type LeadTier,
   type LeadWorkflowState,
   type NextActionRecommendation,
   type OutreachDraft,
+  type OutreachHistoryItem,
+  type OutreachReadiness,
   type PermitLead,
   type PermitRecord,
+  type PropertyProfile,
   type PriorityLabel,
   type ProjectTag,
   type ScoreBreakdown,
@@ -37,6 +46,10 @@ function clamp(value: number, min = 0, max = 100): number {
 
 function uniq<T>(values: T[]): T[] {
   return Array.from(new Set(values))
+}
+
+function hashValue(value: string): number {
+  return Array.from(value).reduce((total, character) => total + character.charCodeAt(0), 0)
 }
 
 function includesAny(text: string, entries: string[]): string[] {
@@ -102,6 +115,82 @@ export function createEmptyOutreachDraft(): OutreachDraft {
     followUpNote: "",
     updatedAt: null,
   }
+}
+
+export function createEmptyPropertyProfile(): PropertyProfile {
+  return {
+    normalizedAddress: "",
+    neighborhood: "",
+    buildingType: "",
+    propertyClass: "",
+    boroughConfidence: 0,
+    placeName: "",
+    placeId: "",
+    bin: "",
+    bbl: "",
+    block: "",
+    lot: "",
+    hpdSignal: "",
+    acrisSignal: "",
+    confidence: 0,
+    sourceTags: [],
+  }
+}
+
+export function createEmptyCompanyProfile(): CompanyProfile {
+  return {
+    name: "",
+    normalizedName: "",
+    role: "",
+    website: "",
+    domain: "",
+    confidence: 0,
+    description: "",
+    searchQuery: "",
+    matchStrength: "weak",
+    linkedInUrl: "",
+    instagramUrl: "",
+  }
+}
+
+export function createEmptyOutreachReadiness(): OutreachReadiness {
+  return {
+    score: 0,
+    label: "Needs Review",
+    explanation: "Automation has not evaluated this lead yet.",
+    blockers: ["Automation not yet run"],
+  }
+}
+
+export function createEmptyChannelDecision(): ChannelDecision {
+  return {
+    primary: "email",
+    reason: "No remote automation signal yet.",
+    alternatives: [],
+    autoSendEligible: false,
+  }
+}
+
+export function createEmptyAutomationSummary(): AutomationSummary {
+  return {
+    companyMatchStrength: "weak",
+    enrichmentConfidence: 0,
+    autoSendEligible: false,
+    autoSendReason: "Automation has not evaluated this lead yet.",
+    lastAutomationRunAt: null,
+  }
+}
+
+export function createEmptyContactRecords(): ContactRecord[] {
+  return []
+}
+
+export function createEmptyEnrichmentFacts(): EnrichmentFact[] {
+  return []
+}
+
+export function createEmptyOutreachHistory(): OutreachHistoryItem[] {
+  return []
 }
 
 export function createDefaultWorkflow(): LeadWorkflowState {
@@ -675,6 +764,39 @@ export function refreshDerivedLead(lead: PermitLead, tenant: TenantProfile): Per
     lead.workflow,
     priorityLabel,
   )
+  const hasEmail = Boolean(lead.enrichment.directEmail || lead.enrichment.genericEmail || lead.contacts.some((contact) => contact.email))
+  const hasPhone = Boolean(lead.enrichment.phone || lead.contacts.some((contact) => contact.phone))
+  const hasForm = Boolean(lead.enrichment.contactFormUrl || lead.contacts.some((contact) => contact.contactFormUrl))
+  const readinessScore = clamp(Math.round((scoreBreakdown.total * 0.48) + (contactability.total * 0.4) + ((lead.companyProfile.confidence || 0) * 0.12)))
+  const outreachReadiness: OutreachReadiness = {
+    score: readinessScore,
+    label: readinessScore >= 75 ? "Ready" : readinessScore >= 55 ? "Almost Ready" : readinessScore >= 35 ? "Needs Review" : "Blocked",
+    explanation:
+      readinessScore >= 75
+        ? "Enough context and contact data exist to move directly into outreach."
+        : readinessScore >= 55
+          ? "Close to ready, but still worth one more research pass."
+          : readinessScore >= 35
+            ? "The lead has promise, but the contact layer is still thin."
+            : "The lead still needs core research before outreach should move.",
+    blockers: [
+      !hasEmail && !hasPhone && !hasForm ? "No contact route saved" : "",
+      lead.companyProfile.matchStrength === "weak" ? "Company match is still weak" : "",
+    ].filter(Boolean),
+  }
+  const channelDecision: ChannelDecision = {
+    primary: hasEmail ? "email" : hasPhone ? "phone" : hasForm ? "form" : "linkedin",
+    reason:
+      hasEmail
+        ? "Email is available, so it remains the cleanest first channel."
+        : hasPhone
+          ? "Phone is available before email, so contractor-to-contractor outreach should move first."
+          : hasForm
+            ? "Contact form is the only reliable route saved right now."
+            : "No email was found yet, so LinkedIn remains a research draft rather than an auto-send path.",
+    alternatives: [hasPhone ? "phone" : null, hasForm ? "form" : null].filter(Boolean) as ChannelDecision["alternatives"],
+    autoSendEligible: hasEmail && scoreBreakdown.total >= 55 && contactability.total >= 55 && lead.companyProfile.matchStrength !== "weak",
+  }
 
   return {
     ...lead,
@@ -687,6 +809,17 @@ export function refreshDerivedLead(lead: PermitLead, tenant: TenantProfile): Per
     nextAction,
     projectTags: getProjectTags(lead, scoreBreakdown),
     humanSummary: buildHumanSummary(lead, scoreBreakdown, contactability, nextAction),
+    outreachReadiness,
+    channelDecision,
+    automationSummary: {
+      ...lead.automationSummary,
+      companyMatchStrength: lead.companyProfile.matchStrength,
+      enrichmentConfidence: Math.round(((lead.companyProfile.confidence || 0) * 0.45) + ((lead.propertyProfile.confidence || 0) * 0.25) + (outreachReadiness.score * 0.3)),
+      autoSendEligible: channelDecision.autoSendEligible,
+      autoSendReason: channelDecision.autoSendEligible
+        ? "Lead passes local automation heuristics."
+        : "Lead still needs stronger contactability or company confidence.",
+    },
   }
 }
 
@@ -699,6 +832,8 @@ export function buildLeadFromPermit(
   const enrichment = existingLead?.enrichment ?? createEmptyEnrichment()
   const outreachDraft = existingLead?.outreachDraft ?? createEmptyOutreachDraft()
   const workflow = existingLead?.workflow ?? createDefaultWorkflow()
+  const propertyProfile = existingLead?.propertyProfile ?? createEmptyPropertyProfile()
+  const companyProfile = existingLead?.companyProfile ?? createEmptyCompanyProfile()
   const baseLead: PermitLead = {
     ...permit,
     id:
@@ -738,6 +873,14 @@ export function buildLeadFromPermit(
     workflow,
     lastScannedAt: scannedAt,
     scannedCount: (existingLead?.scannedCount ?? 0) + 1,
+    propertyProfile,
+    companyProfile,
+    contacts: existingLead?.contacts ?? createEmptyContactRecords(),
+    enrichmentFacts: existingLead?.enrichmentFacts ?? createEmptyEnrichmentFacts(),
+    outreachReadiness: existingLead?.outreachReadiness ?? createEmptyOutreachReadiness(),
+    channelDecision: existingLead?.channelDecision ?? createEmptyChannelDecision(),
+    outreachHistory: existingLead?.outreachHistory ?? createEmptyOutreachHistory(),
+    automationSummary: existingLead?.automationSummary ?? createEmptyAutomationSummary(),
   }
 
   const derivedLead = refreshDerivedLead(baseLead, tenant)
@@ -780,20 +923,24 @@ export function generateDraftFromLead(lead: PermitLead): OutreachDraft {
   const projectPhrase = getPrimaryProjectPhrase(lead.projectTags)
   const target = lead.enrichment.contactPersonName || lead.owner_business_name || getApplicantDisplay(lead)
   const introTarget = target === "—" ? "your team" : target
-  const subject = `${address} permit - ${projectPhrase}`
-  const introLine = `Saw the DOB permit for ${address} and wanted to reach out while the job is still taking shape.`
+  const pluginLine = OUTREACH_PLUGIN_LINES[hashValue(lead.id) % OUTREACH_PLUGIN_LINES.length]
+  const subject = `${address}, glass scope`
+  const introLine = `I saw the DOB permit at ${address}, and the scope looks like a possible fit for ${projectPhrase}.`
   const shortEmail = [
     `Hi ${introTarget},`,
     "",
-    `I came across the permit at ${address}. The scope reads like a real fit for ${projectPhrase}, and MetroGlassPro handles shower glass, mirrors, storefronts, and interior glazing work across Manhattan, Brooklyn, and Queens.`,
+    `I came across the permit at ${address}. The scope reads like a real fit for ${projectPhrase}. MetroGlassPro handles shower glass, mirrors, storefronts, and interior glazing work across Manhattan, Brooklyn, and Queens.`,
     "",
-    "If the glass package is still open, I can turn around pricing quickly and keep coordination simple on the field side.",
+    pluginLine,
     "",
-    "Best,",
-    "MetroGlassPro",
+    "If the glass package is still open, would it be useful if I sent over pricing or a quick takeoff?",
+    "",
+    "Donald",
+    "MetroGlass Pro",
+    "332 999 3846",
   ].join("\n")
-  const callOpener = `Calling because I saw the permit at ${address} and wanted to ask who is handling the ${projectPhrase} on that job.`
-  const followUpNote = `Circling back on the ${address} permit. If the ${projectPhrase} is still open, MetroGlassPro can price it quickly.`
+  const callOpener = `This is Donald from MetroGlass Pro. I saw the permit at ${address}, and wanted to ask who is handling the ${projectPhrase} on that job.`
+  const followUpNote = `Following up on the permit at ${address}. If the ${projectPhrase} is still open, I can send over a quick number.`
 
   return {
     subject,

@@ -16,6 +16,7 @@ import { LeadList } from "@/features/permit-pulse/components/lead-list"
 import { LoadingSkeleton } from "@/features/permit-pulse/components/loading-skeleton"
 import { PageHeader } from "@/features/permit-pulse/components/page-header"
 import { ProfileSettingsView } from "@/features/permit-pulse/components/profile-settings-view"
+import { SentLogView } from "@/features/permit-pulse/components/sent-log-view"
 import { usePermitPulse } from "@/features/permit-pulse/hooks/use-permit-pulse"
 import type { LeadStatus, PermitLead } from "@/types/permit-pulse"
 
@@ -122,6 +123,7 @@ function WorkspacePane({
 
 export default function App() {
   const {
+    allLeads,
     activeEnrichmentQueueId,
     activeOutreachQueueId,
     activeViewId,
@@ -142,6 +144,7 @@ export default function App() {
     scannerLeads,
     scanLeads,
     section,
+    sentLog,
     selectedLead,
     setActiveViewId,
     setEnrichmentQueueId,
@@ -310,6 +313,8 @@ export default function App() {
         />
       </div>
     )
+  } else if (section === "sent-log") {
+    content = <SentLogView entries={sentLog} leads={allLeads} onOpenLead={openLeadInWorkspace} />
   } else {
     content = (
       <ProfileSettingsView profile={profile} onReset={resetProfile} onUpdate={updateProfile} />

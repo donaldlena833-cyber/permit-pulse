@@ -10,6 +10,7 @@ interface SectionCardProps {
   children: ReactNode
   className?: string
   contentClassName?: string
+  onClick?: () => void
 }
 
 export function SectionCard({
@@ -19,6 +20,7 @@ export function SectionCard({
   children,
   className,
   contentClassName,
+  onClick,
 }: SectionCardProps) {
   return (
     <Card
@@ -26,6 +28,7 @@ export function SectionCard({
         "rounded-[28px] border border-navy-200/70 bg-white/75 shadow-[0_24px_80px_rgba(70,55,37,0.08)] backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90",
         className,
       )}
+      onClick={onClick}
     >
       <CardHeader className="flex flex-row items-start justify-between gap-4 pb-4">
         <div className="space-y-1">

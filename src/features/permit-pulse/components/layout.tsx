@@ -5,6 +5,7 @@ import {
   ListFilter,
   MoonStar,
   SearchCheck,
+  Send,
   Settings2,
   Sparkles,
   SunMedium,
@@ -28,6 +29,7 @@ const NAV_ITEMS: Array<{
   { id: "workspace", label: "Lead Workspace", description: "Active review surface", icon: Compass },
   { id: "enrichment", label: "Enrichment Queue", description: "Research lane", icon: ListFilter },
   { id: "outreach", label: "Outreach Queue", description: "Action lane", icon: Sparkles },
+  { id: "sent-log", label: "Sent Log", description: "Delivery history", icon: Send },
   { id: "profile", label: "Profile", description: "ICP and scoring", icon: Settings2 },
 ]
 

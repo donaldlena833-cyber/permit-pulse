@@ -22,3 +22,12 @@ id = "6bd0ca87c13d448c80381159511f8e40"
 # npx wrangler secret put RESEND_API_KEY          — for the digest notification email
 # npx wrangler secret put GOOGLE_SERVICE_ACCOUNT  — JSON key for Gmail API (domain-wide delegation)
 # npx wrangler secret put APOLLO_API_KEY          — for contact enrichment (free tier: 10K/mo)
+# npx wrangler secret put BRAVE_API_KEY           — company resolution search
+# npx wrangler secret put GOOGLE_MAPS_API_KEY     — geocoding and place matching
+# npx wrangler secret put ZEROBOUNCE_API_KEY      — email verification before send
+# npx wrangler secret put FIRECRAWL_API_KEY       — scrape high-value websites
+# npx wrangler secret put GMAIL_CLIENT_ID         — Gmail OAuth client
+# npx wrangler secret put GMAIL_CLIENT_SECRET     — Gmail OAuth client secret
+# npx wrangler secret put GMAIL_REFRESH_TOKEN     — Gmail OAuth refresh token
+# npx wrangler secret put SUPABASE_URL            — Supabase project URL
+# npx wrangler secret put SUPABASE_ANON_KEY       — Supabase anon key for REST access
