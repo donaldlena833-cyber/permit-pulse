@@ -1877,8 +1877,8 @@ function mD(a,d,i){
   var bodyId='body-'+sid;
   // Multi-channel sections (LinkedIn + phone)
   var channels='';
-  if(d.linkedinMessage)channels+='<div class="fd" style="margin-top:4px"><label>LinkedIn message <span style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0" onclick="navigator.clipboard.writeText(this.parentElement.nextElementSibling.value);toast(\'Copied\',\'ok\')">[copy]</span></label><textarea class="lm" style="min-height:36px;max-height:36px;overflow:hidden;font-size:11px">'+X(d.linkedinMessage)+'</textarea></div>';
-  if(d.phoneScript)channels+='<div class="fd"><label>Phone script <span style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0" onclick="navigator.clipboard.writeText(this.parentElement.nextElementSibling.value);toast(\'Copied\',\'ok\')">[copy]</span></label><textarea class="ps2" style="min-height:36px;max-height:36px;overflow:hidden;font-size:11px">'+X(d.phoneScript)+'</textarea></div>';
+  if(d.linkedinMessage)channels+='<div class="fd" style="margin-top:4px"><label>LinkedIn message <span class="cpy" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[copy]</span></label><textarea class="lm" style="min-height:36px;max-height:36px;overflow:hidden;font-size:11px">'+X(d.linkedinMessage)+'</textarea></div>';
+  if(d.phoneScript)channels+='<div class="fd"><label>Phone script <span class="cpy2" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[copy]</span></label><textarea class="ps2" style="min-height:36px;max-height:36px;overflow:hidden;font-size:11px">'+X(d.phoneScript)+'</textarea></div>';
   v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+tb+fb+'</div><div class="nm"></div><div class="mt"></div>'+projLine+reasonsHtml+'</div><div class="pl">'+(d.score||0)+'</div></div>'+(en?'<div class="en">'+en+'</div>':'')+'<div class="lk">'+(ny?'<a href="'+ny+'" target="_blank">NYSED</a>':'')+(mapsUrl?'<a href="'+mapsUrl+'" target="_blank">Maps</a>':'')+'<a class="le" target="_blank">Email</a><a class="ll" target="_blank">LinkedIn</a><a class="lf" target="_blank">Firm</a></div><div class="fd"><label>Email</label><input class="fe" placeholder="architect@firm.com"></div><div class="fd"><label>Subject</label><input class="fs2"></div><div class="fd"><label>Body <span class="tog" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[expand]</span></label><textarea class="fb" style="min-height:48px;max-height:48px;overflow:hidden"></textarea></div>'+channels+'<div class="ac"><button class="btn bp ja">Send email</button><button class="btn jv">Save</button><button class="btn bd jk">Skip</button></div>';
   v.querySelector('.nm').textContent=d.architectName||'Unknown';
   v.querySelector('.mt').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'');
@@ -1898,6 +1898,9 @@ function mD(a,d,i){
     tog.textContent=expanded?'[expand]':'[collapse]';
   };
   v.querySelector('.ja').onclick=function(){doA(sid,v)};v.querySelector('.jv').onclick=function(){doV(sid,v)};v.querySelector('.jk').onclick=function(){doK(sid)};
+  // Copy buttons for LinkedIn/phone
+  var cpyLi=v.querySelector('.cpy');if(cpyLi){cpyLi.onclick=function(){var t=v.querySelector('.lm');if(t){navigator.clipboard.writeText(t.value);toast('Copied','ok')}}}
+  var cpyPh=v.querySelector('.cpy2');if(cpyPh){cpyPh.onclick=function(){var t=v.querySelector('.ps2');if(t){navigator.clipboard.writeText(t.value);toast('Copied','ok')}}}
   a.appendChild(v)
 }
 function rPi(a){
@@ -1949,7 +1952,7 @@ async function doSt(id,s,dv,n,or,qs){try{var b={pipelineStatus:s};if(dv)b.dealVa
 // Pre-drafted reply template for "already have a glass sub"
 function getCompetitiveBidReply(name){
   var fn=(name||'').split(' ')[0];
-  return'Hi '+fn+',\\n\\nTotally understand. If it\\'s ever useful to have a second option or competitive bid on a future project, we\\'d be happy to provide one. We offer free 3D visualization renders to help clients decide on glass configurations — might be a good complement to what you already have.\\n\\nEither way, keeping your info on file. Good luck with the project.\\n\\nBest,\\nDonald';
+  return 'Hi '+fn+',\n\nTotally understand. If it is ever useful to have a second option or competitive bid on a future project, we would be happy to provide one. We offer free 3D visualization renders to help clients decide on glass configurations — might be a good complement to what you already have.\n\nEither way, keeping your info on file. Good luck with the project.\n\nBest,\nDonald';
 }
 async function doBatch(){var n=D.filter(function(d){return d.status==='pending'&&d.recipientEmail&&d.recipientEmail.includes('@')}).length;if(!confirm('Send '+n+' emails?'))return;toast('Sending...','');try{var r=await(await fetch(A+'/batch-send',{method:'POST'})).json();toast(r.sent+' sent'+(r.failed?' ('+r.failed+' failed)':''),'ok');ld()}catch(e){toast(e.message,'err')}}
 async function doScan(){document.getElementById('app').innerHTML='<div class="ld">Scanning...</div>';try{var r=await(await fetch(A+'/scan')).json();toast(r.picks+' picks from '+r.scanned+' filings','ok');ld()}catch(e){toast('Failed','err')}}
