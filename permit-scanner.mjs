@@ -439,18 +439,18 @@ function draftOutreachEmail(architect) {
     renderOffer = 'glass partitions, shower enclosures, and mirror walls with finish options your client can review';
   }
 
-  const subject = `Free glass visualization renders — ${addr}`;
+  const subject = `Free glass visualization renders for ${addr}`;
 
   const body = `Hi ${firstName},
 
-I'm Donald with MetroGlass Pro. If glass or mirrors are part of the scope on ${projectContext}, we offer something most glass companies don't — free 3D visualization renders.
+I'm Donald with MetroGlass Pro. If glass or mirrors are part of the scope on ${projectContext}, we offer something most glass companies don't. Free 3D visualization renders.
 
 Send us the floor plans and we'll create renders showing ${renderOffer}. It helps your client decide faster and makes the approval process smoother.
 
 A few other things we do differently:
-- 5-7 business day install from measurement (most of our competitors are 2+ weeks)
-- Full 1-year warranty on materials and workmanship
-- We coordinate directly with building management on COIs and access
+We install in 5 to 7 business days from measurement, which is faster than most competitors.
+Full 1 year warranty on materials and workmanship.
+We coordinate directly with building management on COIs and access.
 
 Our recent work: metroglasspro.com
 
@@ -463,10 +463,10 @@ MetroGlass Pro
 operations@metroglasspro.com`;
 
   // LinkedIn connect message (short, under 300 chars)
-  const linkedin = `Hi ${firstName} — I'm Donald with MetroGlass Pro, we do custom glass work for residential renovations in NYC. If glass is part of the scope on your ${neighborhood} project, we offer free 3D renders to help your client visualize. Happy to connect.`;
+  const linkedin = `Hi ${firstName}, I'm Donald with MetroGlass Pro. We do custom glass work for residential renovations in NYC. If glass is part of the scope on your ${neighborhood} project, we offer free 3D renders to help your client visualize. Happy to connect.`;
 
   // Phone script (for if Apollo finds a number)
-  const phone = `Hi ${firstName}, this is Donald from MetroGlass Pro. I'm reaching out because I saw you have a project at ${addr} — we do custom frameless glass work for residential renovations and I wanted to see if glass or mirrors are part of the scope. We offer free 3D visualization renders if you send us the floor plans. Can I send you some info?`;
+  const phone = `Hi ${firstName}, this is Donald from MetroGlass Pro. I'm reaching out because I saw you have a project at ${addr}. We do custom frameless glass work for residential renovations and I wanted to see if glass or mirrors are part of the scope. We offer free 3D visualization renders if you send us the floor plans. Can I send you some info?`;
 
   return { subject, body, linkedin, phone };
 }
@@ -476,12 +476,12 @@ function draftGCOutreachEmail(gcName, gcFirstName, project) {
   const addr = `${project.house_no} ${titleCase(cleanStreetName(project.street_name).toLowerCase())}`;
   const neighborhood = titleCase((project.nta || project.borough || '').toLowerCase());
 
-  const subject = `Glass sub for ${addr} — competitive pricing`;
+  const subject = `Glass sub for ${addr}, competitive pricing`;
   const body = `Hi ${gcFirstName},
 
-I'm Donald with MetroGlass Pro. We sub glass work for residential renovations in NYC — frameless shower doors, mirrors, glass partitions.
+I'm Donald with MetroGlass Pro. We sub glass work for residential renovations in NYC. Frameless shower doors, mirrors, glass partitions.
 
-If you need a glass sub for ${addr}, happy to provide a competitive bid. We do 5-7 business day turnaround from measurement, handle our own COIs, and warranty everything for a year.
+If you need a glass sub for ${addr}, happy to provide a competitive bid. We do 5 to 7 business day turnaround from measurement, handle our own COIs, and warranty everything for a year.
 
 We keep pricing straightforward and work well with GC schedules. Recent work: metroglasspro.com
 
@@ -1082,14 +1082,14 @@ function draftFollowUpEmail(draft, followUpNumber) {
   const addr = draft.projectAddress || '';
 
   if (followUpNumber === 1) {
-    // Follow-up 1: Offer something concrete — a photo or case study
+    // Follow-up 1: Offer something concrete, a photo or case study
     return {
       subject: `Re: ${draft.subject}`,
       body: `Hi ${firstName},
 
-Quick follow-up — I put together some photos of recent glass work we did on a similar project in case it's relevant to ${addr}. Happy to send them over or just answer any questions about scope/pricing.
+Quick follow-up. I put together some photos of recent glass work we did on a similar project in case it's relevant to ${addr}. Happy to send them over or just answer any questions about scope or pricing.
 
-No pressure at all — just wanted to make sure the offer's on the table.
+No pressure at all, just wanted to make sure the offer's on the table.
 
 Best,
 Donald Lena
@@ -1103,7 +1103,7 @@ MetroGlass Pro
     subject: `Re: ${draft.subject}`,
     body: `Hi ${firstName},
 
-Just a final note — if glass or mirrors come up on this project or any future ones, we'd be glad to help. Our site has recent work: metroglasspro.com
+Just a final note. If glass or mirrors come up on this project or any future ones, we'd be glad to help. Our site has recent work: metroglasspro.com
 
 Either way, best of luck with ${addr}.
 
@@ -1313,7 +1313,7 @@ function draftReEngagementEmail(architect, previousContact) {
   const prevAddr = previousContact.triggerAddress || 'a previous project';
   const monthsAgo = Math.round((Date.now() - new Date(previousContact.pickedDate).getTime()) / (30 * 86400000));
 
-  const subject = `Great to see your new project at ${addr} — MetroGlass Pro`;
+  const subject = `Great to see your new project at ${addr}`;
   const body = `Hi ${firstName},
 
 We reached out about ${monthsAgo} months ago regarding ${prevAddr}, and I wanted to reconnect now that I see your new filing at ${addr} in ${neighborhood}.
@@ -1952,7 +1952,7 @@ async function doSt(id,s,dv,n,or,qs){try{var b={pipelineStatus:s};if(dv)b.dealVa
 // Pre-drafted reply template for "already have a glass sub"
 function getCompetitiveBidReply(name){
   var fn=(name||'').split(' ')[0];
-  return 'Hi '+fn+',\\n\\nTotally understand. If it is ever useful to have a second option or competitive bid on a future project, we would be happy to provide one. We offer free 3D visualization renders to help clients decide on glass configurations — might be a good complement to what you already have.\\n\\nEither way, keeping your info on file. Good luck with the project.\\n\\nBest,\\nDonald';
+  return 'Hi '+fn+',\\n\\nTotally understand. If it is ever useful to have a second option or competitive bid on a future project, we would be happy to provide one. We offer free 3D visualization renders to help clients decide on glass configurations. Might be a good complement to what you already have.\\n\\nEither way, keeping your info on file. Good luck with the project.\\n\\nBest,\\nDonald';
 }
 async function doBatch(){var n=D.filter(function(d){return d.status==='pending'&&d.recipientEmail&&d.recipientEmail.includes('@')}).length;if(!confirm('Send '+n+' emails?'))return;toast('Sending...','');try{var r=await(await fetch(A+'/batch-send',{method:'POST'})).json();toast(r.sent+' sent'+(r.failed?' ('+r.failed+' failed)':''),'ok');ld()}catch(e){toast(e.message,'err')}}
 async function doScan(){document.getElementById('app').innerHTML='<div class="ld">Scanning...</div>';try{var r=await(await fetch(A+'/scan')).json();toast(r.picks+' picks from '+r.scanned+' filings','ok');ld()}catch(e){toast('Failed','err')}}
