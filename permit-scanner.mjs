@@ -1728,7 +1728,7 @@ function getDashboardHTML() {
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0F0E0C">
 <title>PermitPulse</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1952,7 +1952,7 @@ async function doSt(id,s,dv,n,or,qs){try{var b={pipelineStatus:s};if(dv)b.dealVa
 // Pre-drafted reply template for "already have a glass sub"
 function getCompetitiveBidReply(name){
   var fn=(name||'').split(' ')[0];
-  return 'Hi '+fn+',\n\nTotally understand. If it is ever useful to have a second option or competitive bid on a future project, we would be happy to provide one. We offer free 3D visualization renders to help clients decide on glass configurations — might be a good complement to what you already have.\n\nEither way, keeping your info on file. Good luck with the project.\n\nBest,\nDonald';
+  return 'Hi '+fn+',\\n\\nTotally understand. If it is ever useful to have a second option or competitive bid on a future project, we would be happy to provide one. We offer free 3D visualization renders to help clients decide on glass configurations — might be a good complement to what you already have.\\n\\nEither way, keeping your info on file. Good luck with the project.\\n\\nBest,\\nDonald';
 }
 async function doBatch(){var n=D.filter(function(d){return d.status==='pending'&&d.recipientEmail&&d.recipientEmail.includes('@')}).length;if(!confirm('Send '+n+' emails?'))return;toast('Sending...','');try{var r=await(await fetch(A+'/batch-send',{method:'POST'})).json();toast(r.sent+' sent'+(r.failed?' ('+r.failed+' failed)':''),'ok');ld()}catch(e){toast(e.message,'err')}}
 async function doScan(){document.getElementById('app').innerHTML='<div class="ld">Scanning...</div>';try{var r=await(await fetch(A+'/scan')).json();toast(r.picks+' picks from '+r.scanned+' filings','ok');ld()}catch(e){toast('Failed','err')}}
