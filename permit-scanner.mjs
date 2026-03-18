@@ -1671,20 +1671,33 @@ export default {
       return jsonRes(all);
     }
 
-    // Apollo test — test enrichment on a known architect
+    // Apollo test — test enrichment with raw response logging
     if (url.pathname === '/test-apollo' && request.method === 'GET') {
       if (!env.APOLLO_API_KEY) return jsonRes({ error: 'APOLLO_API_KEY not set' }, 400);
-      const testArchitect = {
-        firstName: 'Peter', lastName: 'Pennoyer', name: 'Peter Pennoyer',
-        raLicense: '018386',
-        filings: [{ filing_representative_business_name: '', applicant_business_name: 'Peter Pennoyer Architects' }],
-      };
+      const debug = {};
+      // Test 1: People Match
       try {
-        const result = await enrichWithApollo(testArchitect, env.APOLLO_API_KEY);
-        return jsonRes({ success: true, testName: 'Peter Pennoyer', result, apiKeySet: true });
-      } catch (err) {
-        return jsonRes({ error: err.message, apiKeySet: true });
-      }
+        const res = await fetch('https://api.apollo.io/api/v1/people/match', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': env.APOLLO_API_KEY },
+          body: JSON.stringify({ first_name: 'Peter', last_name: 'Pennoyer', organization_name: 'Peter Pennoyer Architects', person_locations: ['New York, New York, United States'], reveal_personal_emails: true }),
+        });
+        debug.matchStatus = res.status;
+        debug.matchBody = await res.text();
+        try { debug.matchParsed = JSON.parse(debug.matchBody); } catch(e) {}
+      } catch(e) { debug.matchError = e.message; }
+      // Test 2: People Search
+      try {
+        const res = await fetch('https://api.apollo.io/api/v1/mixed_people/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': env.APOLLO_API_KEY },
+          body: JSON.stringify({ q_keywords: 'Peter Pennoyer architect', person_locations: ['New York, New York, United States'], per_page: 1 }),
+        });
+        debug.searchStatus = res.status;
+        debug.searchBody = await res.text();
+        try { debug.searchParsed = JSON.parse(debug.searchBody); } catch(e) {}
+      } catch(e) { debug.searchError = e.message; }
+      return jsonRes({ apiKeySet: true, apiKeyPrefix: env.APOLLO_API_KEY.slice(0, 8) + '...', debug });
     }
 
     // Gmail test — sends a test email to yourself to verify the service account works
