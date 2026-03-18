@@ -101,9 +101,9 @@ async function fetchRecentFilings(daysBack = 7) {
   const where = [
     `(applicant_professional_title='RA' OR applicant_professional_title='PE')`,
     `filing_date>'${dateStr}'`,
-    `job_type='Alteration'`,
+    `(job_type='Alteration' OR job_type='New Building')`,
     `general_construction_work_type_='1'`,
-    `(borough='MANHATTAN' OR borough='BROOKLYN' OR borough='QUEENS' OR borough='BRONX')`,
+    `(borough='MANHATTAN' OR borough='BROOKLYN' OR borough='QUEENS' OR borough='BRONX' OR borough='STATEN ISLAND')`,
   ].join(' AND ');
 
   const url = `${FILINGS_API}?$where=${encodeURIComponent(where)}&$order=filing_date DESC&$limit=500`;
@@ -251,10 +251,10 @@ function scoreCurrentFiling(filing) {
   const cost = parseFloat(filing.initial_cost) || 0;
   if (cost >= PROFILE.highEndSignals.sweetSpotMin && cost <= PROFILE.highEndSignals.sweetSpotMax) {
     score += s.costSweetSpot;
-    reasons.push(`Sweet spot budget: $${Math.round(cost).toLocaleString()}`);
+    reasons.push(`Sweet spot: $${Math.round(cost).toLocaleString()}`);
   } else if (cost > PROFILE.highEndSignals.sweetSpotMax) {
     score += s.costMega;
-    reasons.push(`Mega project: $${Math.round(cost).toLocaleString()}`);
+    reasons.push(`Mega: $${Math.round(cost).toLocaleString()}`);
   } else if (cost >= PROFILE.highEndSignals.minCost) {
     score += s.costAboveMin;
   }
@@ -271,11 +271,36 @@ function scoreCurrentFiling(filing) {
   const floor = (filing.work_on_floor || '').toLowerCase();
   if (units > 0 && units <= PROFILE.highEndSignals.maxDwellingUnits) {
     score += s.residentialBonus;
-    reasons.push('Residential building');
+    reasons.push('Residential');
   }
   if (floor.includes('penthouse') || floor.includes('ph')) {
     score += 5;
-    reasons.push('Penthouse unit');
+    reasons.push('Penthouse');
+  }
+
+  // Luxury building type indicators
+  const bldgType = (filing.building_type || '').toLowerCase();
+  if (bldgType.includes('condo') || bldgType.includes('co-op') || bldgType.includes('coop')) {
+    score += 4;
+    reasons.push('Condo/Co-op');
+  }
+
+  // Bathroom/kitchen work signals (glass-heavy scopes)
+  const workDesc = (filing.work_on_floor || '').toLowerCase();
+  if (workDesc.includes('bath') || workDesc.includes('shower') || workDesc.includes('master')) {
+    score += 6;
+    reasons.push('Bath/shower scope');
+  }
+
+  // Recency bonus — hotter leads filed in last 3 days
+  if (filing.filing_date) {
+    const filedDaysAgo = (Date.now() - new Date(filing.filing_date).getTime()) / 86400000;
+    if (filedDaysAgo <= 3) {
+      score += 5;
+      reasons.push('Filed ' + Math.round(filedDaysAgo) + 'd ago');
+    } else if (filedDaysAgo <= 7) {
+      score += 2;
+    }
   }
 
   return { score, reasons };
@@ -378,53 +403,67 @@ class PickTracker {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function draftOutreachEmail(architect) {
-  const name = titleCase(architect.name);
   const firstName = titleCase(architect.firstName);
   const project = architect.triggerProject;
   const addr = `${project.house_no} ${titleCase(cleanStreetName(project.street_name).toLowerCase())}`;
   const neighborhood = titleCase((project.nta || project.borough || '').toLowerCase());
-  const cost = formatCost(project.initial_cost);
-  const floor = project.work_on_floor || '';
+  const floor = (project.work_on_floor || '').toLowerCase();
+  const cost = parseFloat(project.initial_cost) || 0;
+  const stories = parseInt(project.existing_stories) || 0;
+  const units = parseInt(project.existing_dwelling_units) || 0;
 
-  // Pick the right angle based on the project
-  const isPenthouse = floor.toLowerCase().includes('penthouse') || floor.toLowerCase().includes('ph');
-  const isHighRise = (parseInt(project.existing_stories) || 0) >= 10;
-  const isLuxury = (parseFloat(project.initial_cost) || 0) >= 200000;
+  // Detect project type for tailored messaging
+  const isPenthouse = floor.includes('penthouse') || floor.includes('ph');
+  const isHighRiseCoop = stories >= 10 && units > 0;
+  const isTownhouse = stories <= 4 && stories >= 2 && units <= 4;
+  const isBathScope = floor.includes('bath') || floor.includes('shower') || floor.includes('master');
+  const isMega = cost >= 500000;
+  const firmName = architect.enrichment?.organization;
 
-  let projectRef = '';
+  // Build the core value proposition based on what THEY need, not what we do
+  let hook = '';
+  let valueAdd = '';
+  let subject = '';
+
   if (isPenthouse) {
-    projectRef = `your penthouse project at ${addr}`;
-  } else if (isHighRise && isLuxury) {
-    projectRef = `your renovation at ${addr} — a beautiful ${project.existing_stories}-story building`;
+    subject = `Penthouse glass work in ${neighborhood}`;
+    hook = `I work with architects on penthouse renovations in ${neighborhood} and wanted to connect in case custom glass is part of the scope at ${addr}.`;
+    valueAdd = `For penthouses we typically handle oversized frameless shower enclosures, custom mirror walls, and glass partitions — all field-measured to account for the tolerances you get in high-rise construction.`;
+  } else if (isHighRiseCoop) {
+    subject = `Glass sub for your ${neighborhood} co-op project`;
+    hook = `We specialize in co-op and condo renovation glass work in ${neighborhood}, and I wanted to introduce MetroGlass Pro for your project at ${addr}.`;
+    valueAdd = `We handle building management coordination, COI requirements, and freight elevator scheduling — the logistical side that saves you headaches on co-op jobs.`;
+  } else if (isTownhouse) {
+    subject = `Custom glass for ${addr}`;
+    hook = `I noticed your renovation at ${addr} and thought I'd reach out. We do a lot of townhouse glass work in ${neighborhood} — frameless showers, custom mirrors, glass partitions.`;
+    valueAdd = `Townhouse jobs give us more room for custom design work. Happy to share photos of recent installations with similar scope.`;
+  } else if (isBathScope) {
+    subject = `Frameless shower enclosures — ${neighborhood}`;
+    hook = `We handle custom frameless shower enclosures for residential renovations in ${neighborhood}, and I wanted to introduce MetroGlass Pro for your project at ${addr}.`;
+    valueAdd = `We work directly with the architect on hardware finishes, glass thickness, and configurations — and we field-measure after tile to get it right the first time.`;
+  } else if (isMega) {
+    subject = `Glass + mirrors for your ${neighborhood} project`;
+    hook = `I wanted to connect about your renovation at ${addr}. We work with architects on high-end residential glass installations across ${neighborhood}.`;
+    valueAdd = `For larger-scope projects we can handle frameless showers, mirror walls, glass partitions, and wine room enclosures — all custom to spec.`;
   } else {
-    projectRef = `your project at ${addr} in ${neighborhood}`;
+    subject = `${firstName} — MetroGlass Pro intro`;
+    hook = `I'm Donald with MetroGlass Pro. We do custom frameless glass work for residential renovations in ${neighborhood}, and I wanted to connect about your project at ${addr}.`;
+    valueAdd = `We specialize in shower enclosures, mirrors, and glass partitions — and we work directly with architects to match hardware and specifications to the design intent.`;
   }
-
-  let credibility = '';
-  if (architect.historyStats.manhattanFilings >= 5) {
-    credibility = `We work with several architects across Manhattan and understand co-op/condo coordination, building access, and COI requirements well.`;
-  } else {
-    credibility = `We specialize in custom frameless shower enclosures and mirrors for Manhattan apartments and work closely with architects to match hardware finishes and glass specifications to the design intent.`;
-  }
-
-  const subject = `Custom glass for ${addr} — MetroGlass Pro`;
 
   const body = `Hi ${firstName},
 
-I came across ${projectRef} and wanted to introduce MetroGlass Pro. We do custom frameless shower doors, mirrors, and glass partitions for high-end residential renovations in NYC.
+${hook}
 
-${credibility}
+${valueAdd}
 
-If glass or mirrors are part of the scope on this project, I'd be happy to share photos of similar work and provide a quick estimate. Our site is metroglasspro.com if you'd like to see recent projects.
-
-Either way, always glad to connect with architects doing great residential work in ${neighborhood}.
+Happy to send over photos of relevant work or a quick ballpark if it's useful. Our recent projects: metroglasspro.com
 
 Best,
 Donald Lena
 MetroGlass Pro
 (332) 999-3846
-operations@metroglasspro.com
-metroglasspro.com`;
+operations@metroglasspro.com`;
 
   return { subject, body };
 }
@@ -711,10 +750,11 @@ async function runDailyPipeline(env = {}) {
   }
   if (topPicks.length > 10) console.log(`   ... and ${topPicks.length - 10} more`);
 
-  // Step 5.5: Enrich with Apollo (email, phone, LinkedIn, firm) — tier1 only to stay fast
-  console.log('\n🔍 Step 5.5: Enriching tier1 contacts via Apollo...');
+  // Step 5.5: Enrich ALL picks with Apollo (email, phone, LinkedIn, firm)
+  // Free tier = 10K lookups/month, 30 picks/day = ~900/month — well within budget
+  console.log('\n🔍 Step 5.5: Enriching contacts via Apollo...');
   let enriched = 0, enrichFailed = 0;
-  for (const pick of tier1) {
+  for (const pick of topPicks) {
     pick.enrichment = null;
     if (env.APOLLO_API_KEY) {
       try {
@@ -722,19 +762,18 @@ async function runDailyPipeline(env = {}) {
         if (data) {
           pick.enrichment = data;
           enriched++;
-          console.log(`   ✅ ${pick.name}: ${data.email || 'no email'} | ${data.linkedin || 'no LinkedIn'} | ${data.organization || 'no firm'}`);
+          console.log(`   ✅ ${pick.name}: ${data.email || 'no email'} | ${data.organization || 'no firm'}`);
         } else {
           enrichFailed++;
-          console.log(`   ⚠️  ${pick.name}: no match in Apollo`);
         }
       } catch (err) {
         enrichFailed++;
-        console.log(`   ❌ ${pick.name}: enrichment error — ${err.message}`);
+        console.log(`   ❌ ${pick.name}: ${err.message.slice(0, 80)}`);
       }
     }
   }
   if (!env.APOLLO_API_KEY) {
-    console.log('   ⚠️  No APOLLO_API_KEY set — skipping enrichment. Add it: npx wrangler secret put APOLLO_API_KEY');
+    console.log('   ⚠️  No APOLLO_API_KEY — skipping enrichment');
   } else {
     console.log(`   ${enriched} enriched, ${enrichFailed} not found`);
   }
@@ -754,6 +793,12 @@ async function runDailyPipeline(env = {}) {
         subject: pick.draftEmail.subject,
         body: pick.draftEmail.body,
         projectAddress: `${pick.triggerProject.house_no} ${cleanStreetName(pick.triggerProject.street_name)}, ${pick.triggerProject.borough}`,
+        projectCost: parseFloat(pick.triggerProject.initial_cost) || 0,
+        projectStories: parseInt(pick.triggerProject.existing_stories) || 0,
+        projectBorough: pick.triggerProject.borough,
+        projectNeighborhood: pick.triggerProject.nta || '',
+        filingDate: pick.triggerProject.filing_date || null,
+        scoringReasons: pick.allReasons || [],
         score: pick.totalScore,
         tier: pick.tier || 'tier2',
         // Enriched contact data
@@ -913,16 +958,19 @@ function hasGmailAuth(env) {
   return !!(env.GMAIL_REFRESH_TOKEN && env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET) || !!env.GOOGLE_SERVICE_ACCOUNT;
 }
 
-async function sendGmail({ to, subject, body, env }) {
+async function sendGmail({ to, subject, body, env, threadId }) {
   const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
   const accessToken = await getGmailAccessToken(env);
-  // Use 'me' for OAuth refresh token (user is directly authenticated), or sender email for service account
   const gmailUser = (env.GMAIL_REFRESH_TOKEN) ? 'me' : sender;
-  const rawEmail = [`From: MetroGlass Pro <${sender}>`, `To: ${to}`, `Subject: ${subject}`,
-    'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\r\n');
+  // Add References/In-Reply-To headers for threading if this is a follow-up
+  const headers = [`From: MetroGlass Pro <${sender}>`, `To: ${to}`, `Subject: ${subject}`,
+    'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8'];
+  const rawEmail = [...headers, '', body].join('\r\n');
+  const payload = { raw: base64UrlEncode(rawEmail) };
+  if (threadId) payload.threadId = threadId; // Puts follow-up in same thread
   const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${gmailUser}/messages/send`, {
     method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ raw: base64UrlEncode(rawEmail) }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(`Gmail send failed: ${await res.text()}`);
   const result = await res.json();
@@ -987,7 +1035,7 @@ async function checkForReplies(env) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const MAX_FOLLOWUPS = 2;
-const FOLLOWUP_WAIT_DAYS = 5;
+const FOLLOWUP_WAIT_DAYS = 12; // ~2.5 weeks — respectful spacing for cold outreach
 
 function businessDaysSince(dateStr) {
   const sent = new Date(dateStr);
@@ -1007,32 +1055,31 @@ function draftFollowUpEmail(draft, followUpNumber) {
   const addr = draft.projectAddress || '';
 
   if (followUpNumber === 1) {
+    // Follow-up 1: Offer something concrete — a photo or case study
     return {
       subject: `Re: ${draft.subject}`,
       body: `Hi ${firstName},
 
-Just circling back on my note about ${addr}. If glass or mirrors are in the scope, I'd love to share some photos of similar work we've done.
+Quick follow-up — I put together some photos of recent glass work we did on a similar project in case it's relevant to ${addr}. Happy to send them over or just answer any questions about scope/pricing.
 
-Happy to jump on a quick call or send over examples — whatever's easiest.
+No pressure at all — just wanted to make sure the offer's on the table.
 
 Best,
 Donald Lena
 MetroGlass Pro
-(332) 999-3846
-operations@metroglasspro.com`,
+(332) 999-3846`,
     };
   }
 
-  // Follow-up #2 — final touch, very light
+  // Follow-up 2: Plant a seed for the future, close the loop
   return {
     subject: `Re: ${draft.subject}`,
     body: `Hi ${firstName},
 
-Last note from me — just wanted to make sure this didn't get buried. If glass work comes up on any of your projects, we'd be glad to help.
+Just a final note — if glass or mirrors come up on this project or any future ones, we'd be glad to help. Our site has recent work: metroglasspro.com
 
-Our portfolio: metroglasspro.com
+Either way, best of luck with ${addr}.
 
-All the best,
 Donald Lena
 MetroGlass Pro
 (332) 999-3846`,
@@ -1266,15 +1313,17 @@ class DraftQueue {
   constructor(kv) { this.kv = kv; }
 
   async addDraft(draft) {
-    // Dedup: skip if a pending draft already exists for this architect
+    // Fast dedup via index key instead of scanning all drafts
     if (draft.architectLicense) {
-      const existing = await this.kv.list({ prefix: 'draft:' });
-      for (const key of existing.keys) {
-        const val = await this.kv.get(key.name, 'json');
-        if (val && val.architectLicense === draft.architectLicense && val.status === 'pending') {
-          console.log(`   ⏭️  Skipping duplicate draft for ${draft.architectName} (license ${draft.architectLicense})`);
-          return val; // Return the existing draft instead of creating a new one
+      const idx = `pidx:${draft.architectLicense}`;
+      const existingId = await this.kv.get(idx);
+      if (existingId) {
+        const existing = await this.kv.get(existingId, 'json');
+        if (existing && existing.status === 'pending') {
+          console.log(`   ⏭️  Skip dup: ${draft.architectName} (${draft.architectLicense})`);
+          return existing;
         }
+        await this.kv.delete(idx);
       }
     }
     const id = `draft:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1283,16 +1332,17 @@ class DraftQueue {
       recipientEmail: draft.recipientEmail || null, subject: draft.subject,
       body: draft.body, projectAddress: draft.projectAddress, score: draft.score,
       tier: draft.tier || 'tier2',
-      // Enrichment data
-      phone: draft.phone || null,
-      linkedin: draft.linkedin || null,
-      firmName: draft.firmName || null,
-      firmDomain: draft.firmDomain || null,
-      firmWebsite: draft.firmWebsite || null,
-      title: draft.title || null,
+      phone: draft.phone || null, linkedin: draft.linkedin || null,
+      firmName: draft.firmName || null, firmDomain: draft.firmDomain || null,
+      firmWebsite: draft.firmWebsite || null, title: draft.title || null,
       enrichmentSource: draft.enrichmentSource || 'none',
+      isReEngagement: draft.isReEngagement || false,
+      previousContactDate: draft.previousContactDate || null,
     };
-    await this.kv.put(id, JSON.stringify(record), { expirationTtl: 30 * 86400 });
+    await this.kv.put(id, JSON.stringify(record), { expirationTtl: 365 * 86400 });
+    if (draft.architectLicense) {
+      await this.kv.put(`pidx:${draft.architectLicense}`, id, { expirationTtl: 30 * 86400 });
+    }
     return record;
   }
 
@@ -1302,7 +1352,7 @@ class DraftQueue {
     const existing = await this.getDraft(id);
     if (!existing) throw new Error(`Draft ${id} not found`);
     const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
-    await this.kv.put(id, JSON.stringify(updated), { expirationTtl: 30 * 86400 });
+    await this.kv.put(id, JSON.stringify(updated), { expirationTtl: 365 * 86400 });
     return updated;
   }
 
@@ -1345,9 +1395,14 @@ async function handleGmailRoutes(request, env) {
     if (!draft.recipientEmail) return jsonRes({ error: 'No recipient email. Edit draft first.' }, 400);
     if (!hasGmailAuth(env)) return jsonRes({ error: 'Gmail not configured. Set GMAIL_REFRESH_TOKEN + GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET secrets.' }, 400);
     try {
-      const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env });
-      await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId, gmailThreadId: result.threadId, pipelineStatus: 'awaiting_reply', followUpCount: 0 });
-      // Update CRM
+      // For follow-up drafts, look up parent's threadId to reply in same thread
+      let threadId = null;
+      if (draft.isFollowUp && draft.originalDraftId) {
+        const parent = await queue.getDraft(draft.originalDraftId);
+        if (parent && parent.gmailThreadId) threadId = parent.gmailThreadId;
+      }
+      const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env, threadId });
+      await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId, gmailThreadId: result.threadId, pipelineStatus: 'awaiting_reply', followUpCount: draft.followUpCount || 0 });
       await upsertArchitectCRMFromDraft(env.PERMIT_PULSE, draft, 'sent');
       return jsonRes({ success: true, messageId: result.messageId });
     } catch (err) { return jsonRes({ error: `Send failed: ${err.message}` }, 500); }
@@ -1378,15 +1433,16 @@ async function handleGmailRoutes(request, env) {
   if (url.pathname.match(/^\/drafts\/[^/]+\/status$/) && request.method === 'POST') {
     const rawId = url.pathname.split('/')[2];
     const queue = new DraftQueue(env.PERMIT_PULSE);
-    const { pipelineStatus, dealValue, notes } = await request.json();
+    const { pipelineStatus, dealValue, notes, outcomeReason, quoteScope } = await request.json();
     const validStatuses = ['awaiting_reply', 'replied', 'meeting', 'quoted', 'won', 'lost', 'cold'];
     if (!validStatuses.includes(pipelineStatus)) return jsonRes({ error: `Invalid status. Use: ${validStatuses.join(', ')}` }, 400);
     try {
       const updates = { pipelineStatus, statusUpdatedAt: new Date().toISOString() };
       if (dealValue !== undefined) updates.dealValue = parseFloat(dealValue) || 0;
       if (notes) updates.notes = notes;
+      if (outcomeReason) updates.outcomeReason = outcomeReason; // Why won/lost
+      if (quoteScope) updates.quoteScope = quoteScope; // What was quoted (shower, mirrors, etc.)
       const updated = await queue.updateDraft(`draft:${rawId}`, updates);
-      // Update CRM
       await upsertArchitectCRMFromDraft(env.PERMIT_PULSE, updated, pipelineStatus);
       return jsonRes(updated);
     } catch (err) { return jsonRes({ error: err.message }, 400); }
@@ -1468,8 +1524,14 @@ async function handleGmailRoutes(request, env) {
     let sent = 0, failed = 0;
     for (const draft of ready) {
       try {
-        const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env });
-        await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId, gmailThreadId: result.threadId, pipelineStatus: 'awaiting_reply', followUpCount: 0 });
+        // Handle follow-up threading
+        let threadId = null;
+        if (draft.isFollowUp && draft.originalDraftId) {
+          const parent = await queue.getDraft(draft.originalDraftId);
+          if (parent && parent.gmailThreadId) threadId = parent.gmailThreadId;
+        }
+        const result = await sendGmail({ to: draft.recipientEmail, subject: draft.subject, body: draft.body, env, threadId });
+        await queue.updateDraft(draft.id, { status: 'sent', sentAt: new Date().toISOString(), gmailMessageId: result.messageId, gmailThreadId: result.threadId, pipelineStatus: 'awaiting_reply', followUpCount: draft.followUpCount || 0 });
         await upsertArchitectCRMFromDraft(env.PERMIT_PULSE, draft, 'sent');
         sent++;
       } catch (err) { failed++; }
@@ -1486,14 +1548,23 @@ async function handleGmailRoutes(request, env) {
 
 export default {
   async scheduled(event, env) {
-    console.log('⚡ PermitPulse scheduled run');
-    // Run main scan pipeline
-    await runDailyPipeline(env);
-    // Phase 2: Check for replies to sent emails
-    console.log('\n📬 Checking for replies...');
-    const replyResult = await checkForReplies(env);
-    console.log(`   Checked ${replyResult.checked}, found ${replyResult.replies} replies`);
-    // Phase 3: Generate follow-ups for unreplied emails
+    const hour = new Date().getUTCHours();
+    // 12 UTC = 7am ET (morning scan), 23 UTC = 6pm ET (maintenance only)
+    const isMorningScan = (hour >= 10 && hour <= 14);
+    
+    if (isMorningScan) {
+      console.log('⚡ PermitPulse morning scan');
+      await runDailyPipeline(env);
+    } else {
+      console.log('⚡ PermitPulse evening maintenance (no scan)');
+    }
+    
+    // Always: check replies + generate follow-ups
+    if (hasGmailAuth(env)) {
+      console.log('\n📬 Checking for replies...');
+      const replyResult = await checkForReplies(env);
+      console.log(`   Checked ${replyResult.checked}, found ${replyResult.replies} replies`);
+    }
     console.log('\n📝 Generating follow-ups...');
     const followUpResult = await generateFollowUps(env);
     console.log(`   Generated ${followUpResult.generated} follow-up drafts`);
@@ -1764,14 +1835,37 @@ function mD(a,d,i){
   var tb=d.tier==='tier1'?'<span class="b bt1">Priority</span>':d.tier==='reengagement'?'<span class="b bre">Re-engage</span>':'<span class="b bt2">Standard</span>';
   var fb=d.isFollowUp?'<span class="b bfu">F/U #'+(d.followUpNumber||1)+'</span>':'';
   var ny=d.architectLicense?'https://eservices.nysed.gov/professions/verification-search?t=RA&n='+String(d.architectLicense).padStart(6,'0'):'';
-  v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+tb+fb+'</div><div class="nm"></div><div class="mt"></div></div><div class="pl">'+(d.score||0)+'</div></div>'+(en?'<div class="en">'+en+'</div>':'')+'<div class="lk">'+(ny?'<a href="'+ny+'" target="_blank">NYSED</a>':'')+'<a class="le" target="_blank">Email</a><a class="ll" target="_blank">LinkedIn</a><a class="lf" target="_blank">Firm</a></div><div class="fd"><label>Email</label><input class="fe" placeholder="architect@firm.com"></div><div class="fd"><label>Subject</label><input class="fs2"></div><div class="fd"><label>Body</label><textarea class="fb"></textarea></div><div class="ac"><button class="btn bp ja">Send</button><button class="btn jv">Save</button><button class="btn bd jk">Skip</button></div>';
+  var mapsUrl=d.projectAddress?'https://www.google.com/maps/search/'+encodeURIComponent(d.projectAddress+', NY'):'';
+  // Project details line
+  var projDetails=[];
+  if(d.projectCost)projDetails.push('$'+d.projectCost.toLocaleString());
+  if(d.projectStories)projDetails.push(d.projectStories+' stories');
+  if(d.projectNeighborhood)projDetails.push(d.projectNeighborhood);
+  if(d.filingDate)projDetails.push('Filed '+tA(d.filingDate));
+  var projLine=projDetails.length?'<div style="font-size:9px;color:var(--tx3);margin:4px 0">'+projDetails.join(' · ')+'</div>':'';
+  // Scoring reasons
+  var reasons=(d.scoringReasons||[]).slice(0,4).map(function(r){return'<span style="font-size:8px;display:inline-block;padding:1px 6px;border-radius:6px;background:rgba(122,112,103,.06);color:var(--tx3);margin:1px">'+X(r)+'</span>'}).join('');
+  var reasonsHtml=reasons?'<div style="margin:4px 0">'+reasons+'</div>':'';
+  // Email body is collapsible — show first 2 lines by default
+  var bodyId='body-'+sid;
+  v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+tb+fb+'</div><div class="nm"></div><div class="mt"></div>'+projLine+reasonsHtml+'</div><div class="pl">'+(d.score||0)+'</div></div>'+(en?'<div class="en">'+en+'</div>':'')+'<div class="lk">'+(ny?'<a href="'+ny+'" target="_blank">NYSED</a>':'')+(mapsUrl?'<a href="'+mapsUrl+'" target="_blank">Maps</a>':'')+'<a class="le" target="_blank">Email</a><a class="ll" target="_blank">LinkedIn</a><a class="lf" target="_blank">Firm</a></div><div class="fd"><label>Email</label><input class="fe" placeholder="architect@firm.com"></div><div class="fd"><label>Subject</label><input class="fs2"></div><div class="fd"><label>Body <span class="tog" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[expand]</span></label><textarea class="fb" style="min-height:48px;max-height:48px;overflow:hidden"></textarea></div><div class="ac"><button class="btn bp ja">Send</button><button class="btn jv">Save</button><button class="btn bd jk">Skip</button></div>';
   v.querySelector('.nm').textContent=d.architectName||'Unknown';
   v.querySelector('.mt').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'');
   var n=d.architectName||'';
   v.querySelector('.le').href='https://www.google.com/search?q='+encodeURIComponent('"'+n+'" architect NYC email');
   v.querySelector('.ll').href='https://www.google.com/search?q='+encodeURIComponent(n+' architect site:linkedin.com');
   v.querySelector('.lf').href='https://www.google.com/search?q='+encodeURIComponent(n+' architect portfolio NYC');
-  v.querySelector('.fe').value=d.recipientEmail||'';v.querySelector('.fs2').value=d.subject||'';v.querySelector('.fb').value=d.body||'';
+  v.querySelector('.fe').value=d.recipientEmail||'';v.querySelector('.fs2').value=d.subject||'';
+  var ta=v.querySelector('.fb');ta.value=d.body||'';
+  // Toggle expand/collapse
+  var tog=v.querySelector('.tog');
+  tog.onclick=function(){
+    var expanded=ta.style.maxHeight!=='48px';
+    ta.style.maxHeight=expanded?'48px':'none';
+    ta.style.minHeight=expanded?'48px':'120px';
+    ta.style.overflow=expanded?'hidden':'visible';
+    tog.textContent=expanded?'[expand]':'[collapse]';
+  };
   v.querySelector('.ja').onclick=function(){doA(sid,v)};v.querySelector('.jv').onclick=function(){doV(sid,v)};v.querySelector('.jk').onclick=function(){doK(sid)};
   a.appendChild(v)
 }
