@@ -1,13 +1,18 @@
-# ⚡ PermitPulse v4 — Setup & Operations Guide
+# ⚡ PermitPulse — Setup & Operations Guide
 
 ## What This Does
 
-PermitPulse is a full architect outreach pipeline for MetroGlassPro:
+PermitPulse now runs as two separate Cloudflare surfaces:
+
+- Frontend: `https://leads.metroglasspro.com` via the `permit-pulse-leads` Pages project
+- Scanner worker: `https://permit-pulse-scanner.donaldlena833.workers.dev` for cron jobs and worker-only endpoints
+
+Worker schedule:
 
 **7:00 AM ET** — Full scan + reply check + follow-ups
 **6:00 PM ET** — Reply check + follow-ups only
 
-Dashboard: https://permit-pulse-scanner.donaldlena833.workers.dev/
+Dashboard: https://leads.metroglasspro.com
 
 ---
 
@@ -66,7 +71,7 @@ npx wrangler secret put GMAIL_CLIENT_SECRET
 # Paste: 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
 ```
 
-### Step 5: Deploy + test
+### Step 5: Deploy + test the worker
 
 ```bash
 npx wrangler deploy
@@ -91,7 +96,7 @@ curl -X POST https://permit-pulse-scanner.donaldlena833.workers.dev/gmail-test
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Dashboard |
+| `/` | GET | Worker landing response |
 | `/scan` | GET | Run full pipeline |
 | `/drafts` | GET | List all drafts |
 | `/drafts/:id/edit` | POST | Edit draft |

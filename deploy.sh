@@ -1,10 +1,9 @@
 #!/bin/bash
-# PermitPulse — Deploy to Cloudflare Pages
-# 
+# PermitPulse — Deploy the V2 frontend to Cloudflare Pages
+#
 # PREREQUISITES:
 # 1. npm install -g wrangler
 # 2. wrangler login (one-time browser auth)
-# 3. In Cloudflare dashboard: add CNAME record for leads.metroglasspro.com
 #
 # USAGE: bash deploy.sh
 
@@ -16,19 +15,20 @@ pnpm build
 
 echo "🚀 Deploying to Cloudflare Pages..."
 npx wrangler pages deploy dist \
-  --project-name=permit-pulse \
+  --project-name=permit-pulse-leads \
   --branch=main
 
 echo ""
-echo "✅ Dashboard deployed!"
+echo "✅ Frontend deployed!"
 echo ""
-echo "📋 NEXT STEPS:"
-echo "  1. Go to Cloudflare Dashboard → Pages → permit-pulse → Custom domains"
-echo "  2. Add: leads.metroglasspro.com"
-echo "  3. Cloudflare will auto-provision SSL"
+echo "🌐 Production URL:"
+echo "  https://leads.metroglasspro.com"
+echo ""
+echo "📦 Pages project:"
+echo "  permit-pulse-leads"
 echo ""
 echo "🤖 To deploy the scanner cron worker:"
 echo "  npx wrangler deploy"
 echo "  npx wrangler secret put RESEND_API_KEY"
 echo ""
-echo "  Scanner will run at 8am + 6pm ET daily."
+echo "  Worker stays on its workers.dev URL and keeps the scheduled scan jobs."
