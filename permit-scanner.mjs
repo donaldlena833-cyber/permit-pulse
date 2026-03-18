@@ -145,96 +145,96 @@ async function fetchPermitForBuilding(bin, borough) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// APOLLO ENRICHMENT
-// Free tier: 10,000 lookups/month — more than enough for 30 picks/day
+// FREE ENRICHMENT — extract firm data from DOB filings + web search links
+// No paid APIs needed. All data from public sources.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function enrichWithApollo(architect, apiKey) {
-  // Try multiple firm name sources from DOB filing data
+function enrichFromFilings(architect) {
   const filing = architect.filings[0] || {};
-  const filingRep = (filing.filing_representative_business_name || '').trim();
-  const applicantBiz = (filing.applicant_business_name || '').trim();
-  const archLastName = (architect.lastName || '').toLowerCase();
+  
+  // Extract firm name from filing representative business name
+  // This is the architect's firm in most cases
+  const repBiz = (filing.filing_representative_business_name || '').trim();
+  const repFirst = (filing.filing_representative_first_name || '').trim();
+  const repLast = (filing.filing_representative_last_name || '').trim();
+  const repAddr = [
+    filing.filing_representative_street_name,
+    filing.filing_representative_city,
+    filing.filing_representative_state,
+    filing.filing_representative_zip,
+  ].filter(Boolean).join(', ').trim();
 
-  // Use applicant_business_name first (this is usually the architect's firm)
-  // Fall back to filing_representative_business_name if it contains architect's last name
-  let firmHint = applicantBiz || null;
-  if (!firmHint && filingRep && archLastName.length > 2 && filingRep.toLowerCase().includes(archLastName)) {
-    firmHint = filingRep;
+  // The applicant IS the architect. The filing rep might be the same person or an expediter.
+  // If the rep business name contains the architect's last name, it's their firm.
+  // If it doesn't, repBiz is likely the expediter and we use the applicant name as the firm hint.
+  const archLast = (architect.lastName || '').toLowerCase();
+  let firmName = null;
+  let firmAddress = null;
+  
+  if (repBiz && archLast.length > 2 && repBiz.toLowerCase().includes(archLast)) {
+    firmName = titleCase(repBiz.toLowerCase());
+    firmAddress = repAddr || null;
+  } else if (repBiz && repBiz.length > 3) {
+    // Even if it doesn't match the name, store it as "filing rep" context
+    firmName = titleCase(repBiz.toLowerCase());
+    firmAddress = repAddr || null;
   }
 
-  // Strategy 1: People Match (exact match, best data)
-  const matchPayload = {
-    first_name: architect.firstName,
-    last_name: architect.lastName,
-    organization_name: firmHint || undefined,
-    title: 'architect',
-    person_locations: ['New York, New York, United States'],
-    reveal_personal_emails: true,
-    reveal_phone_number: true,
-  };
-  Object.keys(matchPayload).forEach(k => matchPayload[k] === undefined && delete matchPayload[k]);
+  // Build useful search/lookup URLs
+  const fullName = architect.name;
+  const nysedUrl = architect.raLicense
+    ? `https://eservices.nysed.gov/professions/verification-search?t=RA&n=${String(architect.raLicense).padStart(6, '0')}`
+    : null;
+  
+  const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent('"' + fullName + '" architect NYC email')}`;
+  const linkedinSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(fullName + ' architect site:linkedin.com')}`;
+  const firmSearchUrl = firmName
+    ? `https://www.google.com/search?q=${encodeURIComponent(firmName + ' architecture firm NYC')}`
+    : `https://www.google.com/search?q=${encodeURIComponent(fullName + ' architect firm NYC')}`;
 
-  try {
-    const res = await fetch('https://api.apollo.io/api/v1/people/match', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': apiKey },
-      body: JSON.stringify(matchPayload),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.person) return parseApolloResult(data.person);
+  // Try to construct a likely firm website from the firm name
+  let firmWebsite = null;
+  if (firmName) {
+    // Common patterns: "Smith Architects" -> smitharchitects.com, "Jones Design" -> jonesdesign.com
+    const cleaned = firmName.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, '')
+      .replace(/architects|architecture|design|studio|group|associates|llc|inc|pc|pllc/g, '');
+    if (cleaned.length > 2) {
+      firmWebsite = `https://www.google.com/search?q=${encodeURIComponent(firmName + ' architect website')}`;
     }
-  } catch (e) { /* fall through to search */ }
+  }
 
-  // Strategy 2: People Search (fuzzy match, broader results)
-  try {
-    const searchPayload = {
-      q_keywords: `${architect.firstName} ${architect.lastName} architect`,
-      person_locations: ['New York, New York, United States'],
-      per_page: 1,
-    };
-    if (firmHint) searchPayload.q_organization_name = firmHint;
+  // Location data from filing
+  const lat = parseFloat(filing.latitude) || null;
+  const lng = parseFloat(filing.longitude) || null;
+  const mapsUrl = lat && lng
+    ? `https://www.google.com/maps?q=${lat},${lng}`
+    : (filing.house_no && filing.street_name ? `https://www.google.com/maps/search/${encodeURIComponent(filing.house_no + ' ' + filing.street_name + ', ' + filing.borough + ', NY')}` : null);
 
-    const res = await fetch('https://api.apollo.io/api/v1/mixed_people/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': apiKey },
-      body: JSON.stringify(searchPayload),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const person = data.people?.[0];
-      if (person) {
-        // Verify it's actually an architect (not some random match)
-        const title = (person.title || '').toLowerCase();
-        const isArchitect = title.includes('architect') || title.includes('principal') || title.includes('design') || title.includes('partner');
-        if (isArchitect || !person.title) return parseApolloResult(person);
-      }
-    }
-  } catch (e) { /* no match */ }
+  // BIS lookup URL
+  const boroNum = { 'MANHATTAN': '1', 'BRONX': '2', 'BROOKLYN': '3', 'QUEENS': '4', 'STATEN ISLAND': '5' };
+  const bisUrl = filing.block && filing.lot
+    ? `https://a810-bisweb.nyc.gov/bisweb/PropertyProfileOverviewServlet?boro=${boroNum[filing.borough] || '1'}&block=${filing.block}&lot=${filing.lot}`
+    : null;
 
-  return null;
-}
-
-function parseApolloResult(person) {
   return {
-    apolloId: person.id || null,
-    email: person.email || null,
-    phone: person.phone_numbers?.[0]?.sanitized_number || person.organization?.phone || null,
-    linkedin: person.linkedin_url || null,
-    title: person.title || null,
-    organization: person.organization?.name || null,
-    domain: person.organization?.website_url ? new URL(person.organization.website_url).hostname : (person.organization?.primary_domain || null),
-    website: person.organization?.website_url || null,
-    city: person.city || null,
-    state: person.state || null,
-    photoUrl: person.photo_url || null,
-    headline: person.headline || null,
-    employmentHistory: (person.employment_history || []).slice(0, 3).map(e => ({
-      title: e.title,
-      org: e.organization_name,
-      current: e.current,
-    })),
+    firmName: firmName,
+    firmAddress: firmAddress,
+    nysedUrl: nysedUrl,
+    googleSearchUrl: googleSearchUrl,
+    linkedinSearchUrl: linkedinSearchUrl,
+    firmSearchUrl: firmSearchUrl,
+    firmWebsite: firmWebsite,
+    mapsUrl: mapsUrl,
+    bisUrl: bisUrl,
+    ownerName: (filing.owner_s_business_name || '').trim() || null,
+    buildingBin: filing.bin || null,
+    buildingBbl: filing.bbl || null,
+    floorArea: filing.total_construction_floor_area || null,
+    latitude: lat,
+    longitude: lng,
+    enrichmentSource: firmName ? 'dob_filing' : 'basic',
   };
 }
 
@@ -796,33 +796,18 @@ async function runDailyPipeline(env = {}) {
   }
   if (topPicks.length > 10) console.log(`   ... and ${topPicks.length - 10} more`);
 
-  // Step 5.5: Enrich ALL picks with Apollo (email, phone, LinkedIn, firm)
-  // Free tier = 10K lookups/month, 30 picks/day = ~900/month — well within budget
-  console.log('\n🔍 Step 5.5: Enriching contacts via Apollo...');
-  let enriched = 0, enrichFailed = 0;
+  // Step 5.5: Enrich ALL picks from DOB filing data (free, no API needed)
+  console.log('\n🔍 Step 5.5: Enriching contacts from filing data...');
+  let enriched = 0;
   for (const pick of topPicks) {
-    pick.enrichment = null;
-    if (env.APOLLO_API_KEY) {
-      try {
-        const data = await enrichWithApollo(pick, env.APOLLO_API_KEY);
-        if (data) {
-          pick.enrichment = data;
-          enriched++;
-          console.log(`   ✅ ${pick.name}: ${data.email || 'no email'} | ${data.organization || 'no firm'}`);
-        } else {
-          enrichFailed++;
-        }
-      } catch (err) {
-        enrichFailed++;
-        console.log(`   ❌ ${pick.name}: ${err.message.slice(0, 80)}`);
-      }
+    const data = enrichFromFilings(pick);
+    pick.enrichment = data;
+    if (data.firmName) enriched++;
+    if (data.firmName) {
+      console.log(`   ✅ ${pick.name}: firm=${data.firmName}`);
     }
   }
-  if (!env.APOLLO_API_KEY) {
-    console.log('   ⚠️  No APOLLO_API_KEY — skipping enrichment');
-  } else {
-    console.log(`   ${enriched} enriched, ${enrichFailed} not found`);
-  }
+  console.log(`   ${enriched}/${topPicks.length} with firm name identified`);
 
   // Step 6: Draft outreach emails + save to queue
   console.log('\n✉️  Step 6: Drafting outreach emails + saving to queue...');
@@ -849,15 +834,19 @@ async function runDailyPipeline(env = {}) {
         scoringReasons: pick.allReasons || [],
         score: pick.totalScore,
         tier: pick.tier || 'tier2',
-        // Enriched contact data
-        phone: e.phone || null,
-        linkedin: e.linkedin || null,
-        firmName: e.organization || null,
-        firmDomain: e.domain || null,
-        firmWebsite: e.website || null,
-        title: e.title || null,
-        apolloId: e.apolloId || null,
-        enrichmentSource: e.email ? 'apollo' : 'none',
+        // Enriched data from DOB filings (free)
+        firmName: e.firmName || null,
+        firmAddress: e.firmAddress || null,
+        firmWebsite: e.firmWebsite || null,
+        nysedUrl: e.nysedUrl || null,
+        googleSearchUrl: e.googleSearchUrl || null,
+        linkedinSearchUrl: e.linkedinSearchUrl || null,
+        firmSearchUrl: e.firmSearchUrl || null,
+        mapsUrl: e.mapsUrl || null,
+        bisUrl: e.bisUrl || null,
+        ownerName: e.ownerName || null,
+        floorArea: e.floorArea || null,
+        enrichmentSource: e.enrichmentSource || 'none',
       });
     }
   }
@@ -1671,35 +1660,6 @@ export default {
       return jsonRes(all);
     }
 
-    // Apollo test — test enrichment with raw response logging
-    if (url.pathname === '/test-apollo' && request.method === 'GET') {
-      if (!env.APOLLO_API_KEY) return jsonRes({ error: 'APOLLO_API_KEY not set' }, 400);
-      const debug = {};
-      // Test 1: People Match
-      try {
-        const res = await fetch('https://api.apollo.io/api/v1/people/match', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': env.APOLLO_API_KEY },
-          body: JSON.stringify({ first_name: 'Peter', last_name: 'Pennoyer', organization_name: 'Peter Pennoyer Architects', person_locations: ['New York, New York, United States'], reveal_personal_emails: true }),
-        });
-        debug.matchStatus = res.status;
-        debug.matchBody = await res.text();
-        try { debug.matchParsed = JSON.parse(debug.matchBody); } catch(e) {}
-      } catch(e) { debug.matchError = e.message; }
-      // Test 2: People Search
-      try {
-        const res = await fetch('https://api.apollo.io/api/v1/mixed_people/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache', 'x-api-key': env.APOLLO_API_KEY },
-          body: JSON.stringify({ q_keywords: 'Peter Pennoyer architect', person_locations: ['New York, New York, United States'], per_page: 1 }),
-        });
-        debug.searchStatus = res.status;
-        debug.searchBody = await res.text();
-        try { debug.searchParsed = JSON.parse(debug.searchBody); } catch(e) {}
-      } catch(e) { debug.searchError = e.message; }
-      return jsonRes({ apiKeySet: true, apiKeyPrefix: env.APOLLO_API_KEY.slice(0, 8) + '...', debug });
-    }
-
     // Gmail test — sends a test email to yourself to verify the service account works
     if (url.pathname === '/gmail-test' && request.method === 'POST') {
       if (!hasGmailAuth(env)) {
@@ -1906,13 +1866,14 @@ function mD(a,d,i){
   v.className=cl;v.style.animationDelay=(i*30)+'ms';
   var en='';
   if(d.firmName)en+='<span class="et">'+X(d.firmName)+'</span>';
-  if(d.linkedin)en+='<a href="'+X(d.linkedin)+'" target="_blank" class="et">LinkedIn↗</a>';
-  if(d.phone)en+='<span class="et">'+X(d.phone)+'</span>';
-  if(d.firmWebsite)en+='<a href="'+X(d.firmWebsite)+'" target="_blank" class="et">Web↗</a>';
+  if(d.firmAddress)en+='<span class="et" style="font-size:8px">'+X(d.firmAddress)+'</span>';
+  if(d.ownerName)en+='<span class="et" style="font-size:8px">Owner: '+X(d.ownerName)+'</span>';
+  if(d.floorArea)en+='<span class="et">'+X(d.floorArea)+' sqft</span>';
   var tb=d.tier==='tier1'?'<span class="b bt1">Priority</span>':d.tier==='reengagement'?'<span class="b bre">Re-engage</span>':'<span class="b bt2">Standard</span>';
   var fb=d.isFollowUp?'<span class="b bfu">F/U #'+(d.followUpNumber||1)+'</span>':'';
-  var ny=d.architectLicense?'https://eservices.nysed.gov/professions/verification-search?t=RA&n='+String(d.architectLicense).padStart(6,'0'):'';
-  var mapsUrl=d.projectAddress?'https://www.google.com/maps/search/'+encodeURIComponent(d.projectAddress+', NY'):'';
+  // Use enriched URLs if available, fall back to constructed ones
+  var ny=d.nysedUrl||(d.architectLicense?'https://eservices.nysed.gov/professions/verification-search?t=RA&n='+String(d.architectLicense).padStart(6,'0'):'');
+  var mapsUrl=d.mapsUrl||(d.projectAddress?'https://www.google.com/maps/search/'+encodeURIComponent(d.projectAddress+', NY'):'');
   // Project details line
   var projDetails=[];
   if(d.projectCost)projDetails.push('$'+d.projectCost.toLocaleString());
@@ -1929,13 +1890,13 @@ function mD(a,d,i){
   var channels='';
   if(d.linkedinMessage)channels+='<div class="fd" style="margin-top:4px"><label>LinkedIn message <span class="cpy" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[copy]</span></label><textarea class="lm" style="min-height:36px;max-height:36px;overflow:hidden;font-size:11px">'+X(d.linkedinMessage)+'</textarea></div>';
   if(d.phoneScript)channels+='<div class="fd"><label>Phone script <span class="cpy2" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[copy]</span></label><textarea class="ps2" style="min-height:36px;max-height:36px;overflow:hidden;font-size:11px">'+X(d.phoneScript)+'</textarea></div>';
-  v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+tb+fb+'</div><div class="nm"></div><div class="mt"></div>'+projLine+reasonsHtml+'</div><div class="pl">'+(d.score||0)+'</div></div>'+(en?'<div class="en">'+en+'</div>':'')+'<div class="lk">'+(ny?'<a href="'+ny+'" target="_blank">NYSED</a>':'')+(mapsUrl?'<a href="'+mapsUrl+'" target="_blank">Maps</a>':'')+'<a class="le" target="_blank">Email</a><a class="ll" target="_blank">LinkedIn</a><a class="lf" target="_blank">Firm</a></div><div class="fd"><label>Email</label><input class="fe" placeholder="architect@firm.com"></div><div class="fd"><label>Subject</label><input class="fs2"></div><div class="fd"><label>Body <span class="tog" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[expand]</span></label><textarea class="fb" style="min-height:48px;max-height:48px;overflow:hidden"></textarea></div>'+channels+'<div class="ac"><button class="btn bp ja">Send email</button><button class="btn jv">Save</button><button class="btn bd jk">Skip</button></div>';
+  v.innerHTML='<div class="rw"><div style="flex:1"><div class="bs">'+tb+fb+'</div><div class="nm"></div><div class="mt"></div>'+projLine+reasonsHtml+'</div><div class="pl">'+(d.score||0)+'</div></div>'+(en?'<div class="en">'+en+'</div>':'')+'<div class="lk">'+(ny?'<a href="'+ny+'" target="_blank">NYSED</a>':'')+(mapsUrl?'<a href="'+mapsUrl+'" target="_blank">Maps</a>':'')+(d.bisUrl?'<a href="'+X(d.bisUrl)+'" target="_blank">BIS</a>':'')+'<a class="le" target="_blank">Email</a><a class="ll" target="_blank">LinkedIn</a>'+(d.firmSearchUrl?'<a href="'+X(d.firmSearchUrl)+'" target="_blank">Firm</a>':'<a class="lf" target="_blank">Firm</a>')+'</div><div class="fd"><label>Email</label><input class="fe" placeholder="architect@firm.com"></div><div class="fd"><label>Subject</label><input class="fs2"></div><div class="fd"><label>Body <span class="tog" style="color:var(--ac);cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0">[expand]</span></label><textarea class="fb" style="min-height:48px;max-height:48px;overflow:hidden"></textarea></div>'+channels+'<div class="ac"><button class="btn bp ja">Send email</button><button class="btn jv">Save</button><button class="btn bd jk">Skip</button></div>';
   v.querySelector('.nm').textContent=d.architectName||'Unknown';
   v.querySelector('.mt').textContent=(d.architectLicense?'RA #'+d.architectLicense+' · ':'')+(d.projectAddress||'');
   var n=d.architectName||'';
-  v.querySelector('.le').href='https://www.google.com/search?q='+encodeURIComponent('"'+n+'" architect NYC email');
-  v.querySelector('.ll').href='https://www.google.com/search?q='+encodeURIComponent(n+' architect site:linkedin.com');
-  v.querySelector('.lf').href='https://www.google.com/search?q='+encodeURIComponent(n+' architect portfolio NYC');
+  v.querySelector('.le').href=d.googleSearchUrl||('https://www.google.com/search?q='+encodeURIComponent('"'+n+'" architect NYC email'));
+  v.querySelector('.ll').href=d.linkedinSearchUrl||('https://www.google.com/search?q='+encodeURIComponent(n+' architect site:linkedin.com'));
+  var lfEl=v.querySelector('.lf');if(lfEl)lfEl.href='https://www.google.com/search?q='+encodeURIComponent(n+' architect portfolio NYC');
   v.querySelector('.fe').value=d.recipientEmail||'';v.querySelector('.fs2').value=d.subject||'';
   var ta=v.querySelector('.fb');ta.value=d.body||'';
   // Toggle expand/collapse
