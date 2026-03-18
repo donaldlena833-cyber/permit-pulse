@@ -8,7 +8,7 @@
  * 2. Score each architect against MetroGlassPro profile
  * 3. Check "already contacted" list to avoid repeats
  * 4. Pick top 30 new architects of the day (10 tier1 + 20 tier2)
- * 5. Enrich with Apollo (email, phone, LinkedIn, firm)
+ * 5. Enrich from DOB filing data (firm, owner, location)
  * 6. Draft personalized outreach emails + save to queue
  * 7. Check for replies to previously sent emails (Phase 2)
  * 8. Auto-generate follow-ups after 5 business days (Phase 3)
@@ -21,7 +21,7 @@
  * ENV VARS / SECRETS:
  * - RESEND_API_KEY — for sending the digest email
  * - GOOGLE_SERVICE_ACCOUNT — JSON key for Gmail API (domain-wide delegation)
- * - APOLLO_API_KEY — for contact enrichment (free tier: 10K/mo)
+ * (No paid APIs needed — enrichment from DOB filing data)
  * - NOTIFY_EMAIL — where to send digest (default: operations@metroglasspro.com)
  * - KV namespace PERMIT_PULSE — stores everything (picks, drafts, CRM, analytics)
  */
@@ -486,7 +486,7 @@ operations@metroglasspro.com`;
   // LinkedIn connect message (short, under 300 chars)
   const linkedin = `Hi ${firstName}, I'm Donald with MetroGlass Pro. We do custom glass work for residential renovations in NYC. If glass is part of the scope on your ${neighborhood} project, we offer free 3D renders to help your client visualize. Happy to connect.`;
 
-  // Phone script (for if Apollo finds a number)
+  // Phone script
   const phone = `Hi ${firstName}, this is Donald from MetroGlass Pro. I'm reaching out because I saw you have a project at ${addr}. We do custom frameless glass work for residential renovations and I wanted to see if glass or mirrors are part of the scope. We offer free 3D visualization renders if you send us the floor plans. Can I send you some info?`;
 
   return { subject, body, linkedin, phone };
@@ -813,40 +813,45 @@ async function runDailyPipeline(env = {}) {
   console.log('\n✉️  Step 6: Drafting outreach emails + saving to queue...');
   for (const pick of topPicks) {
     pick.draftEmail = draftOutreachEmail(pick);
+    const tp = pick.triggerProject;
+    const e = pick.enrichment || {};
 
     if (env.PERMIT_PULSE) {
       const queue = new DraftQueue(env.PERMIT_PULSE);
-      const e = pick.enrichment || {};
       await queue.addDraft({
         architectName: pick.name,
         architectLicense: pick.raLicense,
-        recipientEmail: e.email || null,
+        recipientEmail: null,
         subject: pick.draftEmail.subject,
         body: pick.draftEmail.body,
         linkedinMessage: pick.draftEmail.linkedin || null,
         phoneScript: pick.draftEmail.phone || null,
-        projectAddress: `${pick.triggerProject.house_no} ${cleanStreetName(pick.triggerProject.street_name)}, ${pick.triggerProject.borough}`,
-        projectCost: parseFloat(pick.triggerProject.initial_cost) || 0,
-        projectStories: parseInt(pick.triggerProject.existing_stories) || 0,
-        projectBorough: pick.triggerProject.borough,
-        projectNeighborhood: pick.triggerProject.nta || '',
-        filingDate: pick.triggerProject.filing_date || null,
+        // Project data (title-cased)
+        projectAddress: titleCase(`${tp.house_no} ${cleanStreetName(tp.street_name)}`.toLowerCase()) + ', ' + titleCase((tp.borough || '').toLowerCase()),
+        projectCost: parseFloat(tp.initial_cost) || 0,
+        projectStories: parseInt(tp.existing_stories) || 0,
+        projectUnits: parseInt(tp.existing_dwelling_units) || 0,
+        projectBorough: tp.borough,
+        projectNeighborhood: tp.nta || '',
+        projectFloor: tp.work_on_floor || '',
+        projectBuildingType: tp.building_type || '',
+        filingDate: tp.filing_date || null,
+        filingStatus: tp.filing_status || '',
+        jobDescription: tp.specialinspectionrequirement || '',
+        // Geolocation
+        latitude: parseFloat(tp.latitude) || null,
+        longitude: parseFloat(tp.longitude) || null,
+        // Building identifiers
+        buildingBin: tp.bin || null,
+        buildingBbl: tp.bbl || null,
+        buildingBlock: tp.block || null,
+        buildingLot: tp.lot || null,
+        // Scoring
         scoringReasons: pick.allReasons || [],
         score: pick.totalScore,
         tier: pick.tier || 'tier2',
-        // Enriched data from DOB filings (free)
-        firmName: e.firmName || null,
-        firmAddress: e.firmAddress || null,
-        firmWebsite: e.firmWebsite || null,
-        nysedUrl: e.nysedUrl || null,
-        googleSearchUrl: e.googleSearchUrl || null,
-        linkedinSearchUrl: e.linkedinSearchUrl || null,
-        firmSearchUrl: e.firmSearchUrl || null,
-        mapsUrl: e.mapsUrl || null,
-        bisUrl: e.bisUrl || null,
-        ownerName: e.ownerName || null,
-        floorArea: e.floorArea || null,
-        enrichmentSource: e.enrichmentSource || 'none',
+        // Enrichment from DOB data
+        ...e,
       });
     }
   }
@@ -1364,18 +1369,8 @@ class DraftQueue {
       }
     }
     const id = `draft:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const record = { id, status: 'pending', createdAt: new Date().toISOString(),
-      architectName: draft.architectName, architectLicense: draft.architectLicense,
-      recipientEmail: draft.recipientEmail || null, subject: draft.subject,
-      body: draft.body, projectAddress: draft.projectAddress, score: draft.score,
-      tier: draft.tier || 'tier2',
-      phone: draft.phone || null, linkedin: draft.linkedin || null,
-      firmName: draft.firmName || null, firmDomain: draft.firmDomain || null,
-      firmWebsite: draft.firmWebsite || null, title: draft.title || null,
-      enrichmentSource: draft.enrichmentSource || 'none',
-      isReEngagement: draft.isReEngagement || false,
-      previousContactDate: draft.previousContactDate || null,
-    };
+    // Store ALL fields passed in (not a fixed list)
+    const record = { id, status: 'pending', createdAt: new Date().toISOString(), ...draft };
     await this.kv.put(id, JSON.stringify(record), { expirationTtl: 365 * 86400 });
     if (draft.architectLicense) {
       await this.kv.put(`pidx:${draft.architectLicense}`, id, { expirationTtl: 30 * 86400 });
@@ -1383,13 +1378,21 @@ class DraftQueue {
     return record;
   }
 
-  async getDraft(id) { return await this.kv.get(id, 'json'); }
+  async getDraft(id) {
+    // Safety: try both raw and decoded versions of the ID
+    let result = await this.kv.get(id, 'json');
+    if (!result) {
+      try { result = await this.kv.get(decodeURIComponent(id), 'json'); } catch(e) {}
+    }
+    return result;
+  }
 
   async updateDraft(id, updates) {
     const existing = await this.getDraft(id);
     if (!existing) throw new Error(`Draft ${id} not found`);
     const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
-    await this.kv.put(id, JSON.stringify(updated), { expirationTtl: 365 * 86400 });
+    // Use the stored ID (not the URL-decoded one) to ensure key consistency
+    await this.kv.put(existing.id, JSON.stringify(updated), { expirationTtl: 365 * 86400 });
     return updated;
   }
 
@@ -1427,8 +1430,9 @@ async function handleGmailRoutes(request, env) {
   if (url.pathname.match(/^\/drafts\/[^/]+\/approve$/) && request.method === 'POST') {
     const rawId = url.pathname.split('/')[2];
     const queue = new DraftQueue(env.PERMIT_PULSE);
-    const draft = await queue.getDraft(`draft:${rawId}`);
-    if (!draft) return jsonRes({ error: 'Draft not found' }, 404);
+    const draftId = `draft:${decodeURIComponent(rawId)}`;
+    const draft = await queue.getDraft(draftId);
+    if (!draft) return jsonRes({ error: `Draft not found. Looking for key: ${draftId}`, rawId }, 404);
     if (!draft.recipientEmail) return jsonRes({ error: 'No recipient email. Edit draft first.' }, 400);
     if (!hasGmailAuth(env)) return jsonRes({ error: 'Gmail not configured. Set GMAIL_REFRESH_TOKEN + GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET secrets.' }, 400);
     try {
@@ -1447,9 +1451,10 @@ async function handleGmailRoutes(request, env) {
   if (url.pathname.match(/^\/drafts\/[^/]+\/edit$/) && request.method === 'POST') {
     const rawId = url.pathname.split('/')[2];
     const queue = new DraftQueue(env.PERMIT_PULSE);
+    const draftId = `draft:${decodeURIComponent(rawId)}`;
     const updates = await request.json();
     try {
-      const updated = await queue.updateDraft(`draft:${rawId}`, {
+      const updated = await queue.updateDraft(`draft:${decodeURIComponent(rawId)}`, {
         ...(updates.recipientEmail && { recipientEmail: updates.recipientEmail }),
         ...(updates.subject && { subject: updates.subject }),
         ...(updates.body && { body: updates.body }),
@@ -1461,7 +1466,7 @@ async function handleGmailRoutes(request, env) {
     const rawId = url.pathname.split('/')[2];
     const queue = new DraftQueue(env.PERMIT_PULSE);
     try {
-      const updated = await queue.updateDraft(`draft:${rawId}`, { status: 'skipped' });
+      const updated = await queue.updateDraft(`draft:${decodeURIComponent(rawId)}`, { status: 'skipped' });
       return jsonRes(updated);
     } catch (err) { return jsonRes({ error: err.message }, 400); }
   }
@@ -1479,7 +1484,7 @@ async function handleGmailRoutes(request, env) {
       if (notes) updates.notes = notes;
       if (outcomeReason) updates.outcomeReason = outcomeReason; // Why won/lost
       if (quoteScope) updates.quoteScope = quoteScope; // What was quoted (shower, mirrors, etc.)
-      const updated = await queue.updateDraft(`draft:${rawId}`, updates);
+      const updated = await queue.updateDraft(`draft:${decodeURIComponent(rawId)}`, updates);
       await upsertArchitectCRMFromDraft(env.PERMIT_PULSE, updated, pipelineStatus);
       return jsonRes(updated);
     } catch (err) { return jsonRes({ error: err.message }, 400); }
@@ -1491,7 +1496,7 @@ async function handleGmailRoutes(request, env) {
     const queue = new DraftQueue(env.PERMIT_PULSE);
     const { notes } = await request.json();
     try {
-      const updated = await queue.updateDraft(`draft:${rawId}`, { notes });
+      const updated = await queue.updateDraft(`draft:${decodeURIComponent(rawId)}`, { notes });
       return jsonRes(updated);
     } catch (err) { return jsonRes({ error: err.message }, 400); }
   }
