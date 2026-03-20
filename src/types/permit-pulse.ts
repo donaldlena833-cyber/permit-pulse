@@ -275,6 +275,12 @@ export interface AutomationSummary {
   lastAutomationRunAt: string | null
 }
 
+export interface AutomationHealth {
+  ok: boolean
+  hasSupabase: boolean
+  hasGmail: boolean
+}
+
 export interface SentLogEntry {
   id: string
   leadId: string

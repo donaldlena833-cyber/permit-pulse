@@ -118,7 +118,7 @@ export function DashboardView({
       <PageHeader
         action={
           <Button className="rounded-full bg-orange-500 px-5 text-white hover:bg-orange-600" onClick={onOpenScanner}>
-            Open lead scanner
+            Open pipeline
           </Button>
         }
         description="PermitPulse now runs like a control tower: what is hot, what still needs research, what can move into outreach, and where MetroGlassPro should spend time first."

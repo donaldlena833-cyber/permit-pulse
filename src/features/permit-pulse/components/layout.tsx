@@ -1,13 +1,9 @@
 import type { ReactNode } from "react"
 import {
-  Compass,
   LayoutDashboard,
-  ListFilter,
   MoonStar,
   SearchCheck,
-  Send,
   Settings2,
-  Sparkles,
   SunMedium,
 } from "lucide-react"
 
@@ -25,11 +21,7 @@ const NAV_ITEMS: Array<{
   icon: typeof LayoutDashboard
 }> = [
   { id: "dashboard", label: "Dashboard", description: "Control tower", icon: LayoutDashboard },
-  { id: "scanner", label: "Lead Scanner", description: "Scored permit feed", icon: SearchCheck },
-  { id: "workspace", label: "Lead Workspace", description: "Active review surface", icon: Compass },
-  { id: "enrichment", label: "Enrichment Queue", description: "Research lane", icon: ListFilter },
-  { id: "outreach", label: "Outreach Queue", description: "Action lane", icon: Sparkles },
-  { id: "sent-log", label: "Sent Log", description: "Delivery history", icon: Send },
+  { id: "scanner", label: "Pipeline", description: "Feed, research, outreach", icon: SearchCheck },
   { id: "profile", label: "Profile", description: "ICP and scoring", icon: Settings2 },
 ]
 
@@ -71,12 +63,12 @@ export function AppShell({
               <div>
                 <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">PermitPulse</div>
                 <div className="text-xs uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                  MetroGlassPro v2
+                  MetroGlassPro ops
                 </div>
               </div>
             </div>
             <p className="mt-4 text-sm leading-6 text-navy-500 dark:text-dark-muted">
-              Find the right permits early, qualify them fast, then move them into outreach.
+              Find the right permits early, qualify them quickly, and move real jobs into outreach from one focused workspace.
             </p>
           </div>
 
@@ -123,7 +115,7 @@ export function AppShell({
               Positioning
             </div>
             <p className="mt-3 text-sm leading-6 text-navy-500 dark:text-dark-muted">
-              MetroGlassPro-first. Manhattan first. Qualify fast. Research cleanly. Move only real work into outreach.
+              MetroGlassPro first. Manhattan first. Keep review fast, research clean, and outreach deliberate.
             </p>
           </div>
         </aside>

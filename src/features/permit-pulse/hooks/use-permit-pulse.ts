@@ -3,10 +3,13 @@ import { toast } from "sonner"
 
 import { DEFAULT_FILTERS, METROGLASSPRO_PROFILE } from "@/features/permit-pulse/data/profile"
 import {
+  fetchAutomationHealth,
   fetchAutomationSnapshot,
   persistLeadDraft,
   persistLeadEnrichment,
   persistLeadStatus,
+  runLeadEnrichment,
+  sendLeadImmediately,
   triggerAutomationRun,
 } from "@/features/permit-pulse/lib/remote"
 import { loadStore, saveStore } from "@/features/permit-pulse/lib/storage"
@@ -29,6 +32,7 @@ import {
   sortLeads,
 } from "@/features/permit-pulse/lib/views"
 import type {
+  AutomationHealth,
   AppTheme,
   EnrichmentData,
   LeadFilters,
@@ -81,6 +85,9 @@ export function usePermitPulse() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [remoteHydrating, setRemoteHydrating] = useState(true)
+  const [automationHealth, setAutomationHealth] = useState<AutomationHealth | null>(null)
+  const [enrichingLeadId, setEnrichingLeadId] = useState<string | null>(null)
+  const [sendingLeadId, setSendingLeadId] = useState<string | null>(null)
   const initialScanRef = useRef(false)
 
   const profile = store.profile
@@ -194,13 +201,16 @@ export function usePermitPulse() {
     let cancelled = false
 
     void (async () => {
-      const snapshot = await fetchAutomationSnapshot()
-      if (!cancelled && snapshot) {
+      const [health, snapshot] = await Promise.all([fetchAutomationHealth(), fetchAutomationSnapshot()])
+      if (cancelled) {
+        return
+      }
+
+      setAutomationHealth(health)
+      if (snapshot) {
         applyRemoteSnapshot(snapshot)
       }
-      if (!cancelled) {
-        setRemoteHydrating(false)
-      }
+      setRemoteHydrating(false)
     })()
 
     return () => {
@@ -485,6 +495,7 @@ export function usePermitPulse() {
     })
     void persistLeadDraft(leadId, {
       subject: nextDraft.subject,
+      introLine: nextDraft.introLine,
       body: nextDraft.shortEmail,
       callOpener: nextDraft.callOpener,
       followUpNote: nextDraft.followUpNote,
@@ -540,6 +551,68 @@ export function usePermitPulse() {
     }))
   }, [updateLead])
 
+  const refreshLeadAutomation = useCallback(async (leadId: string) => {
+    if (!automationHealth?.hasSupabase) {
+      toast.error("Automation setup incomplete", {
+        description: "Supabase is not configured on the worker yet, so Brave, Maps, and Firecrawl enrichment cannot run.",
+      })
+      return
+    }
+
+    setEnrichingLeadId(leadId)
+
+    try {
+      const snapshot = await runLeadEnrichment(leadId)
+      applyRemoteSnapshot(snapshot)
+      toast.success("Enrichment refreshed", {
+        description: "Property, company, website, and contact resolution ran for this lead.",
+      })
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Lead enrichment failed"
+      toast.error("Enrichment failed", {
+        description: message,
+      })
+    } finally {
+      setEnrichingLeadId(null)
+    }
+  }, [applyRemoteSnapshot, automationHealth])
+
+  const sendLeadNow = useCallback(async (leadId: string) => {
+    if (!automationHealth?.hasSupabase) {
+      toast.error("Automation setup incomplete", {
+        description: "Supabase is not configured on the worker yet, so send history cannot be synced.",
+      })
+      return
+    }
+
+    if (!automationHealth.hasGmail) {
+      toast.error("Gmail send is not configured", {
+        description: "Add the Gmail credentials on the worker before using direct send.",
+      })
+      return
+    }
+
+    setSendingLeadId(leadId)
+
+    try {
+      const result = await sendLeadImmediately(leadId)
+      const snapshot = await fetchAutomationSnapshot()
+      if (snapshot) {
+        applyRemoteSnapshot(snapshot)
+      }
+      toast.success("Email sent", {
+        description: result.recipient ? `Sent to ${result.recipient}.` : "The latest draft was sent.",
+      })
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Direct send failed"
+      toast.error("Send failed", {
+        description: message,
+      })
+    } finally {
+      setSendingLeadId(null)
+    }
+  }, [applyRemoteSnapshot, automationHealth])
+
   const updateProfile = useCallback((patch: Partial<TenantProfile>) => {
     setStore((currentStore) => ({
       ...currentStore,
@@ -579,6 +652,9 @@ export function usePermitPulse() {
     sentLog,
     loading,
     error,
+    automationHealth,
+    enrichingLeadId,
+    sendingLeadId,
     dashboardStats,
     dashboardActivities,
     topOpportunities,
@@ -604,6 +680,8 @@ export function usePermitPulse() {
     generateDraft,
     setFollowUpDate,
     toggleIgnored,
+    refreshLeadAutomation,
+    sendLeadNow,
     updateProfile,
     resetProfile,
   }

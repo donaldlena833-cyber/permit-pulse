@@ -24,20 +24,24 @@ export function SentLogView({
   entries,
   leads,
   onOpenLead,
+  showHeader = true,
 }: {
   entries: SentLogEntry[]
   leads: PermitLead[]
   onOpenLead: (leadId: string) => void
+  showHeader?: boolean
 }) {
   const leadMap = new Map(leads.map((lead) => [lead.id, lead]))
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        description="Track what went out, which channel it used, and which leads have already been touched inside the active duplicate window."
-        eyebrow="Sent Log"
-        title="Keep every outbound touch visible."
-      />
+      {showHeader ? (
+        <PageHeader
+          description="Track what went out, which channel it used, and which leads have already been touched inside the active duplicate window."
+          eyebrow="Sent Log"
+          title="Keep every outbound touch visible."
+        />
+      ) : null}
 
       {entries.length === 0 ? (
         <EmptyState

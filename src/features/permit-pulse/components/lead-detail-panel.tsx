@@ -1,5 +1,8 @@
-import { useMemo } from "react"
+import { type ReactNode, useMemo } from "react"
+import type { LucideIcon } from "lucide-react"
 import {
+  ArrowUpRight,
+  Bot,
   Clipboard,
   Globe,
   Instagram,
@@ -10,11 +13,18 @@ import {
   NotebookPen,
   Phone,
   Search,
+  Send,
   Sparkles,
   TimerReset,
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
@@ -38,7 +48,13 @@ import {
   getPermitAddress,
   toCommaList,
 } from "@/features/permit-pulse/lib/format"
-import type { EnrichmentData, LeadStatus, OutreachDraft, PermitLead } from "@/types/permit-pulse"
+import type {
+  AutomationHealth,
+  EnrichmentData,
+  LeadStatus,
+  OutreachDraft,
+  PermitLead,
+} from "@/types/permit-pulse"
 
 const STATUS_OPTIONS: LeadStatus[] = [
   "new",
@@ -59,10 +75,15 @@ const STATUS_OPTIONS: LeadStatus[] = [
 
 interface LeadDetailPanelProps {
   lead: PermitLead | null
+  automationHealth: AutomationHealth | null
+  isEnriching: boolean
+  isSending: boolean
   onStatusChange: (leadId: string, status: LeadStatus) => void
   onEnrichmentChange: (leadId: string, patch: Partial<EnrichmentData>) => void
   onDraftChange: (leadId: string, patch: Partial<OutreachDraft>) => void
   onGenerateDraft: (leadId: string) => void
+  onRunEnrichment: (leadId: string) => void
+  onSendNow: (leadId: string) => void
   onFollowUpDateChange: (leadId: string, value: string) => void
   onToggleIgnored: (leadId: string) => void
 }
@@ -85,56 +106,141 @@ function quickSearchUrl(query: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(query)}`
 }
 
-function QuickActionButton({
-  label,
-  onClick,
+function uniq(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)))
+}
+
+function ControlButton({
+  disabled,
   icon: Icon,
+  label,
+  loading,
+  onClick,
+  variant = "outline",
 }: {
+  disabled?: boolean
+  icon: LucideIcon
   label: string
+  loading?: boolean
   onClick: () => void
-  icon: typeof Globe
+  variant?: "default" | "outline"
 }) {
   return (
     <Button
-      className="justify-start rounded-2xl border-navy-200 bg-white/80 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+      className={
+        variant === "default"
+          ? "h-10 justify-start rounded-2xl bg-orange-500 px-4 text-white hover:bg-orange-600"
+          : "h-10 justify-start rounded-2xl border-navy-200 bg-white/90 px-4 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+      }
+      disabled={disabled || loading}
       onClick={onClick}
       type="button"
-      variant="outline"
+      variant={variant}
     >
       <Icon className="h-4 w-4" />
-      {label}
+      {loading ? `${label}...` : label}
     </Button>
   )
 }
 
-function MetaField({ label, value }: { label: string; value: string }) {
+function CompactField({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-navy-400 dark:text-dark-muted">{label}</div>
-      <div className="mt-2 text-sm leading-6 text-navy-700 dark:text-dark-text">{value || "—"}</div>
+    <div className="rounded-[20px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">{label}</div>
+      <div className="mt-1 text-sm leading-6 text-navy-700 dark:text-dark-text">{value || "—"}</div>
     </div>
   )
 }
 
 function SignalBar({ label, value, helper }: { label: string; value: number; helper: string }) {
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-sm text-navy-700 dark:text-dark-text">
-        <span>{label}</span>
+    <div className="space-y-2 rounded-[20px] border border-navy-200/70 bg-white/80 p-3 dark:border-dark-border/70 dark:bg-dark-card/80">
+      <div className="flex items-center justify-between gap-3 text-sm text-navy-700 dark:text-dark-text">
+        <span className="font-medium">{label}</span>
         <span>{value}</span>
       </div>
-      <Progress className="h-2 bg-cream-100 dark:bg-dark-border/70" value={value} />
-      <p className="text-sm leading-6 text-navy-500 dark:text-dark-muted">{helper}</p>
+      <Progress className="h-1.5 bg-cream-100 dark:bg-dark-border/70" value={value} />
+      <p className="text-xs leading-5 text-navy-500 dark:text-dark-muted">{helper}</p>
     </div>
+  )
+}
+
+function RouteRow({
+  actionLabel,
+  icon: Icon,
+  label,
+  onAction,
+  value,
+}: {
+  actionLabel?: string
+  icon: LucideIcon
+  label: string
+  onAction?: () => void
+  value: string
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-[20px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg">
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="rounded-2xl bg-white/80 p-2 text-navy-600 dark:bg-dark-card dark:text-dark-text">
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">{label}</div>
+          <div className="truncate text-sm text-navy-700 dark:text-dark-text">{value || "—"}</div>
+        </div>
+      </div>
+      {actionLabel && onAction ? (
+        <Button
+          className="h-8 rounded-xl px-3 text-xs"
+          onClick={onAction}
+          type="button"
+          variant="outline"
+        >
+          {actionLabel}
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
+function DetailSection({
+  children,
+  description,
+  title,
+  value,
+}: {
+  children: ReactNode
+  description: string
+  title: string
+  value: string
+}) {
+  return (
+    <AccordionItem
+      className="overflow-hidden rounded-[26px] border border-navy-200/70 bg-white/80 px-4 dark:border-dark-border/70 dark:bg-dark-card/90"
+      value={value}
+    >
+      <AccordionTrigger className="py-4 text-left hover:no-underline">
+        <div>
+          <div className="text-sm font-semibold tracking-[-0.02em] text-navy-900 dark:text-dark-text">{title}</div>
+          <div className="mt-1 text-xs leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
+        </div>
+      </AccordionTrigger>
+      <AccordionContent className="pb-4">{children}</AccordionContent>
+    </AccordionItem>
   )
 }
 
 export function LeadDetailPanel({
   lead,
+  automationHealth,
+  isEnriching,
+  isSending,
   onStatusChange,
   onEnrichmentChange,
   onDraftChange,
   onGenerateDraft,
+  onRunEnrichment,
+  onSendNow,
   onFollowUpDateChange,
   onToggleIgnored,
 }: LeadDetailPanelProps) {
@@ -173,22 +279,22 @@ export function LeadDetailPanel({
         action: () => openExternal(`https://www.google.com/maps/search/${encodeURIComponent(address)}`),
       },
       {
-        label: "Search owner",
+        label: "Owner search",
         icon: Search,
         action: () => openExternal(quickSearchUrl(`${ownerQuery} NYC`)),
       },
       {
-        label: "Search GC",
+        label: "GC search",
         icon: Search,
         action: () => openExternal(quickSearchUrl(`${gcQuery} NYC contractor phone`)),
       },
       {
-        label: "Search LinkedIn",
+        label: "LinkedIn",
         icon: Linkedin,
         action: () => openExternal(quickSearchUrl(`${gcQuery} LinkedIn`)),
       },
       {
-        label: "Search Instagram",
+        label: "Instagram",
         icon: Instagram,
         action: () => openExternal(quickSearchUrl(`${gcQuery} Instagram`)),
       },
@@ -198,76 +304,479 @@ export function LeadDetailPanel({
   if (!lead) {
     return (
       <EmptyState
-        description="Select a permit from the scanner, enrichment queue, or outreach queue to turn it into an operational lead."
+        description="Select a permit from the pipeline to qualify it, enrich it, and move it into outreach without leaving the workspace."
         icon={NotebookPen}
         title="No lead selected"
       />
     )
   }
 
+  const website = lead.enrichment.companyWebsite || lead.companyProfile.website || lead.contacts.find((contact) => contact.website)?.website || ""
+  const primaryEmail =
+    lead.enrichment.directEmail ||
+    lead.enrichment.genericEmail ||
+    lead.contacts.find((contact) => contact.email)?.email ||
+    ""
+  const phone = lead.enrichment.phone || lead.contacts.find((contact) => contact.phone)?.phone || ""
+  const contactForm =
+    lead.enrichment.contactFormUrl ||
+    lead.contacts.find((contact) => contact.contactFormUrl)?.contactFormUrl ||
+    ""
+  const linkedIn =
+    lead.enrichment.linkedInUrl ||
+    lead.companyProfile.linkedInUrl ||
+    lead.contacts.find((contact) => contact.linkedInUrl)?.linkedInUrl ||
+    ""
+  const instagram =
+    lead.enrichment.instagramUrl ||
+    lead.companyProfile.instagramUrl ||
+    lead.contacts.find((contact) => contact.instagramUrl)?.instagramUrl ||
+    ""
+
+  const automationSources = uniq([
+    ...lead.enrichment.sourceTags,
+    ...lead.propertyProfile.sourceTags,
+    lead.companyProfile.searchQuery ? "brave" : "",
+    lead.companyProfile.website ? "website" : "",
+    lead.contacts.some((contact) => contact.source === "firecrawl") ? "firecrawl" : "",
+  ])
+  const canSendNow = Boolean(primaryEmail && lead.outreachDraft.subject && lead.outreachDraft.shortEmail)
+  const automationMode = !automationHealth
+    ? "Checking setup"
+    : automationHealth.hasSupabase
+      ? automationHealth.hasGmail
+        ? "Enrichment and send ready"
+        : "Enrichment ready, Gmail pending"
+      : "Manual mode only"
+  const automationNote = !automationHealth
+    ? "The worker health check has not returned yet."
+    : automationHealth.hasSupabase
+      ? "This lead can use the worker for Maps matching, Brave company resolution, website scraping, and contact refresh."
+      : "The worker is online, but Supabase is missing, so API-backed enrichment cannot run yet."
+
   return (
     <div className="h-full rounded-[30px] border border-navy-200/70 bg-white/80 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
       <ScrollArea className="h-[calc(100vh-13rem)]">
-        <div className="space-y-6 p-5">
-          <div className="rounded-[28px] border border-orange-200/60 bg-gradient-to-br from-orange-50 to-white p-5 dark:border-orange-800/40 dark:from-orange-900/15 dark:to-dark-card">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="space-y-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
-                  Lead workspace
-                </div>
-                <h2 className="text-2xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">
-                  {getPermitAddress(lead)}
-                </h2>
-                <p className="max-w-3xl text-sm leading-7 text-navy-500 dark:text-dark-muted">{lead.humanSummary}</p>
-                <div className="flex flex-wrap gap-2">
-                  <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
-                  <ContactabilityBadge contactability={lead.contactability} />
-                  <PriorityBadge label={lead.priorityLabel} />
-                  <StatusBadge status={lead.workflow.status} />
-                  <BoroughBadge borough={lead.borough} />
-                </div>
+        <div className="grid gap-4 p-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="space-y-4">
+            <SectionCard
+              className="rounded-[30px]"
+              contentClassName="space-y-4"
+              description="Lead fit, contactability, and operational readiness in one compressed surface."
+              title={getPermitAddress(lead)}
+            >
+              <div className="flex flex-wrap gap-2">
+                <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                <ContactabilityBadge contactability={lead.contactability} />
+                <PriorityBadge label={lead.priorityLabel} />
+                <StatusBadge status={lead.workflow.status} />
+                <BoroughBadge borough={lead.borough} />
               </div>
 
-              <div className="rounded-[24px] border border-orange-200 bg-white/80 p-4 dark:border-orange-800/40 dark:bg-dark-bg">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-navy-400 dark:text-dark-muted">
-                  Best next step
-                </div>
-                <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
-                  {lead.nextAction.label}
-                </div>
-                <p className="mt-2 max-w-xs text-sm leading-6 text-navy-500 dark:text-dark-muted">{lead.nextAction.detail}</p>
-              </div>
-            </div>
-          </div>
+              <p className="text-sm leading-6 text-navy-500 dark:text-dark-muted">{lead.humanSummary}</p>
 
-          <SectionCard
-            action={
-              <Button className="rounded-full" onClick={() => onGenerateDraft(lead.id)} type="button" variant="outline">
-                <Sparkles className="h-4 w-4" />
-                Draft helper
-              </Button>
-            }
-            description="Lead score, contactability, priority, and the current pipeline state."
-            title="Signal stack"
-          >
-            <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
-              <div className="space-y-5">
+              <div className="grid gap-3 xl:grid-cols-3">
                 <SignalBar helper={lead.scoreBreakdown.summary} label="Lead score" value={lead.score} />
                 <SignalBar
                   helper={lead.contactability.explanation}
                   label="Contactability"
                   value={lead.contactability.total}
                 />
-                <SignalBar helper={lead.nextAction.detail} label="Priority score" value={lead.priorityScore} />
+                <SignalBar
+                  helper={lead.outreachReadiness.explanation}
+                  label="Outreach readiness"
+                  value={lead.outreachReadiness.score}
+                />
+              </div>
+            </SectionCard>
+
+            <Accordion
+              className="space-y-3"
+              defaultValue={["fit", "context", "research", "draft"]}
+              type="multiple"
+            >
+              <DetailSection
+                description="Permit facts, fit explanation, and the fields you need most while reviewing."
+                title="Fit and permit"
+                value="fit"
+              >
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  <CompactField label="Owner" value={lead.owner_name || "—"} />
+                  <CompactField label="Owner business" value={lead.owner_business_name || "—"} />
+                  <CompactField label="GC / Applicant" value={getApplicantDisplay(lead)} />
+                  <CompactField label="Filing rep" value={getFilingRepDisplay(lead)} />
+                  <CompactField label="Work type" value={lead.work_type || "—"} />
+                  <CompactField label="Filing reason" value={lead.filing_reason || "—"} />
+                  <CompactField label="Estimated cost" value={formatCurrency(lead.estimated_job_costs)} />
+                  <CompactField label="Floor(s)" value={lead.work_on_floor || "—"} />
+                  <CompactField label="BIN / Block / Lot" value={`${lead.bin} / ${lead.block} / ${lead.lot}`} />
+                  <CompactField label="Approved" value={formatDate(lead.approved_date)} />
+                  <CompactField label="Issued" value={formatDate(lead.issued_date)} />
+                  <CompactField label="Expires" value={formatDate(lead.expired_date)} />
+                </div>
+
+                <div className="rounded-[20px] border border-navy-200/70 bg-cream-50/70 p-3 dark:border-dark-border/70 dark:bg-dark-bg">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                    Permit description
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-navy-700 dark:text-dark-text">{lead.job_description || "—"}</p>
+                </div>
+
+                {lead.scoreBreakdown.disqualifiers.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {lead.scoreBreakdown.disqualifiers.map((item) => (
+                      <span
+                        key={item}
+                        className="rounded-full border border-navy-200 bg-white/80 px-3 py-1 text-xs text-navy-600 dark:border-dark-border dark:bg-dark-card dark:text-dark-muted"
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </DetailSection>
+
+              <DetailSection
+                description="What the worker has already resolved from property data, company matching, and public web signals."
+                title="Resolved context"
+                value="context"
+              >
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  <CompactField label="Neighborhood" value={lead.propertyProfile.neighborhood || "—"} />
+                  <CompactField label="Building type" value={lead.propertyProfile.buildingType || "—"} />
+                  <CompactField label="Property class" value={lead.propertyProfile.propertyClass || "—"} />
+                  <CompactField label="Company" value={lead.companyProfile.name || "—"} />
+                  <CompactField label="Company role" value={lead.companyProfile.role || "—"} />
+                  <CompactField label="Company domain" value={lead.companyProfile.domain || "—"} />
+                  <CompactField label="Company match" value={lead.companyProfile.matchStrength} />
+                  <CompactField label="Search query" value={lead.companyProfile.searchQuery || "—"} />
+                  <CompactField label="Best channel" value={lead.channelDecision.primary} />
+                </div>
+
+                <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]">
+                  <div className="rounded-[20px] border border-navy-200/70 bg-white/80 p-3 dark:border-dark-border/70 dark:bg-dark-card/80">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                      Enrichment facts
+                    </div>
+                    {lead.enrichmentFacts.length === 0 ? (
+                      <p className="mt-2 text-sm text-navy-500 dark:text-dark-muted">
+                        No structured facts yet. Run enrichment or add manual context below.
+                      </p>
+                    ) : (
+                      <div className="mt-3 space-y-2">
+                        {lead.enrichmentFacts.slice(0, 6).map((fact) => (
+                          <div
+                            key={fact.id}
+                            className="rounded-2xl border border-navy-200/70 bg-cream-50/70 px-3 py-2 dark:border-dark-border/70 dark:bg-dark-bg"
+                          >
+                            <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                              <span>{fact.field.replace(/_/g, " ")}</span>
+                              <span>{fact.source}</span>
+                            </div>
+                            <div className="mt-1 text-sm leading-6 text-navy-700 dark:text-dark-text">{fact.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-[20px] border border-navy-200/70 bg-white/80 p-3 dark:border-dark-border/70 dark:bg-dark-card/80">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                      Resolved contacts
+                    </div>
+                    {lead.contacts.length === 0 ? (
+                      <p className="mt-2 text-sm text-navy-500 dark:text-dark-muted">
+                        No contact records yet. Use the action rail to run a refresh or add a route manually.
+                      </p>
+                    ) : (
+                      <div className="mt-3 space-y-2">
+                        {lead.contacts.slice(0, 4).map((contact) => (
+                          <div
+                            key={contact.id}
+                            className="rounded-2xl border border-navy-200/70 bg-cream-50/70 px-3 py-2 dark:border-dark-border/70 dark:bg-dark-bg"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-medium text-navy-800 dark:text-dark-text">
+                                {contact.name || lead.companyProfile.name || "Unknown contact"}
+                              </div>
+                              <div className="text-[10px] uppercase tracking-[0.16em] text-navy-400 dark:text-dark-muted">
+                                {contact.type}
+                              </div>
+                            </div>
+                            <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">
+                              {[contact.role, contact.source, `${contact.confidence}% confidence`].filter(Boolean).join(" • ")}
+                            </div>
+                            <div className="mt-2 text-sm text-navy-700 dark:text-dark-text">
+                              {contact.email || contact.phone || contact.contactFormUrl || contact.website || "No direct route"}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </DetailSection>
+
+              <DetailSection
+                description="Keep manual research tight. Add only the fields that move the next action forward."
+                title="Manual enrichment"
+                value="research"
+              >
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Website</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { companyWebsite: event.target.value })}
+                      placeholder="https://company.com"
+                      value={lead.enrichment.companyWebsite}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Phone</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { phone: event.target.value })}
+                      placeholder="(212) 555 0100"
+                      value={lead.enrichment.phone}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Direct email</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { directEmail: event.target.value })}
+                      placeholder="name@company.com"
+                      value={lead.enrichment.directEmail}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Generic email</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { genericEmail: event.target.value })}
+                      placeholder="info@company.com"
+                      value={lead.enrichment.genericEmail}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Contact form</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { contactFormUrl: event.target.value })}
+                      placeholder="https://company.com/contact"
+                      value={lead.enrichment.contactFormUrl}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Contact person</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { contactPersonName: event.target.value })}
+                      placeholder="Name"
+                      value={lead.enrichment.contactPersonName}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Contact role</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { contactRole: event.target.value })}
+                      placeholder="Owner, estimator, PM"
+                      value={lead.enrichment.contactRole}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">LinkedIn</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { linkedInUrl: event.target.value })}
+                      placeholder="https://linkedin.com/..."
+                      value={lead.enrichment.linkedInUrl}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Instagram</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { instagramUrl: event.target.value })}
+                      placeholder="https://instagram.com/..."
+                      value={lead.enrichment.instagramUrl}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 xl:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Notes</label>
+                    <Textarea
+                      className="min-h-[110px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { notes: event.target.value })}
+                      placeholder="Short qualification notes."
+                      value={lead.enrichment.notes}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Research notes</label>
+                    <Textarea
+                      className="min-h-[110px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { researchNotes: event.target.value })}
+                      placeholder="Website findings, personalization, or owner context."
+                      value={lead.enrichment.researchNotes}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Source tags</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onEnrichmentChange(lead.id, { sourceTags: toCommaList(event.target.value) })}
+                      placeholder="Brave, Maps, manual"
+                      value={lead.enrichment.sourceTags.join(", ")}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Confidence tags</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) =>
+                        onEnrichmentChange(lead.id, { confidenceTags: toCommaList(event.target.value) })
+                      }
+                      placeholder="Strong match, owner confirmed"
+                      value={lead.enrichment.confidenceTags.join(", ")}
+                    />
+                  </div>
+                </div>
+              </DetailSection>
+
+              <DetailSection
+                description="Keep the outbound copy editable, but out of the way until you need it."
+                title="Draft helper"
+                value="draft"
+              >
+                <div className="grid gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Subject line</label>
+                    <Input
+                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onDraftChange(lead.id, { subject: event.target.value })}
+                      value={lead.outreachDraft.subject}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Intro line</label>
+                    <Textarea
+                      className="min-h-[80px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onDraftChange(lead.id, { introLine: event.target.value })}
+                      value={lead.outreachDraft.introLine}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Short email</label>
+                    <Textarea
+                      className="min-h-[160px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      onChange={(event) => onDraftChange(lead.id, { shortEmail: event.target.value })}
+                      value={lead.outreachDraft.shortEmail}
+                    />
+                  </div>
+                  <div className="grid gap-3 xl:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Call opener</label>
+                      <Textarea
+                        className="min-h-[80px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                        onChange={(event) => onDraftChange(lead.id, { callOpener: event.target.value })}
+                        value={lead.outreachDraft.callOpener}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Follow-up note</label>
+                      <Textarea
+                        className="min-h-[80px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                        onChange={(event) => onDraftChange(lead.id, { followUpNote: event.target.value })}
+                        value={lead.outreachDraft.followUpNote}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </DetailSection>
+
+              <DetailSection
+                description="Lead memory that helps you resume quickly after a scan or rescan."
+                title="Activity timeline"
+                value="timeline"
+              >
+                <div className="space-y-2">
+                  {lead.activities.length === 0 ? (
+                    <p className="text-sm text-navy-500 dark:text-dark-muted">No activity recorded yet.</p>
+                  ) : (
+                    lead.activities.map((activity) => (
+                      <div
+                        key={activity.id}
+                        className="flex items-start gap-3 rounded-[20px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg"
+                      >
+                        <div className="mt-1.5 h-2 w-2 rounded-full bg-orange-500" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="text-sm font-medium text-navy-800 dark:text-dark-text">{activity.title}</div>
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-navy-400 dark:text-dark-muted">
+                              {formatDate(activity.createdAt)}
+                            </div>
+                          </div>
+                          <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">{activity.detail}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </DetailSection>
+            </Accordion>
+          </div>
+
+          <div className="space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
+            <SectionCard
+              contentClassName="space-y-4"
+              description="Best next move, quick controls, and the enrichment actions you should actually use."
+              title="Action rail"
+            >
+              <div className="rounded-[22px] border border-orange-200/70 bg-gradient-to-br from-orange-50 to-white p-4 dark:border-orange-800/40 dark:from-orange-900/15 dark:to-dark-card">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
+                  Best next step
+                </div>
+                <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                  {lead.nextAction.label}
+                </div>
+                <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">{lead.nextAction.detail}</p>
               </div>
 
-              <div className="rounded-[24px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-navy-400 dark:text-dark-muted">
-                  Pipeline
-                </div>
-                <div className="mt-4 grid gap-4">
+              <div className="grid gap-2">
+                <ControlButton
+                  icon={Bot}
+                  label="Run enrichment"
+                  loading={isEnriching}
+                  onClick={() => onRunEnrichment(lead.id)}
+                  variant="default"
+                />
+                <ControlButton
+                  icon={Sparkles}
+                  label="Refresh draft"
+                  onClick={() => onGenerateDraft(lead.id)}
+                />
+                <ControlButton
+                  disabled={!canSendNow || !automationHealth?.hasGmail}
+                  icon={Send}
+                  label="Send now"
+                  loading={isSending}
+                  onClick={() => onSendNow(lead.id)}
+                />
+              </div>
+
+              <div className="grid gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Pipeline status</label>
                   <Select onValueChange={(value) => onStatusChange(lead.id, value as LeadStatus)} value={lead.workflow.status}>
-                    <SelectTrigger className="h-11 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card">
+                    <SelectTrigger className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -278,474 +787,151 @@ export function LeadDetailPanel({
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
 
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Follow-up date</label>
                   <Input
-                    className="h-11 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                    className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
                     onChange={(event) => onFollowUpDateChange(lead.id, event.target.value)}
                     type="date"
                     value={lead.enrichment.followUpDate}
                   />
-
-                  <Button
-                    className="justify-start rounded-2xl"
-                    onClick={() => onToggleIgnored(lead.id)}
-                    type="button"
-                    variant="outline"
-                  >
-                    <TimerReset className="h-4 w-4" />
-                    {lead.workflow.ignored ? "Bring back into queues" : "Archive from active queues"}
-                  </Button>
                 </div>
+
+                <Button
+                  className="h-10 justify-start rounded-2xl border-navy-200 bg-white/90 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+                  onClick={() => onToggleIgnored(lead.id)}
+                  type="button"
+                  variant="outline"
+                >
+                  <TimerReset className="h-4 w-4" />
+                  {lead.workflow.ignored ? "Bring back into queue" : "Archive from active queue"}
+                </Button>
               </div>
-            </div>
-          </SectionCard>
+            </SectionCard>
 
-          <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
             <SectionCard
-              description="Automation confidence, company match quality, and the chosen outbound lane."
-              title="Automation control"
+              contentClassName="space-y-3"
+              description="The cleanest current routes for reaching this lead."
+              title="Contact routes"
             >
-              <div className="space-y-5">
-                <SignalBar
-                  helper={lead.outreachReadiness.explanation}
-                  label="Outreach readiness"
-                  value={lead.outreachReadiness.score}
-                />
-                <SignalBar
-                  helper={lead.automationSummary.autoSendReason}
-                  label="Enrichment confidence"
-                  value={lead.automationSummary.enrichmentConfidence}
-                />
+              <RouteRow
+                actionLabel={primaryEmail ? "Copy" : undefined}
+                icon={Mail}
+                label="Email"
+                onAction={primaryEmail ? () => copyValue("Email", primaryEmail) : undefined}
+                value={primaryEmail}
+              />
+              <RouteRow
+                actionLabel={phone ? "Copy" : undefined}
+                icon={Phone}
+                label="Phone"
+                onAction={phone ? () => copyValue("Phone", phone) : undefined}
+                value={phone}
+              />
+              <RouteRow
+                actionLabel={website ? "Open" : undefined}
+                icon={Globe}
+                label="Website"
+                onAction={website ? () => openExternal(website.startsWith("http") ? website : `https://${website}`) : undefined}
+                value={website}
+              />
+              <RouteRow
+                actionLabel={contactForm ? "Open" : undefined}
+                icon={ArrowUpRight}
+                label="Contact form"
+                onAction={contactForm ? () => openExternal(contactForm) : undefined}
+                value={contactForm}
+              />
+              <RouteRow
+                actionLabel={linkedIn ? "Open" : undefined}
+                icon={Linkedin}
+                label="LinkedIn"
+                onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
+                value={linkedIn}
+              />
+              <RouteRow
+                actionLabel={instagram ? "Open" : undefined}
+                icon={Instagram}
+                label="Instagram"
+                onAction={instagram ? () => openExternal(instagram) : undefined}
+                value={instagram}
+              />
+            </SectionCard>
 
-                <div className="grid gap-3 md:grid-cols-2">
-                  <MetaField label="Primary channel" value={lead.channelDecision.primary} />
-                  <MetaField label="Company match" value={lead.companyProfile.matchStrength} />
-                  <MetaField label="Company domain" value={lead.companyProfile.domain || "—"} />
-                  <MetaField
-                    label="Auto-send"
-                    value={lead.automationSummary.autoSendEligible ? "Eligible" : "Needs review"}
-                  />
+            <SectionCard
+              contentClassName="space-y-3"
+              description="Make the APIs visible. This is where enrichment health and external research shortcuts live."
+              title="Automation status"
+            >
+              <div className="rounded-[20px] border border-navy-200/70 bg-cream-50/70 p-3 dark:border-dark-border/70 dark:bg-dark-bg">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                  Worker mode
                 </div>
+                <div className="mt-1 text-sm font-semibold text-navy-900 dark:text-dark-text">{automationMode}</div>
+                <p className="mt-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">{automationNote}</p>
+              </div>
 
-                {lead.outreachReadiness.blockers.length > 0 ? (
-                  <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-navy-400 dark:text-dark-muted">
-                      Current blockers
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {lead.outreachReadiness.blockers.map((blocker) => (
-                        <span
-                          key={blocker}
-                          className="rounded-full border border-navy-200 bg-white/80 px-3 py-1 text-xs text-navy-600 dark:border-dark-border dark:bg-dark-card dark:text-dark-muted"
-                        >
-                          {blocker}
-                        </span>
-                      ))}
-                    </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <CompactField label="Last automation run" value={formatDate(lead.automationSummary.lastAutomationRunAt)} />
+                <CompactField label="Enrichment confidence" value={`${lead.automationSummary.enrichmentConfidence}`} />
+              </div>
+
+              {automationSources.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {automationSources.map((item) => (
+                    <span
+                      key={item}
+                      className="rounded-full border border-navy-200 bg-white/80 px-3 py-1 text-[11px] font-medium text-navy-600 dark:border-dark-border dark:bg-dark-card dark:text-dark-muted"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+
+              {lead.outreachReadiness.blockers.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                    Current blockers
                   </div>
-                ) : null}
-              </div>
-            </SectionCard>
-
-            <SectionCard
-              description="Resolved property and company context from PLUTO, Maps, search, and website scraping."
-              title="Resolved context"
-            >
-              <div className="grid gap-3 md:grid-cols-2">
-                <MetaField label="Neighborhood" value={lead.propertyProfile.neighborhood || "—"} />
-                <MetaField label="Building type" value={lead.propertyProfile.buildingType || "—"} />
-                <MetaField label="Property class" value={lead.propertyProfile.propertyClass || "—"} />
-                <MetaField label="Company" value={lead.companyProfile.name || "—"} />
-                <MetaField label="Company role" value={lead.companyProfile.role || "—"} />
-                <MetaField label="Search query" value={lead.companyProfile.searchQuery || "—"} />
-              </div>
-
-              <div className="rounded-[22px] border border-navy-200/70 bg-white/80 p-4 dark:border-dark-border/70 dark:bg-dark-card/80">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-navy-400 dark:text-dark-muted">
-                  Automation summary
+                  <div className="flex flex-wrap gap-2">
+                    {lead.outreachReadiness.blockers.map((blocker) => (
+                      <span
+                        key={blocker}
+                        className="rounded-full border border-navy-200 bg-white/80 px-3 py-1 text-[11px] font-medium text-navy-600 dark:border-dark-border dark:bg-dark-card dark:text-dark-muted"
+                      >
+                        {blocker}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-                <p className="mt-3 text-sm leading-7 text-navy-600 dark:text-dark-muted">
-                  {lead.channelDecision.reason}
-                </p>
-              </div>
-            </SectionCard>
-          </div>
-
-          <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-            <SectionCard
-              description="Permit basics, fit explanation, and source-side context."
-              title="Permit intelligence"
-            >
-              <div className="grid gap-3 md:grid-cols-2">
-                <MetaField label="Owner" value={lead.owner_name || "—"} />
-                <MetaField label="Owner business" value={lead.owner_business_name || "—"} />
-                <MetaField label="GC / Applicant" value={getApplicantDisplay(lead)} />
-                <MetaField label="Filing rep" value={getFilingRepDisplay(lead)} />
-                <MetaField label="Work type" value={lead.work_type || "—"} />
-                <MetaField label="Filing reason" value={lead.filing_reason || "—"} />
-                <MetaField label="Estimated cost" value={formatCurrency(lead.estimated_job_costs)} />
-                <MetaField label="Floor(s)" value={lead.work_on_floor || "—"} />
-                <MetaField label="Approved" value={formatDate(lead.approved_date)} />
-                <MetaField label="Issued" value={formatDate(lead.issued_date)} />
-                <MetaField label="Expires" value={formatDate(lead.expired_date)} />
-                <MetaField label="BIN / Block / Lot" value={`${lead.bin} / ${lead.block} / ${lead.lot}`} />
-              </div>
-              <div className="rounded-[22px] border border-navy-200/70 bg-white/80 p-4 dark:border-dark-border/70 dark:bg-dark-card/80">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-navy-400 dark:text-dark-muted">
-                  Permit description
-                </div>
-                <p className="mt-3 text-sm leading-7 text-navy-600 dark:text-dark-muted">{lead.job_description}</p>
-              </div>
+              ) : null}
             </SectionCard>
 
             <SectionCard
-              description="One-click research routes plus editable contact data for the lead."
-              title="Enrichment workbench"
+              contentClassName="space-y-2"
+              description="Manual search routes stay close by, without taking over the page."
+              title="Research shortcuts"
             >
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-2 sm:grid-cols-2">
                 {actionLinks.map((link) => (
-                  <QuickActionButton key={link.label} icon={link.icon} label={link.label} onClick={link.action} />
+                  <ControlButton key={link.label} icon={link.icon} label={link.label} onClick={link.action} />
                 ))}
-                {lead.enrichment.companyWebsite || lead.companyProfile.website ? (
-                  <QuickActionButton
+                {website ? (
+                  <ControlButton
                     icon={Globe}
                     label="Open website"
-                    onClick={() => openExternal(lead.enrichment.companyWebsite || lead.companyProfile.website)}
+                    onClick={() => openExternal(website.startsWith("http") ? website : `https://${website}`)}
                   />
                 ) : null}
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Company website</label>
-                  <div className="flex gap-2">
-                    <Input
-                      className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                      onChange={(event) => onEnrichmentChange(lead.id, { companyWebsite: event.target.value })}
-                      placeholder="https://company.com"
-                      value={lead.enrichment.companyWebsite}
-                    />
-                    <Button onClick={() => copyValue("Website", lead.enrichment.companyWebsite)} size="icon" type="button" variant="outline">
-                      <Clipboard className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Phone</label>
-                  <div className="flex gap-2">
-                    <Input
-                      className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                      onChange={(event) => onEnrichmentChange(lead.id, { phone: event.target.value })}
-                      placeholder="(212) 555-0100"
-                      value={lead.enrichment.phone}
-                    />
-                    <Button onClick={() => copyValue("Phone", lead.enrichment.phone)} size="icon" type="button" variant="outline">
-                      <Phone className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Direct email</label>
-                  <div className="flex gap-2">
-                    <Input
-                      className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                      onChange={(event) => onEnrichmentChange(lead.id, { directEmail: event.target.value })}
-                      placeholder="name@company.com"
-                      value={lead.enrichment.directEmail}
-                    />
-                    <Button onClick={() => copyValue("Direct email", lead.enrichment.directEmail)} size="icon" type="button" variant="outline">
-                      <Mail className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Generic email</label>
-                  <Input
-                    className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onEnrichmentChange(lead.id, { genericEmail: event.target.value })}
-                    placeholder="info@company.com"
-                    value={lead.enrichment.genericEmail}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Contact form URL</label>
-                  <Input
-                    className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onEnrichmentChange(lead.id, { contactFormUrl: event.target.value })}
-                    placeholder="https://company.com/contact"
-                    value={lead.enrichment.contactFormUrl}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">LinkedIn</label>
-                  <Input
-                    className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onEnrichmentChange(lead.id, { linkedInUrl: event.target.value })}
-                    placeholder="https://linkedin.com/in/..."
-                    value={lead.enrichment.linkedInUrl}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Instagram</label>
-                  <Input
-                    className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onEnrichmentChange(lead.id, { instagramUrl: event.target.value })}
-                    placeholder="https://instagram.com/..."
-                    value={lead.enrichment.instagramUrl}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Contact person</label>
-                  <Input
-                    className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onEnrichmentChange(lead.id, { contactPersonName: event.target.value })}
-                    placeholder="John Doe"
-                    value={lead.enrichment.contactPersonName}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Contact role</label>
-                  <Input
-                    className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onEnrichmentChange(lead.id, { contactRole: event.target.value })}
-                    placeholder="Owner, estimator, PM..."
-                    value={lead.enrichment.contactRole}
-                  />
-                </div>
+                {primaryEmail ? (
+                  <ControlButton icon={Clipboard} label="Copy email" onClick={() => copyValue("Email", primaryEmail)} />
+                ) : null}
               </div>
             </SectionCard>
           </div>
-
-          <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-            <SectionCard
-              description="Best known people, emails, phones, forms, and social routes for this lead."
-              title="Resolved contacts"
-            >
-              {lead.contacts.length === 0 ? (
-                <EmptyState
-                  description="Automation has not resolved a clean route yet. Use the enrichment workbench to add one."
-                  icon={Mail}
-                  title="No contacts resolved"
-                />
-              ) : (
-                <div className="space-y-3">
-                  {lead.contacts.map((contact) => (
-                    <div
-                      key={contact.id}
-                      className="rounded-[22px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg"
-                    >
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="space-y-1">
-                          <div className="text-sm font-semibold text-navy-800 dark:text-dark-text">
-                            {contact.name || lead.companyProfile.name || "Unknown contact"}
-                          </div>
-                          <div className="text-xs text-navy-500 dark:text-dark-muted">
-                            {[contact.role, contact.type, `${contact.confidence}% confidence`, contact.source]
-                              .filter(Boolean)
-                              .join(" • ")}
-                          </div>
-                        </div>
-                        {contact.isPrimary ? (
-                          <span className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/20 dark:text-orange-200">
-                            Primary
-                          </span>
-                        ) : null}
-                      </div>
-
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                        <MetaField label="Email" value={contact.email || "—"} />
-                        <MetaField label="Phone" value={contact.phone || "—"} />
-                        <MetaField label="Website" value={contact.website || "—"} />
-                        <MetaField label="Contact form" value={contact.contactFormUrl || "—"} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </SectionCard>
-
-            <SectionCard
-              description="Every drafted, queued, and sent touch tied back to this lead."
-              title="Outreach history"
-            >
-              {lead.outreachHistory.length === 0 ? (
-                <EmptyState
-                  description="Drafts and sends will show up here once the automation layer or manual edits create outreach records."
-                  icon={Sparkles}
-                  title="No outreach history yet"
-                />
-              ) : (
-                <div className="space-y-3">
-                  {lead.outreachHistory.map((item) => (
-                    <div
-                      key={item.id}
-                      className="rounded-[22px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg"
-                    >
-                      <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                          <div className="text-sm font-semibold text-navy-800 dark:text-dark-text">{item.subject || item.channel}</div>
-                          <div className="text-xs text-navy-500 dark:text-dark-muted">
-                            {[item.channel, item.status, item.recipient].filter(Boolean).join(" • ")}
-                          </div>
-                        </div>
-                        <div className="text-xs uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                          {formatDate(item.sentAt ?? item.createdAt)}
-                        </div>
-                      </div>
-                      {item.pluginLine ? (
-                        <p className="mt-3 text-sm leading-6 text-navy-500 dark:text-dark-muted">{item.pluginLine}</p>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </SectionCard>
-          </div>
-
-          <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-            <SectionCard
-              description="Manual research memory, source tags, and confidence notes that survive rescans."
-              title="Research notes"
-            >
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Notes</label>
-                  <Textarea
-                    className="min-h-[120px] rounded-[24px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onEnrichmentChange(lead.id, { notes: event.target.value })}
-                    placeholder="Practical notes for qualification and follow-through."
-                    value={lead.enrichment.notes}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Research notes</label>
-                  <Textarea
-                    className="min-h-[160px] rounded-[24px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onEnrichmentChange(lead.id, { researchNotes: event.target.value })}
-                    placeholder="Website findings, bid angle, owner/operator context, or field notes."
-                    value={lead.enrichment.researchNotes}
-                  />
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Source tags</label>
-                    <Input
-                      className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                      onChange={(event) =>
-                        onEnrichmentChange(lead.id, { sourceTags: toCommaList(event.target.value) })
-                      }
-                      placeholder="Website, LinkedIn, Google Maps"
-                      value={lead.enrichment.sourceTags.join(", ")}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Confidence tags</label>
-                    <Input
-                      className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                      onChange={(event) =>
-                        onEnrichmentChange(lead.id, { confidenceTags: toCommaList(event.target.value) })
-                      }
-                      placeholder="Strong match, direct phone, owner-confirmed"
-                      value={lead.enrichment.confidenceTags.join(", ")}
-                    />
-                  </div>
-                </div>
-              </div>
-            </SectionCard>
-
-            <SectionCard
-              action={
-                <Button className="rounded-full" onClick={() => onGenerateDraft(lead.id)} type="button">
-                  <Sparkles className="h-4 w-4" />
-                  Refresh drafts
-                </Button>
-              }
-              description="Editable drafts with a practical, contractor-to-contractor tone."
-              title="Outreach draft helper"
-            >
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Subject line</label>
-                  <Input
-                    className="rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onDraftChange(lead.id, { subject: event.target.value })}
-                    value={lead.outreachDraft.subject}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Intro line</label>
-                  <Textarea
-                    className="min-h-[90px] rounded-[24px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onDraftChange(lead.id, { introLine: event.target.value })}
-                    value={lead.outreachDraft.introLine}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Short cold email</label>
-                  <Textarea
-                    className="min-h-[190px] rounded-[24px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onDraftChange(lead.id, { shortEmail: event.target.value })}
-                    value={lead.outreachDraft.shortEmail}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Call opener</label>
-                  <Textarea
-                    className="min-h-[90px] rounded-[24px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onDraftChange(lead.id, { callOpener: event.target.value })}
-                    value={lead.outreachDraft.callOpener}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-navy-700 dark:text-dark-text">Follow-up note</label>
-                  <Textarea
-                    className="min-h-[90px] rounded-[24px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onDraftChange(lead.id, { followUpNote: event.target.value })}
-                    value={lead.outreachDraft.followUpNote}
-                  />
-                </div>
-              </div>
-            </SectionCard>
-          </div>
-
-          <SectionCard
-            description="Lead memory that explains what changed and when."
-            title="Activity timeline"
-          >
-            <div className="space-y-3">
-              {lead.activities.map((activity) => (
-                <div
-                  key={activity.id}
-                  className="flex items-start gap-4 rounded-[22px] border border-navy-200/70 bg-cream-50/70 p-4 dark:border-dark-border/70 dark:bg-dark-bg"
-                >
-                  <div className="mt-1 h-2.5 w-2.5 rounded-full bg-orange-500" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="font-medium text-navy-800 dark:text-dark-text">{activity.title}</div>
-                      <div className="text-xs uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                        {formatDate(activity.createdAt)}
-                      </div>
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">{activity.detail}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </SectionCard>
         </div>
       </ScrollArea>
     </div>

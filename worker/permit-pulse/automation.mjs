@@ -1306,6 +1306,7 @@ function mapSnapshot(snapshot) {
     const company = companyMap.get(lead.id) || {};
     const property = propertyMap.get(lead.id) || {};
     const contacts = contactsMap.get(lead.id) || [];
+    const manualEnrichment = lead.enrichment_summary?.manualEnrichment || {};
     const outreachHistory = (outreachMap.get(lead.id) || []).map((item) => ({
       id: item.id,
       channel: item.channel,
@@ -1321,6 +1322,7 @@ function mapSnapshot(snapshot) {
       createdAt: item.created_at,
       scheduledFor: item.scheduled_for,
       messageId: item.gmail_message_id || '',
+      metadata: item.metadata || {},
     }));
 
     const latestDraft = outreachHistory[0] || {};
@@ -1348,28 +1350,59 @@ function mapSnapshot(snapshot) {
       humanSummary: lead.score_breakdown?.summary || '',
       projectTags: lead.project_tags || [],
       enrichment: {
-        companyWebsite: company.website || '',
-        directEmail: contacts.find((contact) => contact.email && contact.type === 'verified')?.email || '',
-        genericEmail: contacts.find((contact) => contact.email && contact.type === 'public')?.email || '',
-        phone: contacts.find((contact) => contact.phone)?.phone || '',
-        linkedInUrl: company.linked_in_url || contacts.find((contact) => contact.linkedin_url)?.linkedin_url || '',
-        instagramUrl: company.instagram_url || contacts.find((contact) => contact.instagram_url)?.instagram_url || '',
-        contactFormUrl: contacts.find((contact) => contact.contact_form_url)?.contact_form_url || '',
-        contactPersonName: contacts.find((contact) => contact.name)?.name || permit.owner_name || '',
-        contactRole: contacts.find((contact) => contact.role)?.role || company.role || '',
-        notes: '',
-        researchNotes: lead.auto_send_reason || '',
-        sourceTags: uniq([
-          company.search_query ? 'brave' : '',
-          property.place_id ? 'google-maps' : '',
-          contacts.some((contact) => contact.source === 'firecrawl') ? 'firecrawl' : '',
-        ]),
-        confidenceTags: [lead.company_match_strength || 'weak', lead.outreach_readiness_label || 'Needs Review'],
-        followUpDate: '',
+        companyWebsite: manualEnrichment.companyWebsite || company.website || '',
+        directEmail:
+          manualEnrichment.directEmail ||
+          contacts.find((contact) => contact.email && contact.type === 'verified')?.email ||
+          '',
+        genericEmail:
+          manualEnrichment.genericEmail ||
+          contacts.find((contact) => contact.email && contact.type === 'public')?.email ||
+          '',
+        phone: manualEnrichment.phone || contacts.find((contact) => contact.phone)?.phone || '',
+        linkedInUrl:
+          manualEnrichment.linkedInUrl ||
+          company.linked_in_url ||
+          contacts.find((contact) => contact.linkedin_url)?.linkedin_url ||
+          '',
+        instagramUrl:
+          manualEnrichment.instagramUrl ||
+          company.instagram_url ||
+          contacts.find((contact) => contact.instagram_url)?.instagram_url ||
+          '',
+        contactFormUrl:
+          manualEnrichment.contactFormUrl ||
+          contacts.find((contact) => contact.contact_form_url)?.contact_form_url ||
+          '',
+        contactPersonName:
+          manualEnrichment.contactPersonName ||
+          contacts.find((contact) => contact.name)?.name ||
+          permit.owner_name ||
+          '',
+        contactRole:
+          manualEnrichment.contactRole ||
+          contacts.find((contact) => contact.role)?.role ||
+          company.role ||
+          '',
+        notes: manualEnrichment.notes || '',
+        researchNotes: manualEnrichment.researchNotes || lead.auto_send_reason || '',
+        sourceTags:
+          manualEnrichment.sourceTags?.length > 0
+            ? manualEnrichment.sourceTags
+            : uniq([
+                company.search_query ? 'brave' : '',
+                property.place_id ? 'google-maps' : '',
+                contacts.some((contact) => contact.source === 'firecrawl') ? 'firecrawl' : '',
+              ]),
+        confidenceTags:
+          manualEnrichment.confidenceTags?.length > 0
+            ? manualEnrichment.confidenceTags
+            : [lead.company_match_strength || 'weak', lead.outreach_readiness_label || 'Needs Review'],
+        followUpDate: manualEnrichment.followUpDate || '',
       },
       outreachDraft: {
         subject: latestDraft.subject || '',
-        introLine: latestDraft.body?.split('\n\n')[0] || '',
+        introLine: latestDraft.metadata?.introLine || latestDraft.body?.split('\n\n')[0] || '',
         shortEmail: latestDraft.body || '',
         callOpener: latestDraft.callOpener || '',
         followUpNote: latestDraft.followUpNote || '',
@@ -1384,8 +1417,8 @@ function mapSnapshot(snapshot) {
       })),
       workflow: {
         status: normalizeStatusForUi(lead.status),
-        ignored: false,
-        nextActionDue: '',
+        ignored: lead.status === 'archived',
+        nextActionDue: manualEnrichment.followUpDate || '',
         lastReviewedAt: lead.updated_at,
       },
       lastScannedAt: lead.last_scanned_at || lead.updated_at,
@@ -1563,6 +1596,17 @@ export async function getPermitAutomationSnapshot(env) {
   return mapSnapshot(snapshot);
 }
 
+export async function enrichLeadNow(env, leadId) {
+  const gateway = createSupabaseGateway(env);
+  const lead = (await gateway.getLeadById(leadId)) || (await gateway.getLeadByPermitKey(leadId));
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  await enrichLead(env, gateway, lead);
+  return getPermitAutomationSnapshot(env);
+}
+
 export async function updateLeadAutomationState(env, leadId, patch) {
   const gateway = createSupabaseGateway(env);
   const lead = (await gateway.getLeadById(leadId)) || (await gateway.getLeadByPermitKey(leadId));
@@ -1583,46 +1627,70 @@ export async function updateLeadAutomationState(env, leadId, patch) {
   }
 
   if (patch.enrichment) {
-    const contacts = [];
-    if (patch.enrichment.directEmail) {
-      contacts.push({
+    const existingContacts = await gateway.select('contacts', {
+      filters: [eq('lead_id', lead.id)],
+      ordering: [order('is_primary', 'desc'), order('confidence', 'desc')],
+      pageLimit: 100,
+    });
+    const nextManualEnrichment = {
+      ...(lead.enrichment_summary?.manualEnrichment || {}),
+      ...patch.enrichment,
+    };
+    const preservedContacts = existingContacts.filter((contact) => contact.source !== 'manual');
+    const manualContacts = [];
+
+    if (
+      nextManualEnrichment.directEmail ||
+      nextManualEnrichment.phone ||
+      nextManualEnrichment.companyWebsite ||
+      nextManualEnrichment.linkedInUrl ||
+      nextManualEnrichment.instagramUrl ||
+      nextManualEnrichment.contactFormUrl
+    ) {
+      manualContacts.push({
         id: createId('contact'),
-        name: patch.enrichment.contactPersonName || '',
-        role: patch.enrichment.contactRole || '',
-        email: patch.enrichment.directEmail,
-        phone: patch.enrichment.phone || '',
-        website_url: patch.enrichment.companyWebsite || '',
-        linkedin_url: patch.enrichment.linkedInUrl || '',
-        instagram_url: patch.enrichment.instagramUrl || '',
-        contact_form_url: patch.enrichment.contactFormUrl || '',
-        type: 'verified',
-        confidence: 88,
+        name: nextManualEnrichment.contactPersonName || '',
+        role: nextManualEnrichment.contactRole || '',
+        email: nextManualEnrichment.directEmail || '',
+        phone: nextManualEnrichment.phone || '',
+        website_url: nextManualEnrichment.companyWebsite || '',
+        linkedin_url: nextManualEnrichment.linkedInUrl || '',
+        instagram_url: nextManualEnrichment.instagramUrl || '',
+        contact_form_url: nextManualEnrichment.contactFormUrl || '',
+        type: nextManualEnrichment.directEmail ? 'verified' : 'public',
+        confidence: nextManualEnrichment.directEmail ? 88 : 70,
         source: 'manual',
-        verified: true,
+        verified: Boolean(nextManualEnrichment.directEmail),
         is_primary: true,
       });
     }
-    if (patch.enrichment.genericEmail) {
-      contacts.push({
+
+    if (nextManualEnrichment.genericEmail) {
+      manualContacts.push({
         id: createId('contact'),
-        name: patch.enrichment.contactPersonName || '',
-        role: patch.enrichment.contactRole || '',
-        email: patch.enrichment.genericEmail,
-        phone: patch.enrichment.phone || '',
-        website_url: patch.enrichment.companyWebsite || '',
-        linkedin_url: patch.enrichment.linkedInUrl || '',
-        instagram_url: patch.enrichment.instagramUrl || '',
-        contact_form_url: patch.enrichment.contactFormUrl || '',
+        name: nextManualEnrichment.contactPersonName || '',
+        role: nextManualEnrichment.contactRole || '',
+        email: nextManualEnrichment.genericEmail,
+        phone: nextManualEnrichment.phone || '',
+        website_url: nextManualEnrichment.companyWebsite || '',
+        linkedin_url: nextManualEnrichment.linkedInUrl || '',
+        instagram_url: nextManualEnrichment.instagramUrl || '',
+        contact_form_url: nextManualEnrichment.contactFormUrl || '',
         type: 'public',
         confidence: 72,
         source: 'manual',
         verified: false,
-        is_primary: contacts.length === 0,
+        is_primary: manualContacts.length === 0,
       });
     }
-    if (contacts.length > 0) {
-      await gateway.replaceContacts(lead.id, contacts);
-    }
+
+    await gateway.patch('leads', [eq('id', lead.id)], {
+      enrichment_summary: {
+        ...(lead.enrichment_summary || {}),
+        manualEnrichment: nextManualEnrichment,
+      },
+    });
+    await gateway.replaceContacts(lead.id, [...preservedContacts, ...manualContacts]);
     await gateway.insert('activity_log', {
       id: createId('activity'),
       lead_id: lead.id,
@@ -1634,22 +1702,47 @@ export async function updateLeadAutomationState(env, leadId, patch) {
   }
 
   if (patch.draft) {
-    await gateway.insert('outreach', {
-      id: createId('outreach'),
-      lead_id: lead.id,
+    const existingDraft = (
+      await gateway.select('outreach', {
+        filters: [eq('lead_id', lead.id)],
+        ordering: [order('created_at', 'desc')],
+        pageLimit: 1,
+      })
+    )[0];
+    const hasDraftField = (field) => Object.prototype.hasOwnProperty.call(patch.draft, field);
+
+    const draftPayload = {
       channel: 'email',
-      recipient: patch.draft.recipient || '',
-      recipient_type: patch.draft.recipientType || 'manual',
-      subject: patch.draft.subject || '',
-      draft: patch.draft.body || '',
-      plugin_line: patch.draft.pluginLine || '',
-      call_opener: patch.draft.callOpener || '',
-      follow_up_note: patch.draft.followUpNote || '',
-      status: 'draft',
+      recipient: hasDraftField('recipient') ? patch.draft.recipient || '' : existingDraft?.recipient || '',
+      recipient_type: hasDraftField('recipientType')
+        ? patch.draft.recipientType || 'manual'
+        : existingDraft?.recipient_type || 'manual',
+      subject: hasDraftField('subject') ? patch.draft.subject || '' : existingDraft?.subject || '',
+      draft: hasDraftField('body') ? patch.draft.body || '' : existingDraft?.draft || '',
+      plugin_line: hasDraftField('pluginLine')
+        ? patch.draft.pluginLine || ''
+        : existingDraft?.plugin_line || '',
+      call_opener: hasDraftField('callOpener') ? patch.draft.callOpener || '' : existingDraft?.call_opener || '',
+      follow_up_note: hasDraftField('followUpNote')
+        ? patch.draft.followUpNote || ''
+        : existingDraft?.follow_up_note || '',
+      status: existingDraft?.status === 'sent' ? 'draft' : existingDraft?.status || 'draft',
       metadata: {
+        ...(existingDraft?.metadata || {}),
+        introLine: hasDraftField('introLine') ? patch.draft.introLine || '' : existingDraft?.metadata?.introLine || '',
         updatedAt: new Date().toISOString(),
       },
-    });
+    };
+
+    if (existingDraft && existingDraft.status !== 'sent') {
+      await gateway.patch('outreach', [eq('id', existingDraft.id)], draftPayload);
+    } else {
+      await gateway.insert('outreach', {
+        id: createId('outreach'),
+        lead_id: lead.id,
+        ...draftPayload,
+      });
+    }
   }
 
   return getPermitAutomationSnapshot(env);

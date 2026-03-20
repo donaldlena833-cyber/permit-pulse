@@ -1,8 +1,17 @@
-import type { EnrichmentData, LeadStatus, PermitLead, SentLogEntry } from "@/types/permit-pulse"
+import type { AutomationHealth, EnrichmentData, LeadStatus, PermitLead, SentLogEntry } from "@/types/permit-pulse"
 
 interface AutomationSnapshot {
   leads: PermitLead[]
   sentLog: SentLogEntry[]
+}
+
+function isAutomationSnapshot(value: unknown): value is AutomationSnapshot {
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const candidate = value as Partial<AutomationSnapshot>
+  return Array.isArray(candidate.leads) && Array.isArray(candidate.sentLog)
 }
 
 function getApiBase(): string {
@@ -11,11 +20,26 @@ function getApiBase(): string {
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBase()}${path}`, init)
-  if (!response.ok) {
-    throw new Error(`Worker API returned ${response.status}`)
+  const text = await response.text()
+  let payload: unknown = null
+
+  if (text) {
+    try {
+      payload = JSON.parse(text) as unknown
+    } catch {
+      payload = null
+    }
   }
 
-  return response.json() as Promise<T>
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : `Worker API returned ${response.status}`
+    throw new Error(message)
+  }
+
+  return payload as T
 }
 
 export async function fetchAutomationSnapshot(): Promise<AutomationSnapshot | null> {
@@ -24,7 +48,20 @@ export async function fetchAutomationSnapshot(): Promise<AutomationSnapshot | nu
   }
 
   try {
-    return await requestJson<AutomationSnapshot>("/api/v2/state")
+    const snapshot = await requestJson<unknown>("/api/v2/state")
+    return isAutomationSnapshot(snapshot) ? snapshot : null
+  } catch {
+    return null
+  }
+}
+
+export async function fetchAutomationHealth(): Promise<AutomationHealth | null> {
+  if (!__PERMIT_PULSE_WORKER_URL__) {
+    return null
+  }
+
+  try {
+    return await requestJson<AutomationHealth>("/api/v2/health")
   } catch {
     return null
   }
@@ -32,6 +69,12 @@ export async function fetchAutomationSnapshot(): Promise<AutomationSnapshot | nu
 
 export async function triggerAutomationRun(): Promise<void> {
   await requestJson("/api/v2/run", {
+    method: "POST",
+  })
+}
+
+export async function runLeadEnrichment(leadId: string): Promise<AutomationSnapshot> {
+  return requestJson<AutomationSnapshot>(`/api/v2/leads/${encodeURIComponent(leadId)}/enrich`, {
     method: "POST",
   })
 }
@@ -65,6 +108,7 @@ export async function persistLeadDraft(
     recipient?: string
     recipientType?: string
     subject?: string
+    introLine?: string
     body?: string
     pluginLine?: string
     callOpener?: string
@@ -80,8 +124,13 @@ export async function persistLeadDraft(
   })
 }
 
-export async function sendLeadImmediately(leadId: string): Promise<{ success: boolean }> {
-  return requestJson<{ success: boolean }>(`/api/v2/leads/${encodeURIComponent(leadId)}/send`, {
+export async function sendLeadImmediately(
+  leadId: string,
+): Promise<{ success: boolean; recipient?: string; sentAt?: string }> {
+  return requestJson<{ success: boolean; recipient?: string; sentAt?: string }>(
+    `/api/v2/leads/${encodeURIComponent(leadId)}/send`,
+    {
     method: "POST",
-  })
+    },
+  )
 }
