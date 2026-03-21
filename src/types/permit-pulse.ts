@@ -36,12 +36,11 @@ export type NextActionQueue =
 
 export type MainSection =
   | "dashboard"
-  | "scanner"
-  | "workspace"
-  | "enrichment"
-  | "outreach"
-  | "sent-log"
-  | "profile"
+  | "opportunities"
+  | "pipeline"
+  | "system"
+
+export type OpportunityLane = "feed" | "research" | "ready" | "sent"
 
 export type AppTheme = "light" | "dark"
 
@@ -279,6 +278,10 @@ export interface AutomationHealth {
   ok: boolean
   hasSupabase: boolean
   hasGmail: boolean
+  hasBrave: boolean
+  hasGoogleMaps: boolean
+  hasFirecrawl: boolean
+  hasZeroBounce: boolean
 }
 
 export interface SentLogEntry {
@@ -466,6 +469,7 @@ export interface PermitPulseStore {
   version: number
   theme: AppTheme
   section: MainSection
+  opportunityLane: OpportunityLane
   activeViewId: string
   enrichmentQueueId: string
   outreachQueueId: string

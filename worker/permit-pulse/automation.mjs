@@ -33,6 +33,30 @@ function createId() {
   return crypto.randomUUID();
 }
 
+const ENRICHMENT_BATCH_LIMIT = 4;
+const SEND_BATCH_LIMIT = 4;
+const DIRECTORY_DOMAIN_DENYLIST = [
+  'yelp.com',
+  'angi.com',
+  'angieslist.com',
+  'houzz.com',
+  'yellowpages.com',
+  'superpages.com',
+  'mapquest.com',
+  'manta.com',
+  'facebook.com',
+  'linkedin.com',
+  'instagram.com',
+  'bbb.org',
+  'dnb.com',
+  'buzzfile.com',
+  'bizapedia.com',
+  'buildzoom.com',
+  'opencorporates.com',
+  'chamberofcommerce.com',
+  'nextdoor.com',
+];
+
 function getPermitKey(permit) {
   return (
     permit.job_filing_number ||
@@ -65,6 +89,38 @@ function rootDomain(value) {
   } catch {
     return '';
   }
+}
+
+function originFromUrl(value) {
+  try {
+    const url = new URL(value.startsWith('http') ? value : `https://${value}`);
+    return url.origin;
+  } catch {
+    const domain = rootDomain(value);
+    return domain ? `https://${domain}` : '';
+  }
+}
+
+function stripCompanySuffix(value) {
+  return normalizeText(value)
+    .replace(/\b(llc|inc|corp|corporation|co|company|ltd|pllc|pc|architects|architecture|design|studio|contracting|construction)\b/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeName(value) {
+  return stripCompanySuffix(value)
+    .split(' ')
+    .filter((token) => token.length >= 3);
+}
+
+function countTokenMatches(needles, haystack) {
+  return needles.reduce((total, token) => total + (haystack.includes(token) ? 1 : 0), 0);
+}
+
+function isDirectoryDomain(domain) {
+  return DIRECTORY_DOMAIN_DENYLIST.some((entry) => domain.includes(entry));
 }
 
 function buildSearchableText(permit) {
@@ -686,24 +742,28 @@ function buildAcrisSummary(permit) {
 }
 
 async function searchCompanyDomain(env, permit, leadScore, options = {}) {
-  const rawCandidates = uniq([
-    permit.owner_business_name,
-    permit.applicant_business_name,
-    getApplicantName(permit),
-    getFilingRepName(permit),
-  ]);
+  const companySeeds = [
+    { name: permit.applicant_business_name, role: 'applicant', context: 'contractor' },
+    { name: permit.owner_business_name, role: 'owner', context: 'company' },
+    { name: permit.filing_representative_business_name, role: 'filing_rep', context: 'architect' },
+    { name: getApplicantName(permit), role: 'applicant', context: 'contractor' },
+    { name: getFilingRepName(permit), role: 'filing_rep', context: 'architect' },
+  ]
+    .filter((entry) => entry.name)
+    .filter((entry, index, all) => all.findIndex((candidate) => normalizeText(candidate.name) === normalizeText(entry.name)) === index)
+    .slice(0, 3);
 
-  const seedName = rawCandidates.find(Boolean);
-  if (!env.BRAVE_API_KEY || !seedName) {
+  const fallbackSeed = companySeeds[0];
+  if (!env.BRAVE_API_KEY || !fallbackSeed) {
     return {
-      company_name: seedName || '',
-      normalized_name: normalizeText(seedName || ''),
-      role: permit.owner_business_name ? 'owner' : permit.applicant_business_name ? 'applicant' : 'filing_rep',
+      company_name: fallbackSeed?.name || '',
+      normalized_name: normalizeText(fallbackSeed?.name || ''),
+      role: fallbackSeed?.role || 'owner',
       website: '',
       domain: '',
       confidence: 0,
       description: '',
-      search_query: seedName || '',
+      search_query: fallbackSeed?.name || '',
       search_results: [],
       social_links: {},
       match_strength: 'weak',
@@ -711,39 +771,63 @@ async function searchCompanyDomain(env, permit, leadScore, options = {}) {
   }
 
   try {
-    const queries = uniq([
-      `${seedName} NYC ${leadScore >= HIGH_VALUE_SCORE ? 'glass contractor' : 'company'}`,
-      options.force ? `${seedName} LinkedIn` : '',
-      options.force ? `${seedName} Instagram` : '',
-      options.force ? `${seedName} contact email phone` : '',
-    ]);
+    const searchPlans = companySeeds.flatMap((seed) =>
+      uniq([
+        `${seed.name} NYC ${seed.context}`,
+        `${seed.name} official website`,
+        options.force ? `${seed.name} contact email phone` : '',
+      ])
+        .filter(Boolean)
+        .map((query) => ({ seed, query })),
+    );
 
-    const resultSets = await Promise.all(queries.map((query) => runBraveSearch(env, query)));
-    const results = uniq(
-      resultSets
-        .flat()
-        .map((result) => JSON.stringify({
+    const resultSets = await Promise.all(searchPlans.map(async (plan) => ({
+      ...plan,
+      results: await runBraveSearch(env, plan.query),
+    })));
+
+    const allResults = [];
+    const scoredCandidates = [];
+
+    resultSets.forEach((plan) => {
+      plan.results.forEach((result) => {
+        const mappedResult = {
           title: result.title || '',
           url: result.url || '',
           description: result.description || '',
-        })),
-    ).map((entry) => JSON.parse(entry));
+        };
+        allResults.push(mappedResult);
 
-    const searchSignals = extractSearchSignals(results);
-    const firstSite = results.find((result) => !isSkippableSearchDomain(result.url || ''));
-    const website = firstSite?.url || searchSignals.website || '';
+        const candidateScore = scoreWebsiteCandidate(mappedResult, plan.seed, permit);
+        if (candidateScore > 0) {
+          scoredCandidates.push({
+            seed: plan.seed,
+            query: plan.query,
+            result: mappedResult,
+            score: candidateScore,
+          });
+        }
+      });
+    });
+
+    scoredCandidates.sort((left, right) => right.score - left.score);
+
+    const winningCandidate = scoredCandidates[0] || null;
+    const searchSignals = extractSearchSignals(allResults);
+    const website = winningCandidate ? originFromUrl(winningCandidate.result.url) : searchSignals.website || '';
     const domain = rootDomain(website);
-    const confidence = firstSite ? 78 : 18;
+    const confidence = winningCandidate ? clamp(winningCandidate.score, 18, 96) : 18;
+
     return {
-      company_name: seedName,
-      normalized_name: normalizeText(seedName),
-      role: permit.owner_business_name ? 'owner' : permit.applicant_business_name ? 'applicant' : 'filing_rep',
+      company_name: winningCandidate?.seed.name || fallbackSeed.name,
+      normalized_name: normalizeText(winningCandidate?.seed.name || fallbackSeed.name),
+      role: winningCandidate?.seed.role || fallbackSeed.role,
       website,
       domain,
       confidence,
-      description: firstSite?.description || '',
-      search_query: queries.join(' | '),
-      search_results: mapSearchResults(results),
+      description: winningCandidate?.result.description || '',
+      search_query: searchPlans.map((plan) => plan.query).join(' | '),
+      search_results: mapSearchResults(allResults),
       social_links: {
         linkedin_url: searchSignals.linkedin_url || '',
         instagram_url: searchSignals.instagram_url || '',
@@ -751,18 +835,18 @@ async function searchCompanyDomain(env, permit, leadScore, options = {}) {
       },
       linked_in_url: searchSignals.linkedin_url || '',
       instagram_url: searchSignals.instagram_url || '',
-      match_strength: confidence >= 70 ? 'strong' : confidence >= 45 ? 'medium' : 'weak',
+      match_strength: confidence >= 76 ? 'strong' : confidence >= 52 ? 'medium' : 'weak',
     };
   } catch {
     return {
-      company_name: seedName,
-      normalized_name: normalizeText(seedName),
-      role: permit.owner_business_name ? 'owner' : permit.applicant_business_name ? 'applicant' : 'filing_rep',
+      company_name: fallbackSeed.name,
+      normalized_name: normalizeText(fallbackSeed.name),
+      role: fallbackSeed.role,
       website: '',
       domain: '',
       confidence: 20,
       description: '',
-      search_query: seedName,
+      search_query: fallbackSeed.name,
       search_results: [],
       social_links: {},
       linked_in_url: '',
@@ -770,6 +854,84 @@ async function searchCompanyDomain(env, permit, leadScore, options = {}) {
       match_strength: 'weak',
     };
   }
+}
+
+function isDirectoryResult(result) {
+  const domain = rootDomain(result.url || '');
+  const title = normalizeText(result.title || '');
+  return (
+    !domain ||
+    isDirectoryDomain(domain) ||
+    title.includes(' on yelp') ||
+    title.includes(' on houzz') ||
+    title.includes(' on angi') ||
+    title.includes('yellow pages')
+  );
+}
+
+function scoreWebsiteCandidate(result, seed, permit) {
+  const domain = rootDomain(result.url || '');
+  if (!domain || isDirectoryResult(result)) {
+    return -100;
+  }
+
+  const normalizedSeed = stripCompanySuffix(seed.name);
+  const seedTokens = tokenizeName(seed.name);
+  const title = stripCompanySuffix(result.title || '');
+  const description = stripCompanySuffix(result.description || '');
+  const searchable = `${title} ${description} ${domain}`;
+  const permitContext = stripCompanySuffix([
+    permit.borough,
+    permit.job_description,
+    permit.work_type,
+    permit.filing_reason,
+  ].join(' '));
+
+  let score = 15;
+  const tokenMatches = countTokenMatches(seedTokens, searchable);
+  score += tokenMatches * 12;
+
+  if (normalizedSeed && searchable.includes(normalizedSeed)) {
+    score += 26;
+  }
+
+  if (title.includes(normalizedSeed)) {
+    score += 20;
+  }
+
+  if (result.url?.includes('/contact') || result.url?.includes('/about') || result.url?.includes('/team')) {
+    score += 8;
+  }
+
+  if (seed.context === 'contractor' && searchable.includes('contractor')) {
+    score += 12;
+  }
+
+  if (seed.context === 'architect' && (searchable.includes('architect') || searchable.includes('design'))) {
+    score += 12;
+  }
+
+  if (permitContext.includes('glass') && searchable.includes('glass')) {
+    score += 8;
+  }
+
+  if (permitContext.includes('storefront') && (searchable.includes('storefront') || searchable.includes('facade'))) {
+    score += 8;
+  }
+
+  if (permitContext.includes('partition') && searchable.includes('partition')) {
+    score += 6;
+  }
+
+  if (searchable.includes('nyc') || searchable.includes('new york') || searchable.includes(normalizeText(permit.borough || ''))) {
+    score += 6;
+  }
+
+  if (domain.split('.').length <= 3) {
+    score += 4;
+  }
+
+  return score;
 }
 
 function extractEmails(text) {
@@ -808,7 +970,7 @@ function isSkippableSearchDomain(url) {
     domain.includes('linkedin.com') ||
     domain.includes('instagram.com') ||
     domain.includes('facebook.com') ||
-    domain.includes('yelp.com')
+    isDirectoryDomain(domain)
   );
 }
 
@@ -841,6 +1003,98 @@ async function runBraveSearch(env, query) {
   });
 
   return payload.web?.results || [];
+}
+
+function scorePersonCandidate(personName, companyName, result) {
+  const fullName = stripCompanySuffix(personName);
+  const fullNameTokens = tokenizeName(personName);
+  const companyTokens = tokenizeName(companyName || '');
+  const title = stripCompanySuffix(result.title || '');
+  const description = stripCompanySuffix(result.description || '');
+  const searchable = `${title} ${description} ${result.url || ''}`;
+
+  let score = 20;
+  const personMatches = countTokenMatches(fullNameTokens, searchable);
+  score += personMatches * 12;
+
+  if (fullName && searchable.includes(fullName)) {
+    score += 28;
+  }
+
+  if (result.url?.includes('linkedin.com/in')) {
+    score += 18;
+  }
+
+  if (companyTokens.length > 0) {
+    score += countTokenMatches(companyTokens, searchable) * 8;
+  }
+
+  if (searchable.includes('nyc') || searchable.includes('new york')) {
+    score += 4;
+  }
+
+  return score;
+}
+
+async function resolvePersonSignals(env, permit, companyProfile, options = {}) {
+  if (!env.BRAVE_API_KEY) {
+    return [];
+  }
+
+  const companyName =
+    companyProfile.company_name ||
+    permit.applicant_business_name ||
+    permit.filing_representative_business_name ||
+    permit.owner_business_name ||
+    '';
+
+  const people = [
+    { name: getApplicantName(permit), role: 'applicant' },
+    { name: getFilingRepName(permit), role: 'filing rep' },
+  ]
+    .filter((entry) => entry.name)
+    .filter((entry, index, all) => all.findIndex((candidate) => normalizeText(candidate.name) === normalizeText(entry.name)) === index)
+    .slice(0, options.force ? 2 : 1);
+
+  if (people.length === 0) {
+    return [];
+  }
+
+  const searches = await Promise.all(
+    people.map(async (person) => {
+      const queries = uniq([
+        `site:linkedin.com/in "${person.name}" ${companyName} NYC`,
+        options.force ? `"${person.name}" ${companyName} NYC` : '',
+      ]).filter(Boolean);
+
+      const resultSets = await Promise.all(queries.map((query) => runBraveSearch(env, query)));
+      const results = mapSearchResults(resultSets.flat());
+      const scored = results
+        .map((result) => ({
+          result,
+          score: scorePersonCandidate(person.name, companyName, result),
+        }))
+        .filter((candidate) => candidate.score > 24)
+        .sort((left, right) => right.score - left.score);
+
+      const linkedin = scored.find((candidate) => candidate.result.url.includes('linkedin.com/in'))?.result.url || '';
+      const organizationPage = scored.find((candidate) => !isDirectoryResult(candidate.result))?.result.url || '';
+      const organizationName =
+        scored[0]?.result.title?.split('|')[0]?.trim() ||
+        scored[0]?.result.title?.split('-')[0]?.trim() ||
+        companyName;
+
+      return {
+        ...person,
+        linkedin_url: linkedin,
+        organization_url: organizationPage ? originFromUrl(organizationPage) : '',
+        organization_name: organizationName || companyName,
+        confidence: clamp(scored[0]?.score || 0, 0, 92),
+      };
+    }),
+  );
+
+  return searches.filter((entry) => entry.linkedin_url || entry.organization_url);
 }
 
 async function scrapeWebsiteSignals(env, leadScore, website, options = {}) {
@@ -1013,6 +1267,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     company.website || searchSignals.website,
     options,
   );
+  const personSignals = await resolvePersonSignals(env, permit, company, options);
   const contacts = [];
   const facts = [];
   const socialLinks = {
@@ -1068,6 +1323,47 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       metadata: {},
     });
   }
+
+  personSignals.forEach((person) => {
+    if (person.linkedin_url) {
+      facts.push({
+        id: createId('fact'),
+        field: `${normalizeText(person.role).replace(/\s+/g, '_')}_linkedin`,
+        value: person.linkedin_url,
+        source: 'brave_person_search',
+        confidence: person.confidence,
+        metadata: {},
+      });
+    }
+
+    if (person.organization_name) {
+      facts.push({
+        id: createId('fact'),
+        field: `${normalizeText(person.role).replace(/\s+/g, '_')}_organization`,
+        value: person.organization_name,
+        source: 'brave_person_search',
+        confidence: Math.max(person.confidence - 6, 42),
+        metadata: {},
+      });
+    }
+
+    contacts.push({
+      id: createId('contact'),
+      name: person.name,
+      role: person.role,
+      email: '',
+      phone: '',
+      website_url: person.organization_url || company.website || searchSignals.website || '',
+      linkedin_url: person.linkedin_url || '',
+      instagram_url: '',
+      contact_form_url: '',
+      type: 'public',
+      confidence: person.confidence,
+      source: 'person_search',
+      verified: false,
+      is_primary: false,
+    });
+  });
 
   searchSignals.emails.forEach((email, index) => {
     contacts.push({
@@ -1692,31 +1988,73 @@ function mapActivityType(eventType) {
 
 export async function runPermitAutomationCycle(env) {
   const gateway = createSupabaseGateway(env);
+  const ingestResult = await runPermitIngestInternal(env, gateway);
+  const enrichmentResult = await runEnrichmentBatchInternal(env, gateway, ingestResult.leads, {
+    limit: ENRICHMENT_BATCH_LIMIT,
+  });
+
+  return {
+    scanned: ingestResult.scanned,
+    ingested: ingestResult.ingested,
+    enriched: enrichmentResult.enriched,
+    sent: enrichmentResult.sent,
+    generatedDrafts: enrichmentResult.enriched,
+  };
+}
+
+function needsAutomationPass(lead) {
+  return (
+    ['new', 'reviewed', 'researching'].includes(lead.status) ||
+    (lead.contactability_score || 0) < 60 ||
+    lead.outreach_readiness_label !== 'Ready'
+  );
+}
+
+async function runPermitIngestInternal(env, gateway) {
   const permits = await fetchDobPermits();
-  const ingested = [];
+  const leadRows = permits
+    .map((permit) => ({
+      permit,
+      scoreBreakdown: buildLeadScore(permit),
+    }))
+    .filter((entry) => entry.scoreBreakdown.total > 0 && entry.scoreBreakdown.disqualifiers.length === 0)
+    .map((entry) => buildLeadRow(entry.permit, entry.scoreBreakdown));
 
-  for (const permit of permits) {
-    const scoreBreakdown = buildLeadScore(permit);
-    if (scoreBreakdown.total <= 0 || scoreBreakdown.disqualifiers.length > 0) {
-      continue;
-    }
-
-    const permitKey = getPermitKey(permit);
-    const existing = await gateway.getLeadByPermitKey(permitKey);
-    const leadRow = {
-      ...(existing || {}),
-      ...buildLeadRow(permit, scoreBreakdown),
-      id: existing?.id || undefined,
-      updated_at: new Date().toISOString(),
+  if (leadRows.length === 0) {
+    return {
+      scanned: permits.length,
+      ingested: 0,
+      leads: [],
     };
-    const upserted = await gateway.upsert('leads', [leadRow], 'permit_key');
-    ingested.push(upserted[0]);
   }
+
+  const ingested = await gateway.upsert('leads', leadRows, 'permit_key');
+  return {
+    scanned: permits.length,
+    ingested: ingested.length,
+    leads: ingested,
+  };
+}
+
+async function runEnrichmentBatchInternal(env, gateway, candidateLeads = [], options = {}) {
+  const limit = options.limit || ENRICHMENT_BATCH_LIMIT;
+  const fallbackQueue =
+    candidateLeads.length > 0
+      ? candidateLeads
+      : await gateway.select('leads', {
+          ordering: [order('score', 'desc'), order('updated_at', 'desc')],
+          pageLimit: Math.max(limit * 4, 16),
+        });
+
+  const queue = [...fallbackQueue]
+    .filter(needsAutomationPass)
+    .sort((left, right) => (right.score || 0) - (left.score || 0))
+    .slice(0, limit);
 
   const enriched = [];
   let sent = 0;
 
-  for (const lead of ingested.sort((left, right) => (right.score || 0) - (left.score || 0)).slice(0, 25)) {
+  for (const lead of queue) {
     const enrichedLead = await enrichLead(env, gateway, lead);
     enriched.push(enrichedLead);
     const sendResult = await maybeAutoSend(env, gateway, enrichedLead);
@@ -1726,11 +2064,33 @@ export async function runPermitAutomationCycle(env) {
   }
 
   return {
-    scanned: permits.length,
-    ingested: ingested.length,
+    attempted: queue.length,
     enriched: enriched.length,
     sent,
-    generatedDrafts: enriched.length,
+    leads: enriched,
+  };
+}
+
+export async function runPermitIngest(env) {
+  const gateway = createSupabaseGateway(env);
+  return runPermitIngestInternal(env, gateway);
+}
+
+export async function runEnrichmentBatch(env, options = {}) {
+  const gateway = createSupabaseGateway(env);
+  const queue = await gateway.select('leads', {
+    ordering: [order('score', 'desc'), order('updated_at', 'desc')],
+    pageLimit: Math.max((options.limit || ENRICHMENT_BATCH_LIMIT) * 4, 16),
+  });
+
+  const result = await runEnrichmentBatchInternal(env, gateway, queue, {
+    limit: options.limit || ENRICHMENT_BATCH_LIMIT,
+  });
+
+  return {
+    attempted: result.attempted,
+    enriched: result.enriched,
+    sent: result.sent,
   };
 }
 

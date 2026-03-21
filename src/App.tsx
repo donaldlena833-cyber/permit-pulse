@@ -13,10 +13,13 @@ import { AppShell } from "@/features/permit-pulse/components/layout"
 import { LeadDetailPanel } from "@/features/permit-pulse/components/lead-detail-panel"
 import { LeadList } from "@/features/permit-pulse/components/lead-list"
 import { LoadingSkeleton } from "@/features/permit-pulse/components/loading-skeleton"
-import { PipelineWorkspace } from "@/features/permit-pulse/components/pipeline-workspace"
-import { ProfileSettingsView } from "@/features/permit-pulse/components/profile-settings-view"
+import { OpportunitiesView } from "@/features/permit-pulse/components/opportunities-view"
+import { PipelineView } from "@/features/permit-pulse/components/pipeline-view"
+import { SystemView } from "@/features/permit-pulse/components/system-view"
 import { usePermitPulse } from "@/features/permit-pulse/hooks/use-permit-pulse"
-import type { AutomationHealth, LeadStatus, PermitLead } from "@/types/permit-pulse"
+import { getAttentionItems, getPipelineColumns, getSystemAlerts } from "@/features/permit-pulse/lib/operator"
+import { isOutreachReady, needsEnrichment } from "@/features/permit-pulse/lib/views"
+import type { LeadStatus, OpportunityLane, PermitLead } from "@/types/permit-pulse"
 
 function useBulkSelection(leads: PermitLead[]) {
   const [rawSelectedIds, setRawSelectedIds] = useState<string[]>([])
@@ -90,7 +93,7 @@ function WorkspacePane({
   onSendNow: (leadId: string) => void
   onFollowUpDateChange: (leadId: string, value: string) => void
   onToggleIgnored: (leadId: string) => void
-  automationHealth: AutomationHealth | null
+  automationHealth: ReturnType<typeof usePermitPulse>["automationHealth"]
   enrichingLeadId: string | null
   sendingLeadId: string | null
   emptyTitle: string
@@ -98,7 +101,7 @@ function WorkspacePane({
 }) {
   return (
     <ResizablePanelGroup className="min-h-[calc(100vh-14rem)] rounded-[32px]" direction="horizontal">
-      <ResizablePanel defaultSize={46} minSize={35}>
+      <ResizablePanel defaultSize={42} minSize={32}>
         <LeadList
           description={description}
           emptyDescription={emptyDescription}
@@ -114,7 +117,7 @@ function WorkspacePane({
         />
       </ResizablePanel>
       <ResizableHandle withHandle />
-      <ResizablePanel defaultSize={54} minSize={40}>
+      <ResizablePanel defaultSize={58} minSize={40}>
         <LeadDetailPanel
           automationHealth={automationHealth}
           isEnriching={selectedLead ? enrichingLeadId === selectedLead.id : false}
@@ -134,6 +137,22 @@ function WorkspacePane({
   )
 }
 
+function getLaneForLead(lead: PermitLead | null): OpportunityLane {
+  if (!lead) {
+    return "feed"
+  }
+
+  if (isOutreachReady(lead)) {
+    return "ready"
+  }
+
+  if (needsEnrichment(lead)) {
+    return "research"
+  }
+
+  return "feed"
+}
+
 export default function App() {
   const {
     allLeads,
@@ -150,6 +169,7 @@ export default function App() {
     filters,
     lastScanAt,
     loading,
+    opportunityLane,
     outreachLeads,
     outreachPresets,
     profile,
@@ -166,6 +186,7 @@ export default function App() {
     setActiveViewId,
     setEnrichmentQueueId,
     setFilters,
+    setOpportunityLane,
     setOutreachQueueId,
     setSection,
     setSelectedLeadId,
@@ -187,28 +208,35 @@ export default function App() {
   const outreachSelection = useBulkSelection(outreachLeads)
 
   const activeSelection = useMemo(() => {
-    if (section === "enrichment") {
+    if (opportunityLane === "research") {
       return enrichmentSelection
     }
-    if (section === "outreach") {
+    if (opportunityLane === "ready") {
       return outreachSelection
     }
     return scannerSelection
-  }, [enrichmentSelection, outreachSelection, scannerSelection, section])
+  }, [enrichmentSelection, opportunityLane, outreachSelection, scannerSelection])
 
-  const pipelineLane = section === "enrichment" || section === "outreach" || section === "sent-log"
-    ? section
-    : "scanner"
-  const navSection = section === "dashboard" || section === "profile" ? section : "scanner"
+  const attentionItems = useMemo(
+    () => getAttentionItems(allLeads, automationHealth),
+    [allLeads, automationHealth],
+  )
+  const pipelineColumns = useMemo(() => getPipelineColumns(allLeads), [allLeads])
+  const systemAlerts = useMemo(
+    () => getSystemAlerts(allLeads, automationHealth, error, lastScanAt),
+    [allLeads, automationHealth, error, lastScanAt],
+  )
 
   const bulkSetStatus = (status: LeadStatus) => {
     activeSelection.selectedIds.forEach((leadId) => updateLeadStatus(leadId, status))
     activeSelection.clear()
   }
 
-  const openLeadInWorkspace = (leadId: string) => {
+  const openLeadInOpportunities = (leadId: string, lane?: OpportunityLane) => {
+    const lead = allLeads.find((item) => item.id === leadId) ?? null
     setSelectedLeadId(leadId)
-    setSection("scanner")
+    setSection("opportunities")
+    setOpportunityLane(lane ?? getLaneForLead(lead))
   }
 
   const sharedDetailProps = {
@@ -226,11 +254,11 @@ export default function App() {
   }
 
   const currentWorkspacePane =
-    pipelineLane === "scanner" ? (
+    opportunityLane === "feed" ? (
       <WorkspacePane
-        description="Use the main feed to qualify fit quickly, keep a lead selected, and work the detail panel without leaving the page."
-        emptyDescription="Try a wider time window, a lower cost floor, or a different saved view."
-        emptyTitle="No matching leads"
+        description="Review fit, keep a lead selected, and make the keep, research, or move decision without leaving the page."
+        emptyDescription="Try a wider date window, a lower cost floor, or a different saved view."
+        emptyTitle="No matching opportunities"
         leads={scannerLeads}
         onBulkSetStatus={bulkSetStatus}
         onSelectLead={setSelectedLeadId}
@@ -238,14 +266,14 @@ export default function App() {
         onToggleLead={scannerSelection.toggleLead}
         selectedIds={scannerSelection.selectedIds}
         selectedLead={selectedLead}
-        title="Scored permit feed"
+        title="Opportunity feed"
         {...sharedDetailProps}
       />
-    ) : pipelineLane === "enrichment" ? (
+    ) : opportunityLane === "research" ? (
       <WorkspacePane
-        description="Everything here still needs contact research or a stronger personalization angle before it is worth sending."
+        description="Everything here still needs a clearer company match, better contact route, or a stronger personalization angle."
         emptyDescription="Current rescans are not leaving much unresolved. That is a good problem."
-        emptyTitle="Enrichment queue is clear"
+        emptyTitle="Research queue is clear"
         leads={enrichmentLeads}
         onBulkSetStatus={bulkSetStatus}
         onSelectLead={setSelectedLeadId}
@@ -259,8 +287,8 @@ export default function App() {
     ) : (
       <WorkspacePane
         description="These leads are reachable enough to move into outreach without reopening the whole research loop."
-        emptyDescription="Nothing is ready right now. That usually means the real work is still in enrichment."
-        emptyTitle="Outreach lane is empty"
+        emptyDescription="Nothing is ready right now. That usually means the real work is still in research."
+        emptyTitle="Ready lane is empty"
         leads={outreachLeads}
         onBulkSetStatus={bulkSetStatus}
         onSelectLead={setSelectedLeadId}
@@ -268,32 +296,37 @@ export default function App() {
         onToggleLead={outreachSelection.toggleLead}
         selectedIds={outreachSelection.selectedIds}
         selectedLead={selectedLead}
-        title="Outreach queue"
+        title="Ready to move"
         {...sharedDetailProps}
       />
     )
 
   let content = null
 
-  if (loading && navSection === "scanner" && scannerLeads.length === 0) {
+  if (loading && section === "opportunities" && scannerLeads.length === 0) {
     content = <LoadingSkeleton />
   } else if (section === "dashboard") {
     content = (
       <DashboardView
         activities={dashboardActivities}
+        attentionItems={attentionItems}
         lastScanAt={lastScanAt}
-        onOpenLead={openLeadInWorkspace}
-        onOpenScanner={() => setSection("scanner")}
+        onOpenLead={openLeadInOpportunities}
+        onOpenOpportunities={(lane) => {
+          setSection("opportunities")
+          setOpportunityLane(lane ?? "feed")
+        }}
         stats={dashboardStats}
+        systemAlerts={systemAlerts}
         topLeads={topOpportunities}
       />
     )
-  } else if (navSection === "scanner") {
-    content = (
-      error ? (
-        <EmptyState description={error} icon={Target} title="Pipeline issue" />
+  } else if (section === "opportunities") {
+    content =
+      error && allLeads.length === 0 ? (
+        <EmptyState description={error} icon={Target} title="Opportunity feed issue" />
       ) : (
-        <PipelineWorkspace
+        <OpportunitiesView
           activeEnrichmentViewId={activeEnrichmentQueueId}
           activeOutreachViewId={activeOutreachQueueId}
           activeScannerViewId={activeViewId}
@@ -301,11 +334,11 @@ export default function App() {
           enrichmentCount={enrichmentLeads.length}
           enrichmentViews={enrichmentPresets}
           filters={filters}
-          lane={pipelineLane}
+          lane={opportunityLane}
           onEnrichmentViewChange={setEnrichmentQueueId}
           onFiltersChange={setFilters}
-          onLaneChange={(lane) => setSection(lane)}
-          onOpenLead={openLeadInWorkspace}
+          onLaneChange={setOpportunityLane}
+          onOpenLead={openLeadInOpportunities}
           onOutreachViewChange={setOutreachQueueId}
           onResetFilters={resetFilters}
           onScannerViewChange={setActiveViewId}
@@ -318,10 +351,26 @@ export default function App() {
           workspace={currentWorkspacePane}
         />
       )
+  } else if (section === "pipeline") {
+    content = (
+      <PipelineView
+        columns={pipelineColumns}
+        onOpenLead={(leadId) => openLeadInOpportunities(leadId)}
+        onOpenOpportunities={() => {
+          setSection("opportunities")
+          setOpportunityLane("feed")
+        }}
+      />
     )
   } else {
     content = (
-      <ProfileSettingsView profile={profile} onReset={resetProfile} onUpdate={updateProfile} />
+      <SystemView
+        alerts={systemAlerts}
+        automationHealth={automationHealth}
+        onResetProfile={resetProfile}
+        onUpdateProfile={updateProfile}
+        profile={profile}
+      />
     )
   }
 
@@ -335,7 +384,7 @@ export default function App() {
         onToggleTheme={toggleTheme}
         scanning={loading}
         searchValue={filters.search}
-        section={navSection}
+        section={section}
         theme={theme}
       >
         {content}

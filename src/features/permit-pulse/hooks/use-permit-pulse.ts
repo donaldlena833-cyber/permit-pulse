@@ -120,8 +120,8 @@ export function usePermitPulse() {
 
   const selectedLead =
     allLeads.find((lead) => lead.id === store.selectedLeadId) ??
-    (store.section === "enrichment" ? enrichmentLeads[0] : undefined) ??
-    (store.section === "outreach" ? outreachLeads[0] : undefined) ??
+    (store.opportunityLane === "research" ? enrichmentLeads[0] : undefined) ??
+    (store.opportunityLane === "ready" ? outreachLeads[0] : undefined) ??
     scannerLeads[0] ??
     allLeads[0] ??
     null
@@ -238,7 +238,7 @@ export function usePermitPulse() {
         }
 
         toast.success("Automation cycle triggered", {
-          description: "Permit ingest, enrichment, and send rules ran through the worker pipeline.",
+          description: "Permit ingest ran and a small enrichment batch refreshed the top queue.",
         })
         return
       }
@@ -381,7 +381,8 @@ export function usePermitPulse() {
     setStore((currentStore) => ({
       ...currentStore,
       activeViewId: viewId,
-      section: "scanner",
+      section: "opportunities",
+      opportunityLane: "feed",
     }))
   }, [])
 
@@ -389,7 +390,8 @@ export function usePermitPulse() {
     setStore((currentStore) => ({
       ...currentStore,
       enrichmentQueueId: queueId,
-      section: "enrichment",
+      section: "opportunities",
+      opportunityLane: "research",
     }))
   }, [])
 
@@ -397,7 +399,16 @@ export function usePermitPulse() {
     setStore((currentStore) => ({
       ...currentStore,
       outreachQueueId: queueId,
-      section: "outreach",
+      section: "opportunities",
+      opportunityLane: "ready",
+    }))
+  }, [])
+
+  const setOpportunityLane = useCallback((lane: "feed" | "research" | "ready" | "sent") => {
+    setStore((currentStore) => ({
+      ...currentStore,
+      section: "opportunities",
+      opportunityLane: lane,
     }))
   }, [])
 
@@ -641,6 +652,7 @@ export function usePermitPulse() {
   return {
     theme: store.theme,
     section: store.section,
+    opportunityLane: store.opportunityLane,
     filters: store.filters,
     profile,
     allLeads,
@@ -673,6 +685,7 @@ export function usePermitPulse() {
     setActiveViewId,
     setEnrichmentQueueId,
     setOutreachQueueId,
+    setOpportunityLane,
     scanLeads,
     updateLeadStatus,
     updateEnrichment,

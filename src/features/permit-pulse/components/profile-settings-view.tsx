@@ -13,6 +13,7 @@ interface ProfileSettingsViewProps {
   profile: TenantProfile
   onUpdate: (patch: Partial<TenantProfile>) => void
   onReset: () => void
+  showHeader?: boolean
 }
 
 function asCommaList(values: string[]): string {
@@ -26,20 +27,34 @@ function toList(value: string): string[] {
     .filter(Boolean)
 }
 
-export function ProfileSettingsView({ profile, onUpdate, onReset }: ProfileSettingsViewProps) {
+export function ProfileSettingsView({
+  profile,
+  onUpdate,
+  onReset,
+  showHeader = true,
+}: ProfileSettingsViewProps) {
   return (
     <div className="space-y-6">
-      <PageHeader
-        action={
+      {showHeader ? (
+        <PageHeader
+          action={
+            <Button className="rounded-full" onClick={onReset} type="button" variant="outline">
+              <RefreshCcw className="h-4 w-4" />
+              Reset to MetroGlassPro baseline
+            </Button>
+          }
+          description="The profile drives which permits look like MetroGlassPro work, how strongly they score, and how hard PermitPulse should push them toward outreach."
+          eyebrow="Profile / Scoring Settings"
+          title="ICP, service fit, and scoring logic in one place."
+        />
+      ) : (
+        <div className="flex items-center justify-end">
           <Button className="rounded-full" onClick={onReset} type="button" variant="outline">
             <RefreshCcw className="h-4 w-4" />
             Reset to MetroGlassPro baseline
           </Button>
-        }
-        description="The profile drives which permits look like MetroGlassPro work, how strongly they score, and how hard PermitPulse should push them toward outreach."
-        eyebrow="Profile / Scoring Settings"
-        title="ICP, service fit, and scoring logic in one place."
-      />
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
         <SectionCard

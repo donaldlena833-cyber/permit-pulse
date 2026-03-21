@@ -1,6 +1,8 @@
 import {
   enrichLeadNow,
   getPermitAutomationSnapshot,
+  runEnrichmentBatch,
+  runPermitIngest,
   runPermitAutomationCycle,
   sendLeadNow,
   updateLeadAutomationState,
@@ -44,6 +46,17 @@ export async function handlePermitPulseAutomationRequest(request, env) {
 
     if (url.pathname === '/api/v2/run' && request.method === 'POST') {
       const result = await runPermitAutomationCycle(env);
+      return json(result);
+    }
+
+    if (url.pathname === '/api/v2/jobs/ingest' && request.method === 'POST') {
+      const result = await runPermitIngest(env);
+      return json(result);
+    }
+
+    if (url.pathname === '/api/v2/jobs/enrich' && request.method === 'POST') {
+      const limit = Number.parseInt(url.searchParams.get('limit') || '4', 10) || 4;
+      const result = await runEnrichmentBatch(env, { limit });
       return json(result);
     }
 
@@ -103,7 +116,9 @@ export async function handlePermitPulseAutomationRequest(request, env) {
           'GET /api/v2/health': 'Automation health',
           'GET /api/v2/state': 'Full lead workspace snapshot',
           'GET /api/v2/sent-log': 'Sent outreach records',
-          'POST /api/v2/run': 'Run scan + enrichment + send cycle',
+          'POST /api/v2/run': 'Run ingest plus a small enrichment/send batch',
+          'POST /api/v2/jobs/ingest': 'Run permit ingest only',
+          'POST /api/v2/jobs/enrich?limit=4': 'Run a small enrichment batch',
           'POST /api/v2/leads/:id/status': 'Persist a lead status',
           'POST /api/v2/leads/:id/enrich': 'Run enrichment for one lead',
           'POST /api/v2/leads/:id/enrichment': 'Persist manual enrichment',

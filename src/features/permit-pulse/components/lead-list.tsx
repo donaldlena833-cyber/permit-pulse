@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, Inbox, Layers3 } from "lucide-react"
+import { AlertCircle, CheckCircle2, Clock3, Inbox, Layers3 } from "lucide-react"
 
 import { Checkbox } from "@/components/ui/checkbox"
 import { EmptyState } from "@/features/permit-pulse/components/empty-state"
@@ -10,6 +10,7 @@ import {
   StatusBadge,
 } from "@/features/permit-pulse/components/badges"
 import { formatCurrency, formatRelativeDate, getPermitAddress } from "@/features/permit-pulse/lib/format"
+import { getLeadBlocker, getLeadEvidence } from "@/features/permit-pulse/lib/operator"
 import type { LeadStatus, PermitLead } from "@/types/permit-pulse"
 import { cn } from "@/lib/utils"
 
@@ -94,11 +95,13 @@ export function LeadList({
       ) : null}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3.5">
+      <div className="flex-1 overflow-y-auto p-3">
         <div className="space-y-2.5">
           {leads.map((lead, index) => {
             const isActive = lead.id === selectedLeadId
             const isChecked = selectedIds.includes(lead.id)
+            const blocker = getLeadBlocker(lead)
+            const evidence = getLeadEvidence(lead)
 
             return (
               <button
@@ -125,8 +128,8 @@ export function LeadList({
                         <div className="text-[15px] font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text sm:text-base">
                           {getPermitAddress(lead)}
                         </div>
-                        <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-navy-500 dark:text-dark-muted">
-                          {lead.humanSummary}
+                        <p className="mt-1.5 line-clamp-1 text-sm leading-5 text-navy-500 dark:text-dark-muted">
+                          {evidence}
                         </p>
                       </div>
                       <div className="flex items-start gap-3 xl:flex-col xl:text-right">
@@ -154,16 +157,17 @@ export function LeadList({
 
                     <div className="mt-3 grid gap-2 rounded-[20px] border border-navy-200/70 bg-white/70 p-3 dark:border-dark-border/70 dark:bg-dark-card/80">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-2 text-sm font-medium text-navy-800 dark:text-dark-text">
-                          <Layers3 className="h-4 w-4 text-orange-500" />
-                          {lead.nextAction.label}
+                        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-navy-800 dark:text-dark-text">
+                          <Layers3 className="h-4 w-4 shrink-0 text-orange-500" />
+                          <span className="truncate">{lead.nextAction.label}</span>
                         </div>
                         <div className="text-[10px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                          {lead.nextAction.urgency} urgency
+                          {lead.nextAction.urgency}
                         </div>
                       </div>
-                      <div className="text-sm leading-5 text-navy-500 dark:text-dark-muted">
-                        {lead.nextAction.detail}
+                      <div className="flex items-start gap-2 text-sm leading-5 text-navy-500 dark:text-dark-muted">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-navy-400 dark:text-dark-muted" />
+                        <span className="line-clamp-2">{blocker}</span>
                       </div>
                       <div className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
                         <span className="inline-flex items-center gap-1">

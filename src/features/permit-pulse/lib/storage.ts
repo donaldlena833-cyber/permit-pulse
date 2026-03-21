@@ -2,13 +2,14 @@ import { DEFAULT_FILTERS, METROGLASSPRO_PROFILE } from "@/features/permit-pulse/
 import type { PermitPulseStore, TenantProfile } from "@/types/permit-pulse"
 
 const STORAGE_KEY = "permit-pulse-v2"
-const STORAGE_VERSION = 3
+const STORAGE_VERSION = 4
 
 export function createInitialStore(profile: TenantProfile = METROGLASSPRO_PROFILE): PermitPulseStore {
   return {
     version: STORAGE_VERSION,
     theme: "light",
     section: "dashboard",
+    opportunityLane: "feed",
     activeViewId: "hot-today",
     enrichmentQueueId: "hot-missing-contact",
     outreachQueueId: "ready-email",

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import {
   LayoutDashboard,
+  Layers3,
   MoonStar,
   SearchCheck,
   Settings2,
@@ -20,9 +21,10 @@ const NAV_ITEMS: Array<{
   description: string
   icon: typeof LayoutDashboard
 }> = [
-  { id: "dashboard", label: "Dashboard", description: "Control tower", icon: LayoutDashboard },
-  { id: "scanner", label: "Pipeline", description: "Feed, research, outreach", icon: SearchCheck },
-  { id: "profile", label: "Profile", description: "ICP and scoring", icon: Settings2 },
+  { id: "dashboard", label: "Dashboard", description: "What needs attention now", icon: LayoutDashboard },
+  { id: "opportunities", label: "Opportunities", description: "Review and qualify", icon: SearchCheck },
+  { id: "pipeline", label: "Pipeline", description: "Track active work", icon: Layers3 },
+  { id: "system", label: "System", description: "Automation and scoring", icon: Settings2 },
 ]
 
 interface AppShellProps {
@@ -68,7 +70,7 @@ export function AppShell({
               </div>
             </div>
             <p className="mt-4 text-sm leading-6 text-navy-500 dark:text-dark-muted">
-              Find the right permits early, qualify them quickly, and move real jobs into outreach from one focused workspace.
+              Scan, qualify, enrich, and move real glazing opportunities into outreach without losing the thread.
             </p>
           </div>
 
@@ -115,7 +117,7 @@ export function AppShell({
               Positioning
             </div>
             <p className="mt-3 text-sm leading-6 text-navy-500 dark:text-dark-muted">
-              MetroGlassPro first. Manhattan first. Keep review fast, research clean, and outreach deliberate.
+              MetroGlassPro first. Manhattan first. Keep review fast, research clean, and the machine easy to trust.
             </p>
           </div>
         </aside>
