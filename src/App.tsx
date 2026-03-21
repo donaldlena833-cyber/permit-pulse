@@ -100,8 +100,8 @@ function WorkspacePane({
   emptyDescription: string
 }) {
   return (
-    <ResizablePanelGroup className="min-h-[calc(100vh-14rem)] rounded-[32px]" direction="horizontal">
-      <ResizablePanel defaultSize={42} minSize={32}>
+    <ResizablePanelGroup className="h-[calc(100vh-12.75rem)] min-h-[760px] rounded-[32px]" direction="horizontal">
+      <ResizablePanel defaultSize={34} minSize={24}>
         <LeadList
           description={description}
           emptyDescription={emptyDescription}
@@ -117,7 +117,7 @@ function WorkspacePane({
         />
       </ResizablePanel>
       <ResizableHandle withHandle />
-      <ResizablePanel defaultSize={58} minSize={40}>
+      <ResizablePanel defaultSize={66} minSize={46}>
         <LeadDetailPanel
           automationHealth={automationHealth}
           isEnriching={selectedLead ? enrichingLeadId === selectedLead.id : false}

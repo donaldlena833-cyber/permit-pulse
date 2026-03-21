@@ -335,7 +335,7 @@ export function LeadDetailPanel({
 
   return (
     <div className="h-full rounded-[30px] border border-navy-200/70 bg-white/80 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
-      <ScrollArea className="h-[calc(100vh-13rem)]">
+      <ScrollArea className="h-full">
         <div className="space-y-4 p-4">
           <SectionCard
             className="rounded-[30px]"
@@ -368,13 +368,13 @@ export function LeadDetailPanel({
             </div>
           </SectionCard>
 
-          <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
             <SectionCard
               contentClassName="space-y-4"
               description="Best next move, fast controls, and the one operational blocker that matters most."
               title="Operator controls"
             >
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
                 <div className="rounded-[22px] border border-orange-200/70 bg-gradient-to-br from-orange-50 to-white p-4 dark:border-orange-800/40 dark:from-orange-900/15 dark:to-dark-card">
                   <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
                     Best next step
@@ -932,7 +932,7 @@ export function LeadDetailPanel({
                   </InfoBlock>
                 </div>
               </TabsContent>
-            </Tabs>
+          </Tabs>
         </div>
       </ScrollArea>
     </div>
