@@ -8,6 +8,7 @@ import {
   persistLeadDraft,
   persistLeadEnrichment,
   persistLeadStatus,
+  refreshLeadDraft,
   runLeadEnrichment,
   sendLeadImmediately,
   triggerAutomationRun,
@@ -26,7 +27,6 @@ import {
   getFilteredLeads,
   getQueueLeads,
   getRecentActivities,
-  isOutreachReady,
   OUTREACH_QUEUE_PRESETS,
   SYSTEM_SAVED_VIEWS,
   sortLeads,
@@ -79,6 +79,7 @@ function buildSodaUrl(profile: TenantProfile, filters: LeadFilters): string {
 }
 
 type LeadUpdater = (lead: PermitLead) => PermitLead
+type UpdateLeadOptions = { recompute?: boolean }
 
 export function usePermitPulse() {
   const [store, setStore] = useState<PermitPulseStore>(() => loadStore(METROGLASSPRO_PROFILE))
@@ -91,6 +92,7 @@ export function usePermitPulse() {
   const initialScanRef = useRef(false)
 
   const profile = store.profile
+  const usesBackendDecisionState = Boolean(automationHealth?.hasSupabase)
   const allLeads = useMemo(() => sortLeads(Object.values(store.leads), "priority"), [store.leads])
   const activeView = useMemo<SavedView>(
     () => SYSTEM_SAVED_VIEWS.find((view) => view.id === store.activeViewId) ?? SYSTEM_SAVED_VIEWS[0],
@@ -312,14 +314,15 @@ export function usePermitPulse() {
     }))
   }, [selectedLead, store.selectedLeadId])
 
-  const updateLead = useCallback((leadId: string, updater: LeadUpdater) => {
+  const updateLead = useCallback((leadId: string, updater: LeadUpdater, options: UpdateLeadOptions = {}) => {
     setStore((currentStore) => {
       const existingLead = currentStore.leads[leadId]
       if (!existingLead) {
         return currentStore
       }
 
-      const updatedLead = refreshDerivedLead(updater(existingLead), currentStore.profile)
+      const nextLead = updater(existingLead)
+      const updatedLead = options.recompute === false ? nextLead : refreshDerivedLead(nextLead, currentStore.profile)
 
       return {
         ...currentStore,
@@ -429,11 +432,11 @@ export function usePermitPulse() {
         },
         activities: [nextActivity, ...lead.activities].slice(0, 40),
       }
-    })
+    }, { recompute: !usesBackendDecisionState })
     void persistLeadStatus(leadId, status)
       .then(applyRemoteSnapshot)
       .catch(() => undefined)
-  }, [applyRemoteSnapshot, updateLead])
+  }, [applyRemoteSnapshot, updateLead, usesBackendDecisionState])
 
   const updateEnrichment = useCallback((leadId: string, patch: Partial<EnrichmentData>) => {
     const nextEnrichment = {
@@ -460,25 +463,16 @@ export function usePermitPulse() {
         ].slice(0, 40)
       }
 
-      const status =
-        isOutreachReady({ ...lead, enrichment: nextEnrichment }) && lead.workflow.status !== "contacted"
-          ? "outreach-ready"
-          : lead.workflow.status
-
       return {
         ...lead,
         enrichment: nextEnrichment,
-        workflow: {
-          ...lead.workflow,
-          status,
-        },
         activities: activity,
       }
-    })
+    }, { recompute: !usesBackendDecisionState })
     void persistLeadEnrichment(leadId, nextEnrichment)
       .then(applyRemoteSnapshot)
       .catch(() => undefined)
-  }, [applyRemoteSnapshot, store.leads, updateLead])
+  }, [applyRemoteSnapshot, store.leads, updateLead, usesBackendDecisionState])
 
   const updateOutreachDraft = useCallback((leadId: string, patch: Partial<OutreachDraft>) => {
     const nextDraft = {
@@ -503,7 +497,7 @@ export function usePermitPulse() {
         },
         activities: nextActivities,
       }
-    })
+    }, { recompute: !usesBackendDecisionState })
     void persistLeadDraft(leadId, {
       subject: nextDraft.subject,
       introLine: nextDraft.introLine,
@@ -513,11 +507,28 @@ export function usePermitPulse() {
     })
       .then(applyRemoteSnapshot)
       .catch(() => undefined)
-  }, [applyRemoteSnapshot, store.leads, updateLead])
+  }, [applyRemoteSnapshot, store.leads, updateLead, usesBackendDecisionState])
 
   const generateDraft = useCallback((leadId: string) => {
     const lead = store.leads[leadId]
     if (!lead) {
+      return
+    }
+
+    if (usesBackendDecisionState) {
+      void refreshLeadDraft(leadId)
+        .then(applyRemoteSnapshot)
+        .then(() => {
+          toast.success("Draft helper updated", {
+            description: "The worker rebuilt the draft from the latest resolver data.",
+          })
+        })
+        .catch((caughtError) => {
+          const message = caughtError instanceof Error ? caughtError.message : "Draft refresh failed"
+          toast.error("Draft refresh failed", {
+            description: message,
+          })
+        })
       return
     }
 
@@ -526,9 +537,21 @@ export function usePermitPulse() {
     toast.success("Draft helper updated", {
       description: "Practical outreach copy has been drafted for this lead.",
     })
-  }, [store.leads, updateOutreachDraft])
+  }, [applyRemoteSnapshot, store.leads, updateOutreachDraft, usesBackendDecisionState])
 
   const setFollowUpDate = useCallback((leadId: string, followUpDate: string) => {
+    const currentLead = store.leads[leadId]
+    if (!currentLead) {
+      return
+    }
+
+    const nextStatus =
+      followUpDate
+        ? "follow-up-due"
+        : currentLead.workflow.status === "follow-up-due"
+          ? "reviewed"
+          : currentLead.workflow.status
+
     updateLead(leadId, (lead) => ({
       ...lead,
       enrichment: {
@@ -538,7 +561,7 @@ export function usePermitPulse() {
       workflow: {
         ...lead.workflow,
         nextActionDue: followUpDate,
-        status: followUpDate ? "follow-up-due" : lead.workflow.status,
+        status: nextStatus,
       },
       activities: [
         createActivity(
@@ -548,19 +571,36 @@ export function usePermitPulse() {
         ),
         ...lead.activities,
       ].slice(0, 40),
-    }))
-  }, [updateLead])
+    }), { recompute: !usesBackendDecisionState })
+
+    void persistLeadEnrichment(leadId, { followUpDate })
+      .then(() => persistLeadStatus(leadId, nextStatus))
+      .then(applyRemoteSnapshot)
+      .catch(() => undefined)
+  }, [applyRemoteSnapshot, store.leads, updateLead, usesBackendDecisionState])
 
   const toggleIgnored = useCallback((leadId: string) => {
+    const currentLead = store.leads[leadId]
+    if (!currentLead) {
+      return
+    }
+
+    const nextIgnored = !currentLead.workflow.ignored
+    const nextStatus = nextIgnored ? "archived" : "reviewed"
+
     updateLead(leadId, (lead) => ({
       ...lead,
       workflow: {
         ...lead.workflow,
-        ignored: !lead.workflow.ignored,
-        status: lead.workflow.ignored ? "reviewed" : "archived",
+        ignored: nextIgnored,
+        status: nextStatus,
       },
-    }))
-  }, [updateLead])
+    }), { recompute: !usesBackendDecisionState })
+
+    void persistLeadStatus(leadId, nextStatus)
+      .then(applyRemoteSnapshot)
+      .catch(() => undefined)
+  }, [applyRemoteSnapshot, store.leads, updateLead, usesBackendDecisionState])
 
   const refreshLeadAutomation = useCallback(async (leadId: string) => {
     if (!automationHealth?.hasSupabase) {

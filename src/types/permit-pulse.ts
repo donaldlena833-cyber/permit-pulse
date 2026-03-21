@@ -247,6 +247,10 @@ export interface ChannelDecision {
   reason: string
   alternatives: OutreachChannel[]
   autoSendEligible: boolean
+  routeConfidence?: number
+  recipientType?: string
+  targetRole?: string
+  routeSource?: string
 }
 
 export interface OutreachHistoryItem {

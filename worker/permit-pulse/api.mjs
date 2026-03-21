@@ -1,6 +1,7 @@
 import {
   enrichLeadNow,
   getPermitAutomationSnapshot,
+  refreshLeadDraftNow,
   runEnrichmentBatch,
   runPermitIngest,
   runPermitAutomationCycle,
@@ -113,6 +114,12 @@ export async function handlePermitPulseAutomationRequest(request, env) {
       return json(snapshot);
     }
 
+    const draftRefreshMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/draft\/refresh$/);
+    if (draftRefreshMatch && request.method === 'POST') {
+      const snapshot = await refreshLeadDraftNow(env, decodeURIComponent(draftRefreshMatch[1]));
+      return json(snapshot);
+    }
+
     const sendMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/send$/);
     if (sendMatch && request.method === 'POST') {
       const result = await sendLeadNow(env, decodeURIComponent(sendMatch[1]));
@@ -133,6 +140,7 @@ export async function handlePermitPulseAutomationRequest(request, env) {
           'POST /api/v2/leads/:id/enrich': 'Run enrichment for one lead',
           'POST /api/v2/leads/:id/enrichment': 'Persist manual enrichment',
           'POST /api/v2/leads/:id/draft': 'Persist an outreach draft',
+          'POST /api/v2/leads/:id/draft/refresh': 'Regenerate the latest outreach draft from resolver data',
           'POST /api/v2/leads/:id/send': 'Send the latest draft now',
         },
       },

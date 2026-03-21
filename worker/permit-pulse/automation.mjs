@@ -35,6 +35,7 @@ function createId() {
 
 const ENRICHMENT_BATCH_LIMIT = 4;
 const SEND_BATCH_LIMIT = 4;
+const AUTO_SEND_ENABLED = false;
 const DIRECTORY_DOMAIN_DENYLIST = [
   'yelp.com',
   'angi.com',
@@ -403,17 +404,201 @@ function buildContactability(permit, propertyProfile, companyProfile, contacts) 
   };
 }
 
-function buildOutreachReadiness(score, contactability, companyProfile, contacts) {
+function getRolePriority(role = '') {
+  const normalized = normalizeText(role);
+
+  if (normalized.includes('applicant') || normalized.includes('gc') || normalized.includes('contractor')) {
+    return 18;
+  }
+
+  if (normalized.includes('owner')) {
+    return 12;
+  }
+
+  if (normalized.includes('filing') || normalized.includes('architect') || normalized.includes('design')) {
+    return 4;
+  }
+
+  return 7;
+}
+
+function isGenericMailbox(email = '') {
+  const local = normalizeText(email.split('@')[0] || '');
+  return ['info', 'sales', 'contact', 'hello', 'office', 'admin', 'support', 'estimating', 'billing'].includes(local);
+}
+
+function isPremiumLinkedInTarget(companyProfile) {
+  return METROGLASS_PROFILE.linkedinSignals.some((signal) =>
+    normalizeText(companyProfile.normalized_name || companyProfile.company_name).includes(signal),
+  );
+}
+
+function buildRouteCandidates({ companyProfile, contacts }) {
+  const premiumFirm = isPremiumLinkedInTarget(companyProfile);
+  const candidates = [];
+
+  contacts.forEach((contact) => {
+    const role = contact.role || companyProfile.role || '';
+    const rolePriority = getRolePriority(role);
+    const confidence = Math.round(contact.confidence || 0);
+
+    if (contact.email) {
+      let score = 56 + rolePriority + Math.round(confidence * 0.22);
+      score += contact.type === 'verified' ? 18 : contact.type === 'public' ? 10 : 3;
+      score += isGenericMailbox(contact.email) ? -8 : 6;
+      score += contact.verified ? 6 : 0;
+      score += contact.type === 'guessed' ? -6 : 0;
+
+      candidates.push({
+        channel: 'email',
+        score: clamp(score, 0, 100),
+        contact,
+        targetRole: role || 'company',
+        recipientType: contact.type || 'public',
+        routeSource: contact.source || '',
+      });
+    }
+
+    if (contact.phone) {
+      const score = 50 + rolePriority + Math.round(confidence * 0.18);
+      candidates.push({
+        channel: 'phone',
+        score: clamp(score, 0, 100),
+        contact,
+        targetRole: role || 'company',
+        recipientType: 'public',
+        routeSource: contact.source || '',
+      });
+    }
+
+    if (contact.contact_form_url) {
+      const score = 42 + Math.round(confidence * 0.12) + Math.round((companyProfile.confidence || 0) * 0.18);
+      candidates.push({
+        channel: 'form',
+        score: clamp(score, 0, 100),
+        contact,
+        targetRole: role || 'company',
+        recipientType: 'public',
+        routeSource: contact.source || '',
+      });
+    }
+
+    if (contact.linkedin_url) {
+      const score = (premiumFirm ? 42 : 22) + Math.round(confidence * 0.1) + Math.round(rolePriority * 0.35);
+      candidates.push({
+        channel: 'linkedin',
+        score: clamp(score, 0, 100),
+        contact,
+        targetRole: role || 'company',
+        recipientType: 'public',
+        routeSource: contact.source || '',
+      });
+    }
+  });
+
+  if (!contacts.some((contact) => contact.linkedin_url) && companyProfile.linked_in_url) {
+    candidates.push({
+      channel: 'linkedin',
+      score: premiumFirm ? 48 : 26,
+      contact: {
+        email: '',
+        phone: '',
+        contact_form_url: '',
+        linkedin_url: companyProfile.linked_in_url,
+        source: 'company_profile',
+      },
+      targetRole: companyProfile.role || (premiumFirm ? 'design firm' : 'company'),
+      recipientType: 'public',
+      routeSource: 'company_profile',
+    });
+  }
+
+  return candidates.sort((left, right) => right.score - left.score);
+}
+
+function buildChannelReason(candidate, companyProfile, permit) {
+  const routeLabel =
+    candidate.targetRole && candidate.targetRole !== 'company'
+      ? candidate.targetRole.replace(/_/g, ' ')
+      : companyProfile.company_name || permit.owner_business_name || getApplicantName(permit) || 'team';
+
+  if (candidate.channel === 'email') {
+    if (candidate.recipientType === 'verified') {
+      return `A verified ${routeLabel} email is available, which is the cleanest first route.`;
+    }
+
+    if (candidate.recipientType === 'guessed') {
+      return `A guessed ${routeLabel} email exists. Review it quickly, then use email if the match still looks right.`;
+    }
+
+    return `A public ${routeLabel} email is available, which is still cleaner than a cold phone-first approach.`;
+  }
+
+  if (candidate.channel === 'phone') {
+    return `A phone route exists for the ${routeLabel}, which is stronger than guessing another contact path.`;
+  }
+
+  if (candidate.channel === 'form') {
+    return 'The official site has a contact route, so the form is cleaner than guessing another path.';
+  }
+
+  if (isPremiumLinkedInTarget(companyProfile)) {
+    return 'Premium architect or design profile with no clean email found, so LinkedIn is worth drafting.';
+  }
+
+  return `No cleaner route exists yet for ${routeLabel}, so LinkedIn stays a research path only.`;
+}
+
+function buildChannelDecision({ score, contactability, companyProfile, contacts, permit }) {
+  const routeCandidates = buildRouteCandidates({ companyProfile, contacts });
+  const selected = routeCandidates[0];
+  const alternatives = uniq(routeCandidates.slice(1).map((candidate) => candidate.channel)).filter(Boolean);
+
+  if (!selected) {
+    return {
+      primary: 'linkedin',
+      reason: `No direct contact route is available yet for ${permit.owner_business_name || getApplicantName(permit) || 'this lead'}.`,
+      alternatives: [],
+      autoSendEligible: false,
+      routeConfidence: 0,
+      recipientType: '',
+      targetRole: '',
+      routeSource: '',
+    };
+  }
+
+  const manualAutoSendEligible =
+    AUTO_SEND_ENABLED &&
+    selected.channel === 'email' &&
+    selected.recipientType !== 'guessed' &&
+    score >= 70 &&
+    contactability.total >= 70 &&
+    companyProfile.match_strength === 'strong';
+
+  return {
+    primary: selected.channel,
+    reason: buildChannelReason(selected, companyProfile, permit),
+    alternatives,
+    autoSendEligible: manualAutoSendEligible,
+    routeConfidence: selected.score,
+    recipientType: selected.recipientType,
+    targetRole: selected.targetRole,
+    routeSource: selected.routeSource,
+  };
+}
+
+function buildOutreachReadiness(score, contactability, companyProfile, contacts, channelDecision) {
   let readiness = 0;
   const blockers = [];
 
-  readiness += Math.round(score * 0.45);
-  readiness += Math.round(contactability.total * 0.4);
-  readiness += Math.round((companyProfile.confidence || 0) * 0.15);
+  readiness += Math.round(score * 0.38);
+  readiness += Math.round(contactability.total * 0.28);
+  readiness += Math.round((companyProfile.confidence || 0) * 0.18);
+  readiness += Math.round((channelDecision.routeConfidence || 0) * 0.16);
 
-  if (!contacts.find((contact) => contact.email || contact.phone || contact.contact_form_url)) {
+  if (!contacts.find((contact) => contact.email || contact.phone || contact.contact_form_url || contact.linkedin_url)) {
     blockers.push('No outreach route found');
-    readiness -= 20;
+    readiness -= 22;
   }
 
   if (companyProfile.match_strength === 'weak') {
@@ -425,16 +610,21 @@ function buildOutreachReadiness(score, contactability, companyProfile, contacts)
     blockers.push('Company confidence is too light');
   }
 
+  if (channelDecision.primary === 'email' && channelDecision.recipientType === 'guessed') {
+    blockers.push('Primary email is still guessed');
+    readiness -= 8;
+  }
+
   const scoreValue = clamp(readiness);
   const label =
-    scoreValue >= 75 ? 'Ready' : scoreValue >= 55 ? 'Almost Ready' : scoreValue >= 35 ? 'Needs Review' : 'Blocked';
+    scoreValue >= 78 ? 'Ready' : scoreValue >= 58 ? 'Almost Ready' : scoreValue >= 38 ? 'Needs Review' : 'Blocked';
   const explanation =
     label === 'Ready'
-      ? 'Enough context and contact data exist to move directly into outreach.'
+      ? 'Enough context and route quality exist to move directly into outreach.'
       : label === 'Almost Ready'
-        ? 'Close to sendable, but still worth one more pass.'
+        ? 'Close to sendable, but still worth one more pass on route quality.'
         : label === 'Needs Review'
-          ? 'The lead has promise, but the automation confidence is not high enough yet.'
+          ? 'The lead has promise, but the best route still needs operator judgment.'
           : 'The lead needs more research before it should be touched.';
 
   return {
@@ -445,49 +635,152 @@ function buildOutreachReadiness(score, contactability, companyProfile, contacts)
   };
 }
 
-function buildChannelDecision({ score, contactability, companyProfile, contacts, permit }) {
-  const hasEmail = contacts.some((contact) => contact.email);
+function buildPriorityState(score, contactability, readiness) {
+  const priorityScore = Math.round((score * 0.52) + (contactability.total * 0.23) + (readiness.score * 0.25));
+
+  if (score < 20) {
+    return { priorityLabel: 'Ignore', priorityScore };
+  }
+
+  if (priorityScore >= 82) {
+    return { priorityLabel: 'Attack Now', priorityScore };
+  }
+
+  if (priorityScore >= 60) {
+    return { priorityLabel: 'Research Today', priorityScore };
+  }
+
+  if (priorityScore >= 42) {
+    return { priorityLabel: 'Worth a Try', priorityScore };
+  }
+
+  if (priorityScore >= 24) {
+    return { priorityLabel: 'Monitor', priorityScore };
+  }
+
+  return { priorityLabel: 'Ignore', priorityScore };
+}
+
+function resolveLeadStatus({ currentStatus, followUpDate, hasDraft, readinessLabel }) {
+  if (currentStatus === 'archived') {
+    return 'archived';
+  }
+
+  if (followUpDate) {
+    return 'follow-up-due';
+  }
+
+  if (['contacted', 'replied', 'qualified', 'quoted', 'won', 'lost'].includes(currentStatus)) {
+    return currentStatus;
+  }
+
+  if (hasDraft && ['new', 'reviewed', 'researching', 'outreach-ready', 'drafted'].includes(currentStatus || 'new')) {
+    return 'drafted';
+  }
+
+  if (readinessLabel === 'Ready') {
+    return 'outreach-ready';
+  }
+
+  if (readinessLabel === 'Blocked') {
+    return 'reviewed';
+  }
+
+  return 'researching';
+}
+
+function buildNextActionDecision({
+  channelDecision,
+  companyProfile,
+  contacts,
+  followUpDate,
+  permit,
+  readiness,
+  status,
+}) {
+  const followUpDue = followUpDate && new Date(followUpDate).getTime() <= Date.now();
   const hasPhone = contacts.some((contact) => contact.phone);
+  const hasWebsite = Boolean(companyProfile.website);
   const hasForm = contacts.some((contact) => contact.contact_form_url);
-  const premiumFirm = METROGLASS_PROFILE.linkedinSignals.some((signal) =>
-    normalizeText(companyProfile.normalized_name || companyProfile.company_name).includes(signal),
-  );
+  const hasGc = Boolean(getApplicantName(permit));
 
-  if (hasEmail) {
+  if (followUpDue || status === 'follow-up-due') {
     return {
-      primary: 'email',
-      reason: 'Email is available, which is still the cleanest first channel.',
-      alternatives: uniq([hasPhone ? 'phone' : '', hasForm ? 'form' : '']).filter(Boolean),
-      autoSendEligible: score >= 55 && contactability.total >= 55 && companyProfile.match_strength !== 'weak',
+      label: 'Follow up today',
+      detail: 'A follow-up date is already set, so this lead should move before new research.',
+      queue: 'email',
+      urgency: 'high',
     };
   }
 
-  if (hasPhone) {
+  if (status === 'contacted' || status === 'replied') {
     return {
-      primary: 'phone',
-      reason: 'No email is available, but there is a phone route for fast contractor outreach.',
-      alternatives: uniq([hasForm ? 'form' : '', premiumFirm ? 'linkedin' : '']).filter(Boolean),
-      autoSendEligible: false,
+      label: 'Monitor reply',
+      detail: 'A live touchpoint already exists. Stay on the thread instead of reopening research.',
+      queue: 'monitor',
+      urgency: 'medium',
     };
   }
 
-  if (hasForm) {
+  if (channelDecision.primary === 'phone') {
     return {
-      primary: 'form',
-      reason: 'The contact form is the best reachable route right now.',
-      alternatives: premiumFirm ? ['linkedin'] : [],
-      autoSendEligible: false,
+      label: hasGc ? 'Call GC' : 'Call first',
+      detail: channelDecision.reason,
+      queue: 'call',
+      urgency: readiness.label === 'Ready' ? 'high' : 'medium',
+    };
+  }
+
+  if (channelDecision.primary === 'email') {
+    return {
+      label: channelDecision.recipientType === 'guessed' ? 'Review guessed email' : 'Email first',
+      detail: channelDecision.reason,
+      queue: 'email',
+      urgency: readiness.label === 'Ready' ? 'high' : 'medium',
+    };
+  }
+
+  if (channelDecision.primary === 'form' && hasForm) {
+    return {
+      label: 'Submit contact form',
+      detail: channelDecision.reason,
+      queue: 'form',
+      urgency: readiness.label === 'Ready' ? 'medium' : 'low',
+    };
+  }
+
+  if (!hasPhone && hasGc) {
+    return {
+      label: 'Search GC phone',
+      detail: 'The GC is known, but the cleanest direct route is still missing.',
+      queue: 'research',
+      urgency: 'medium',
+    };
+  }
+
+  if (!hasWebsite && permit.owner_business_name) {
+    return {
+      label: 'Find official website',
+      detail: 'Resolve the real company site before you trust the rest of the contact layer.',
+      queue: 'research',
+      urgency: 'medium',
+    };
+  }
+
+  if (channelDecision.primary === 'linkedin') {
+    return {
+      label: 'Draft LinkedIn note',
+      detail: channelDecision.reason,
+      queue: 'dm',
+      urgency: 'low',
     };
   }
 
   return {
-    primary: premiumFirm && score >= 55 ? 'linkedin' : 'linkedin',
-    reason:
-      premiumFirm && !hasEmail
-        ? 'Premium architect or design profile with no email found, LinkedIn is worth drafting.'
-        : `No direct contact route is available yet for ${permit.owner_business_name || getApplicantName(permit) || 'this lead'}.`,
-    alternatives: [],
-    autoSendEligible: false,
+    label: 'Research contact route',
+    detail: 'The fit may be real, but the clean route still needs work.',
+    queue: 'research',
+    urgency: 'low',
   };
 }
 
@@ -556,6 +849,109 @@ function buildDraft(lead, companyProfile, contacts) {
     recipient: primaryContact?.email || '',
     recipientType: primaryContact?.type || '',
     autoChannel: lead.best_channel || 'email',
+  };
+}
+
+async function upsertDraftRecord(gateway, leadId, patch, existingDraft = null) {
+  const currentDraft = existingDraft
+    || (
+      await gateway.select('outreach', {
+        filters: [eq('lead_id', leadId)],
+        ordering: [order('created_at', 'desc')],
+        pageLimit: 1,
+      })
+    )[0]
+    || null;
+
+  const payload = {
+    channel: patch.channel || currentDraft?.channel || 'email',
+    recipient: patch.recipient ?? currentDraft?.recipient ?? '',
+    recipient_type: patch.recipientType ?? currentDraft?.recipient_type ?? '',
+    subject: patch.subject ?? currentDraft?.subject ?? '',
+    draft: patch.body ?? currentDraft?.draft ?? '',
+    plugin_line: patch.pluginLine ?? currentDraft?.plugin_line ?? '',
+    call_opener: patch.callOpener ?? currentDraft?.call_opener ?? '',
+    follow_up_note: patch.followUpNote ?? currentDraft?.follow_up_note ?? '',
+    status: currentDraft?.status === 'sent' ? 'draft' : patch.status ?? currentDraft?.status ?? 'draft',
+    metadata: {
+      ...(currentDraft?.metadata || {}),
+      ...(patch.metadata || {}),
+    },
+  };
+
+  if (currentDraft && currentDraft.status !== 'sent') {
+    const updated = await gateway.patch('outreach', [eq('id', currentDraft.id)], payload);
+    return updated[0] || { ...currentDraft, ...payload };
+  }
+
+  const inserted = await gateway.insert('outreach', {
+    id: createId('outreach'),
+    lead_id: leadId,
+    ...payload,
+  });
+
+  return inserted[0] || null;
+}
+
+function buildDerivedLeadState({
+  leadRow,
+  companyProfile,
+  propertyProfile,
+  contacts,
+  promoteDrafted = false,
+}) {
+  const permit = leadRow.raw_permit || {};
+  const contactability = buildContactability(permit, propertyProfile, companyProfile, contacts);
+  const channelDecision = buildChannelDecision({
+    score: leadRow.score,
+    contactability,
+    companyProfile,
+    contacts,
+    permit,
+  });
+  const readiness = buildOutreachReadiness(leadRow.score, contactability, companyProfile, contacts, channelDecision);
+  const { priorityLabel, priorityScore } = buildPriorityState(leadRow.score, contactability, readiness);
+  const followUpDate = leadRow.enrichment_summary?.manualEnrichment?.followUpDate || '';
+  const status = resolveLeadStatus({
+    currentStatus: leadRow.status,
+    followUpDate,
+    hasDraft: promoteDrafted,
+    readinessLabel: readiness.label,
+  });
+  const nextAction = buildNextActionDecision({
+    channelDecision,
+    companyProfile,
+    contacts,
+    followUpDate,
+    permit,
+    readiness,
+    status,
+  });
+  const autoSendEligible =
+    AUTO_SEND_ENABLED &&
+    channelDecision.autoSendEligible &&
+    readiness.label === 'Ready' &&
+    companyProfile.match_strength === 'strong' &&
+    channelDecision.recipientType !== 'guessed';
+
+  return {
+    contactability,
+    channelDecision: {
+      ...channelDecision,
+      autoSendEligible,
+    },
+    readiness,
+    priorityLabel,
+    priorityScore,
+    status,
+    nextAction,
+    enrichmentConfidence: Math.round(((companyProfile.confidence || 0) * 0.45) + ((propertyProfile.confidence || 0) * 0.3) + (readiness.score * 0.25)),
+    autoSendEligible,
+    autoSendReason: AUTO_SEND_ENABLED
+      ? autoSendEligible
+        ? 'Lead clears route quality, confidence, and schedule checks.'
+        : 'Lead still needs operator review before automatic sending.'
+      : 'Auto-send is disabled until resolver trust is stronger.',
   };
 }
 
@@ -1566,26 +1962,14 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
   }
 
   const dedupedContacts = dedupeContacts(contacts);
-  const contactability = buildContactability(permit, propertyProfile, company, dedupedContacts);
-  const readiness = buildOutreachReadiness(leadRow.score, contactability, company, dedupedContacts);
-  const channelDecision = buildChannelDecision({
-    score: leadRow.score,
-    contactability,
-    companyProfile: company,
-    contacts: dedupedContacts,
-    permit,
-  });
-  const draft = buildDraft(leadRow, company, dedupedContacts);
-  const primaryEmail = pickPrimaryContact(dedupedContacts)?.email || '';
+  const primaryEmailCandidate = pickPrimaryContact(dedupedContacts)?.email || '';
   const shouldVerify =
-    channelDecision.primary === 'email' &&
     leadRow.score >= HIGH_VALUE_SCORE &&
-    readiness.score >= 70 &&
-    Boolean(primaryEmail);
-  const verification = await maybeVerifyEmail(env, primaryEmail, shouldVerify);
+    Boolean(primaryEmailCandidate);
+  const verification = await maybeVerifyEmail(env, primaryEmailCandidate, shouldVerify);
 
-  if (verification.verified && primaryEmail) {
-    const primaryContact = dedupedContacts.find((contact) => contact.email === primaryEmail);
+  if (verification.verified && primaryEmailCandidate) {
+    const primaryContact = dedupedContacts.find((contact) => contact.email === primaryEmailCandidate);
     if (primaryContact) {
       primaryContact.type = 'verified';
       primaryContact.verified = true;
@@ -1593,68 +1977,42 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     }
   }
 
+  const derivedState = buildDerivedLeadState({
+    leadRow,
+    companyProfile: company,
+    propertyProfile,
+    contacts: dedupedContacts,
+  });
+  const draft = buildDraft({ ...leadRow, best_channel: derivedState.channelDecision.primary }, company, dedupedContacts);
+
   const nowIso = new Date().toISOString();
   const enrichedLead = {
     ...leadRow,
-    priority_label:
-      leadRow.score >= 75 && contactability.total >= 60
-        ? 'Attack Now'
-        : leadRow.score >= 55
-          ? 'Research Today'
-          : leadRow.score >= 35
-            ? 'Worth a Try'
-            : leadRow.score >= 20
-              ? 'Monitor'
-              : 'Ignore',
-    priority_score: Math.round((leadRow.score * 0.55) + (contactability.total * 0.25) + (readiness.score * 0.2)),
-    status: readiness.label === 'Blocked' ? 'needs review' : readiness.label === 'Ready' ? 'outreach-ready' : 'researching',
-    contactability_score: contactability.total,
-    contactability_label: contactability.label,
-    outreach_readiness_score: readiness.score,
-    outreach_readiness_label: readiness.label,
-    linkedin_worthy: channelDecision.primary === 'linkedin',
-    best_channel: channelDecision.primary,
-    best_next_action: {
-      label:
-        channelDecision.primary === 'email'
-          ? 'Email first'
-          : channelDecision.primary === 'phone'
-            ? 'Call first'
-            : channelDecision.primary === 'form'
-              ? 'Contact form'
-              : 'LinkedIn draft',
-      detail: channelDecision.reason,
-      queue:
-        channelDecision.primary === 'phone'
-          ? 'call'
-          : channelDecision.primary === 'form'
-            ? 'form'
-            : channelDecision.primary === 'linkedin'
-              ? 'dm'
-              : 'email',
-      urgency: readiness.label === 'Ready' ? 'high' : readiness.label === 'Almost Ready' ? 'medium' : 'low',
-    },
-    contactability_breakdown: contactability,
+    priority_label: derivedState.priorityLabel,
+    priority_score: derivedState.priorityScore,
+    status: derivedState.status,
+    contactability_score: derivedState.contactability.total,
+    contactability_label: derivedState.contactability.label,
+    outreach_readiness_score: derivedState.readiness.score,
+    outreach_readiness_label: derivedState.readiness.label,
+    linkedin_worthy: derivedState.channelDecision.primary === 'linkedin',
+    best_channel: derivedState.channelDecision.primary,
+    best_next_action: derivedState.nextAction,
+    contactability_breakdown: derivedState.contactability,
     enrichment_summary: {
       company,
       property: propertyProfile,
-      readiness,
-      channelDecision,
+      readiness: derivedState.readiness,
+      channelDecision: derivedState.channelDecision,
       draft,
       verification,
     },
     company_match_strength: company.match_strength,
     company_domain: company.domain,
     property_confidence: propertyProfile.confidence,
-    enrichment_confidence: Math.round((company.confidence * 0.45) + (propertyProfile.confidence * 0.3) + (readiness.score * 0.25)),
-    auto_send_eligible:
-      channelDecision.autoSendEligible &&
-      readiness.label !== 'Blocked' &&
-      company.match_strength !== 'weak' &&
-      Boolean(primaryEmail || draft.recipient),
-    auto_send_reason: channelDecision.autoSendEligible
-      ? 'Score, contactability, company match, and channel rules all pass.'
-      : 'Lead still needs review before automation should send.',
+    enrichment_confidence: derivedState.enrichmentConfidence,
+    auto_send_eligible: derivedState.autoSendEligible && Boolean(primaryEmailCandidate || draft.recipient),
+    auto_send_reason: derivedState.autoSendReason,
     last_enriched_at: nowIso,
   };
 
@@ -1671,35 +2029,31 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       lead_id: leadId,
       event_type: 'lead_enriched',
       summary: 'Lead enrichment completed',
-      detail: channelDecision.reason,
+      detail: derivedState.channelDecision.reason,
       metadata: {
         companyConfidence: company.confidence,
         propertyConfidence: propertyProfile.confidence,
-        readiness: readiness.label,
+        readiness: derivedState.readiness.label,
       },
     }),
   ]);
 
-  const outreachDraftRecord = {
-    id: createId('outreach'),
-    lead_id: leadId,
-    channel: channelDecision.primary,
+  const outreachDraftRecord = await upsertDraftRecord(gateway, leadId, {
+    channel: derivedState.channelDecision.primary,
     recipient: draft.recipient || '',
-    recipient_type: draft.recipientType || channelDecision.primary,
+    recipientType: draft.recipientType || derivedState.channelDecision.primary,
     subject: draft.subject,
-    draft: draft.body,
-    plugin_line: draft.pluginLine,
-    call_opener: draft.callOpener,
-    follow_up_note: draft.followUpNote,
+    body: draft.body,
+    pluginLine: draft.pluginLine,
+    callOpener: draft.callOpener,
+    followUpNote: draft.followUpNote,
     status: enrichedLead.auto_send_eligible ? 'queued' : 'draft',
     metadata: {
       introLine: draft.introLine,
       companyWebsite: company.website,
-      alternatives: channelDecision.alternatives,
+      alternatives: derivedState.channelDecision.alternatives,
     },
-  };
-
-  await gateway.insert('outreach', outreachDraftRecord);
+  });
 
   return {
     lead: enrichedLead,
@@ -2043,6 +2397,10 @@ function mapSnapshot(snapshot) {
         reason: lead.enrichment_summary?.channelDecision?.reason || '',
         alternatives: lead.enrichment_summary?.channelDecision?.alternatives || [],
         autoSendEligible: Boolean(lead.auto_send_eligible),
+        routeConfidence: lead.enrichment_summary?.channelDecision?.routeConfidence || 0,
+        recipientType: lead.enrichment_summary?.channelDecision?.recipientType || '',
+        targetRole: lead.enrichment_summary?.channelDecision?.targetRole || '',
+        routeSource: lead.enrichment_summary?.channelDecision?.routeSource || '',
       },
       outreachHistory,
       automationSummary: {
@@ -2204,6 +2562,72 @@ export async function runEnrichmentBatch(env, options = {}) {
   };
 }
 
+async function loadLeadAutomationContext(gateway, leadId) {
+  const [company, property, contacts, latestDraft] = await Promise.all([
+    gateway.select('company_profiles', {
+      filters: [eq('lead_id', leadId)],
+      pageLimit: 1,
+    }),
+    gateway.select('property_profiles', {
+      filters: [eq('lead_id', leadId)],
+      pageLimit: 1,
+    }),
+    gateway.select('contacts', {
+      filters: [eq('lead_id', leadId)],
+      ordering: [order('is_primary', 'desc'), order('confidence', 'desc')],
+      pageLimit: 100,
+    }),
+    gateway.select('outreach', {
+      filters: [eq('lead_id', leadId)],
+      ordering: [order('created_at', 'desc')],
+      pageLimit: 1,
+    }),
+  ]);
+
+  return {
+    company: company[0] || {},
+    property: property[0] || {},
+    contacts,
+    latestDraft: latestDraft[0] || null,
+  };
+}
+
+async function recomputeLeadAutomationState(gateway, leadRow, options = {}) {
+  const context = await loadLeadAutomationContext(gateway, leadRow.id);
+  const derivedState = buildDerivedLeadState({
+    leadRow,
+    companyProfile: context.company,
+    propertyProfile: context.property,
+    contacts: context.contacts,
+    promoteDrafted: Boolean(options.promoteDrafted),
+  });
+
+  const payload = {
+    priority_label: derivedState.priorityLabel,
+    priority_score: derivedState.priorityScore,
+    status: options.overrideStatus || derivedState.status,
+    contactability_score: derivedState.contactability.total,
+    contactability_label: derivedState.contactability.label,
+    outreach_readiness_score: derivedState.readiness.score,
+    outreach_readiness_label: derivedState.readiness.label,
+    linkedin_worthy: derivedState.channelDecision.primary === 'linkedin',
+    best_channel: derivedState.channelDecision.primary,
+    best_next_action: derivedState.nextAction,
+    contactability_breakdown: derivedState.contactability,
+    enrichment_confidence: derivedState.enrichmentConfidence,
+    auto_send_eligible: derivedState.autoSendEligible,
+    auto_send_reason: derivedState.autoSendReason,
+    enrichment_summary: {
+      ...(leadRow.enrichment_summary || {}),
+      readiness: derivedState.readiness,
+      channelDecision: derivedState.channelDecision,
+    },
+  };
+
+  const updated = await gateway.patch('leads', [eq('id', leadRow.id)], payload);
+  return updated[0] || { ...leadRow, ...payload };
+}
+
 export async function getPermitAutomationSnapshot(env) {
   const gateway = createSupabaseGateway(env);
   const snapshot = await gateway.getQueueSnapshot();
@@ -2221,6 +2645,42 @@ export async function enrichLeadNow(env, leadId) {
   return getPermitAutomationSnapshot(env);
 }
 
+export async function refreshLeadDraftNow(env, leadId) {
+  const gateway = createSupabaseGateway(env);
+  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  const context = await loadLeadAutomationContext(gateway, lead.id);
+  const draft = buildDraft({ ...lead, best_channel: lead.best_channel || 'email' }, context.company, context.contacts);
+
+  await upsertDraftRecord(
+    gateway,
+    lead.id,
+    {
+      channel: lead.best_channel || 'email',
+      recipient: draft.recipient || '',
+      recipientType: draft.recipientType || lead.best_channel || 'email',
+      subject: draft.subject,
+      body: draft.body,
+      pluginLine: draft.pluginLine,
+      callOpener: draft.callOpener,
+      followUpNote: draft.followUpNote,
+      status: 'draft',
+      metadata: {
+        introLine: draft.introLine,
+        refreshedFromResolver: true,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+    context.latestDraft,
+  );
+
+  await recomputeLeadAutomationState(gateway, lead, { promoteDrafted: true });
+  return getPermitAutomationSnapshot(env);
+}
+
 export async function updateLeadAutomationState(env, leadId, patch) {
   const gateway = createSupabaseGateway(env);
   const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
@@ -2228,8 +2688,13 @@ export async function updateLeadAutomationState(env, leadId, patch) {
     throw new Error('Lead not found');
   }
 
+  let workingLead = lead;
+  let explicitStatus = '';
+
   if (patch.status) {
-    await gateway.patch('leads', [eq('id', lead.id)], { status: patch.status });
+    explicitStatus = patch.status;
+    const updated = await gateway.patch('leads', [eq('id', lead.id)], { status: patch.status });
+    workingLead = updated[0] || { ...workingLead, status: patch.status };
     await gateway.insert('activity_log', {
       id: createId('activity'),
       lead_id: lead.id,
@@ -2247,7 +2712,7 @@ export async function updateLeadAutomationState(env, leadId, patch) {
       pageLimit: 100,
     });
     const nextManualEnrichment = {
-      ...(lead.enrichment_summary?.manualEnrichment || {}),
+      ...(workingLead.enrichment_summary?.manualEnrichment || {}),
       ...patch.enrichment,
     };
     const preservedContacts = existingContacts.filter((contact) => contact.source !== 'manual');
@@ -2298,12 +2763,19 @@ export async function updateLeadAutomationState(env, leadId, patch) {
       });
     }
 
-    await gateway.patch('leads', [eq('id', lead.id)], {
+    const updated = await gateway.patch('leads', [eq('id', lead.id)], {
       enrichment_summary: {
-        ...(lead.enrichment_summary || {}),
+        ...(workingLead.enrichment_summary || {}),
         manualEnrichment: nextManualEnrichment,
       },
     });
+    workingLead = updated[0] || {
+      ...workingLead,
+      enrichment_summary: {
+        ...(workingLead.enrichment_summary || {}),
+        manualEnrichment: nextManualEnrichment,
+      },
+    };
     await gateway.replaceContacts(lead.id, [...preservedContacts, ...manualContacts]);
     await gateway.insert('activity_log', {
       id: createId('activity'),
@@ -2316,48 +2788,29 @@ export async function updateLeadAutomationState(env, leadId, patch) {
   }
 
   if (patch.draft) {
-    const existingDraft = (
-      await gateway.select('outreach', {
-        filters: [eq('lead_id', lead.id)],
-        ordering: [order('created_at', 'desc')],
-        pageLimit: 1,
-      })
-    )[0];
     const hasDraftField = (field) => Object.prototype.hasOwnProperty.call(patch.draft, field);
 
-    const draftPayload = {
+    await upsertDraftRecord(gateway, lead.id, {
       channel: 'email',
-      recipient: hasDraftField('recipient') ? patch.draft.recipient || '' : existingDraft?.recipient || '',
-      recipient_type: hasDraftField('recipientType')
-        ? patch.draft.recipientType || 'manual'
-        : existingDraft?.recipient_type || 'manual',
-      subject: hasDraftField('subject') ? patch.draft.subject || '' : existingDraft?.subject || '',
-      draft: hasDraftField('body') ? patch.draft.body || '' : existingDraft?.draft || '',
-      plugin_line: hasDraftField('pluginLine')
-        ? patch.draft.pluginLine || ''
-        : existingDraft?.plugin_line || '',
-      call_opener: hasDraftField('callOpener') ? patch.draft.callOpener || '' : existingDraft?.call_opener || '',
-      follow_up_note: hasDraftField('followUpNote')
-        ? patch.draft.followUpNote || ''
-        : existingDraft?.follow_up_note || '',
-      status: existingDraft?.status === 'sent' ? 'draft' : existingDraft?.status || 'draft',
+      recipient: hasDraftField('recipient') ? patch.draft.recipient || '' : undefined,
+      recipientType: hasDraftField('recipientType') ? patch.draft.recipientType || 'manual' : undefined,
+      subject: hasDraftField('subject') ? patch.draft.subject || '' : undefined,
+      body: hasDraftField('body') ? patch.draft.body || '' : undefined,
+      pluginLine: hasDraftField('pluginLine') ? patch.draft.pluginLine || '' : undefined,
+      callOpener: hasDraftField('callOpener') ? patch.draft.callOpener || '' : undefined,
+      followUpNote: hasDraftField('followUpNote') ? patch.draft.followUpNote || '' : undefined,
+      status: 'draft',
       metadata: {
-        ...(existingDraft?.metadata || {}),
-        introLine: hasDraftField('introLine') ? patch.draft.introLine || '' : existingDraft?.metadata?.introLine || '',
+        introLine: hasDraftField('introLine') ? patch.draft.introLine || '' : undefined,
         updatedAt: new Date().toISOString(),
       },
-    };
-
-    if (existingDraft && existingDraft.status !== 'sent') {
-      await gateway.patch('outreach', [eq('id', existingDraft.id)], draftPayload);
-    } else {
-      await gateway.insert('outreach', {
-        id: createId('outreach'),
-        lead_id: lead.id,
-        ...draftPayload,
-      });
-    }
+    });
   }
+
+  await recomputeLeadAutomationState(gateway, workingLead, {
+    promoteDrafted: Boolean(patch.draft),
+    overrideStatus: explicitStatus || undefined,
+  });
 
   return getPermitAutomationSnapshot(env);
 }
@@ -2404,6 +2857,13 @@ export async function sendLeadNow(env, leadId) {
       last_sent_at: sentAt,
     }),
   ]);
+
+  const latestLead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+  if (latestLead) {
+    await recomputeLeadAutomationState(gateway, latestLead, {
+      overrideStatus: 'contacted',
+    });
+  }
 
   return { success: true, recipient: primaryContact.email, sentAt };
 }

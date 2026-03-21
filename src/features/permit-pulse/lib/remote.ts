@@ -124,6 +124,12 @@ export async function persistLeadDraft(
   })
 }
 
+export async function refreshLeadDraft(leadId: string): Promise<AutomationSnapshot> {
+  return requestJson<AutomationSnapshot>(`/api/v2/leads/${encodeURIComponent(leadId)}/draft/refresh`, {
+    method: "POST",
+  })
+}
+
 export async function sendLeadImmediately(
   leadId: string,
 ): Promise<{ success: boolean; recipient?: string; sentAt?: string }> {
