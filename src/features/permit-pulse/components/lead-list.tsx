@@ -3,7 +3,6 @@ import { Clock3, Inbox } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { EmptyState } from "@/features/permit-pulse/components/empty-state"
 import {
-  BoroughBadge,
   LeadScoreBadge,
   StatusBadge,
 } from "@/features/permit-pulse/components/badges"
@@ -49,7 +48,7 @@ export function LeadList({
       <div className="border-b border-navy-200/70 p-3 dark:border-dark-border/70">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">{title}</div>
+            <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">{title}</div>
             <div className="mt-1 text-[11px] leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
             <div className="mt-2 flex flex-wrap gap-3 text-[10px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
               <span>{leads.length} visible</span>
@@ -123,6 +122,7 @@ export function LeadList({
                         {getPermitAddress(lead)}
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-navy-500 dark:text-dark-muted">
+                        <span>{lead.borough}</span>
                         <span>{formatCurrency(lead.estimated_job_costs)}</span>
                         <span className="inline-flex items-center gap-1">
                           <Clock3 className="h-3.5 w-3.5" />
@@ -134,7 +134,6 @@ export function LeadList({
                     <div className="mt-2 flex flex-wrap gap-2">
                       <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
                       <StatusBadge status={lead.workflow.status} />
-                      <BoroughBadge borough={lead.borough} />
                     </div>
                   </div>
                 </div>

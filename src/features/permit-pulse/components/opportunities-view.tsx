@@ -50,21 +50,6 @@ function LanePill({
   )
 }
 
-function SummaryChip({
-  label,
-  value,
-}: {
-  label: string
-  value: string
-}) {
-  return (
-    <div className="rounded-full border border-navy-200/70 bg-cream-50/80 px-3 py-1.5 text-sm text-navy-600 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-muted">
-      <span className="font-medium text-navy-800 dark:text-dark-text">{value}</span>
-      <span className="ml-2 text-[11px] uppercase tracking-[0.18em]">{label}</span>
-    </div>
-  )
-}
-
 interface OpportunitiesViewProps {
   lane: OpportunityLane
   onLaneChange: (lane: OpportunityLane) => void
@@ -135,46 +120,42 @@ export function OpportunitiesView({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-[28px] border border-navy-200/70 bg-white/80 p-4 shadow-[0_24px_80px_rgba(70,55,37,0.08)] backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
+      <div className="rounded-[24px] border border-navy-200/70 bg-white/80 p-3 shadow-[0_20px_60px_rgba(70,55,37,0.08)] backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div>
+          <div className="flex flex-wrap items-center gap-3">
             <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
               Opportunities
             </div>
-            <div className="mt-1 text-2xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">
-              Review queue
+            <div className="rounded-full border border-navy-200/70 bg-cream-50/80 px-3 py-1 text-[11px] font-medium text-navy-700 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-text">
+              {visibleCount} visible
             </div>
-            <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">{laneMeta.description}</p>
+            <div className="text-sm font-medium text-navy-800 dark:text-dark-text">{currentLens}</div>
+            <div className="text-sm text-navy-500 dark:text-dark-muted">{operatorFocus}</div>
+            <div className="text-sm text-navy-500 dark:text-dark-muted">{laneMeta.description}</div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <SummaryChip label="Visible" value={String(visibleCount)} />
-            <SummaryChip label="Lens" value={currentLens} />
-            <SummaryChip label="Focus" value={operatorFocus} />
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {LANE_META.map((item) => (
+              <LanePill
+                key={item.id}
+                active={item.id === lane}
+                count={
+                  item.id === "feed"
+                    ? scannerCount
+                    : item.id === "research"
+                      ? enrichmentCount
+                      : item.id === "ready"
+                        ? outreachCount
+                        : sentCount
+                }
+                icon={item.icon}
+                label={item.shortLabel}
+                onClick={() => onLaneChange(item.id)}
+              />
+            ))}
           </div>
         </div>
 
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-          {LANE_META.map((item) => (
-            <LanePill
-              key={item.id}
-              active={item.id === lane}
-              count={
-                item.id === "feed"
-                  ? scannerCount
-                  : item.id === "research"
-                    ? enrichmentCount
-                    : item.id === "ready"
-                      ? outreachCount
-                      : sentCount
-              }
-              icon={item.icon}
-              label={item.shortLabel}
-              onClick={() => onLaneChange(item.id)}
-            />
-          ))}
-        </div>
-
-        <div className="mt-4 space-y-3">
+        <div className="mt-3 space-y-3">
           {lane === "feed" ? (
             <>
               <SavedViewTabs activeViewId={activeScannerViewId} onSelect={onScannerViewChange} views={savedViews} />

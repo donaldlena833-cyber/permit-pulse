@@ -125,8 +125,8 @@ function ControlButton({
     <Button
       className={
         variant === "default"
-          ? "h-10 justify-start rounded-2xl bg-orange-500 px-4 text-white hover:bg-orange-600"
-          : "h-10 justify-start rounded-2xl border-navy-200 bg-white/90 px-4 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+          ? "h-9 justify-start rounded-2xl bg-orange-500 px-3.5 text-white hover:bg-orange-600"
+          : "h-9 justify-start rounded-2xl border-navy-200 bg-white/90 px-3.5 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
       }
       disabled={disabled || loading}
       onClick={onClick}
@@ -150,13 +150,13 @@ function CompactField({ label, value }: { label: string; value: string }) {
 
 function SignalCard({ label, helper, value }: { label: string; helper: string; value: number }) {
   return (
-    <div className="rounded-[22px] border border-navy-200/70 bg-white/80 p-4 dark:border-dark-border/70 dark:bg-dark-card/80">
+    <div className="rounded-[20px] border border-navy-200/70 bg-white/80 p-3 dark:border-dark-border/70 dark:bg-dark-card/80">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-medium text-navy-800 dark:text-dark-text">{label}</div>
+        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">{label}</div>
         <div className="text-sm font-semibold text-navy-900 dark:text-dark-text">{value}</div>
       </div>
-      <Progress className="mt-3 h-1.5 bg-cream-100 dark:bg-dark-border/70" value={value} />
-      <p className="mt-3 text-sm leading-6 text-navy-500 dark:text-dark-muted">{helper}</p>
+      <Progress className="mt-2 h-1.5 bg-cream-100 dark:bg-dark-border/70" value={value} />
+      <p className="mt-2 text-xs leading-5 text-navy-500 dark:text-dark-muted">{helper}</p>
     </div>
   )
 }
@@ -357,7 +357,7 @@ export function LeadDetailPanel({
           <SectionCard
             className="rounded-[30px]"
             contentClassName="space-y-4"
-            description="Chosen company, best route, and the most important signal summary for this lead."
+            description="The lead summary you need before deciding whether to research, draft, or contact."
             title={getPermitAddress(lead)}
           >
             <div className="flex flex-wrap gap-2">
@@ -370,7 +370,7 @@ export function LeadDetailPanel({
 
             <p className="text-sm leading-6 text-navy-500 dark:text-dark-muted">{lead.humanSummary}</p>
 
-            <div className="grid gap-3 xl:grid-cols-3">
+            <div className="grid gap-2 md:grid-cols-3">
               <SignalCard helper={lead.scoreBreakdown.summary} label="Lead score" value={lead.score} />
               <SignalCard
                 helper={lead.contactability.explanation}
@@ -385,195 +385,175 @@ export function LeadDetailPanel({
             </div>
           </SectionCard>
 
-          <SectionCard
-            contentClassName="space-y-4"
-            description="One clean operating lane for this lead. Decide the move, use the route, and keep the rest secondary."
-            title="Action desk"
-          >
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.85fr)]">
-              <div className="space-y-4">
-                <div className="rounded-[24px] border border-orange-200/70 bg-gradient-to-br from-orange-50 to-white p-4 dark:border-orange-800/40 dark:from-orange-900/15 dark:to-dark-card">
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="max-w-2xl">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
-                          Best next step
-                        </div>
-                        <div className="mt-2 text-xl font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
-                          {lead.nextAction.label}
-                        </div>
-                        <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">{lead.nextAction.detail}</p>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        <ActionMeta label="Primary route" value={lead.channelDecision.primary} />
-                        <ActionMeta label="Readiness" value={lead.outreachReadiness.label} />
-                        <ActionMeta
-                          label="Attachment"
-                          value={automationHealth?.hasDefaultAttachment ? "Ready" : "Missing"}
-                        />
-                      </div>
+          <div className="overflow-hidden rounded-[28px] border border-navy-200/70 bg-white/80 shadow-[0_24px_80px_rgba(70,55,37,0.08)] backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
+            <div className="border-b border-navy-200/70 p-4 dark:border-dark-border/70">
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="max-w-3xl">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
+                      Best next step
                     </div>
-
-                    <div className="rounded-[18px] border border-navy-200/70 bg-white/85 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg">
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                        Current blocker
-                      </div>
-                      <div className="mt-1 text-sm text-navy-700 dark:text-dark-text">{blocker}</div>
+                    <div className="mt-2 text-xl font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                      {lead.nextAction.label}
                     </div>
+                    <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">{lead.nextAction.detail}</p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <ActionMeta label="Primary route" value={lead.channelDecision.primary} />
+                    <ActionMeta label="Readiness" value={lead.outreachReadiness.label} />
                   </div>
                 </div>
 
-                <div className="grid gap-2 md:grid-cols-3">
-                  <ControlButton
-                    icon={Bot}
-                    label="Run enrichment"
-                    loading={isEnriching}
-                    onClick={() => onRunEnrichment(lead.id)}
-                    variant="default"
-                  />
-                  <ControlButton
-                    icon={Sparkles}
-                    label="Refresh draft"
-                    onClick={() => onGenerateDraft(lead.id)}
-                  />
-                  <ControlButton
-                    disabled={!canSendNow || !automationHealth?.hasGmail}
-                    icon={Send}
-                    label="Send now"
-                    loading={isSending}
-                    onClick={() => onSendNow(lead.id)}
-                  />
+                <div className="rounded-[18px] border border-navy-200/70 bg-cream-50/80 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                    Current blocker
+                  </div>
+                  <div className="mt-1 text-sm font-medium text-navy-700 dark:text-dark-text">{blocker}</div>
                 </div>
-
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto]">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Pipeline status</label>
-                    <Select onValueChange={(value) => onStatusChange(lead.id, value as LeadStatus)} value={lead.workflow.status}>
-                      <SelectTrigger className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card">
-                        <SelectValue placeholder="Status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {STATUS_OPTIONS.map((status) => (
-                          <SelectItem key={status} value={status}>
-                            {status}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Follow-up date</label>
-                    <Input
-                      className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                      onChange={(event) => onFollowUpDateChange(lead.id, event.target.value)}
-                      type="date"
-                      value={lead.enrichment.followUpDate}
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Queue</label>
-                    <Button
-                      className="h-10 w-full justify-start rounded-2xl border-navy-200 bg-white/90 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
-                      onClick={() => onToggleIgnored(lead.id)}
-                      type="button"
-                      variant="outline"
-                    >
-                      <TimerReset className="h-4 w-4" />
-                      {lead.workflow.ignored ? "Restore" : "Archive"}
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/70 px-4 py-3 dark:border-dark-border/70 dark:bg-dark-bg">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                      Automation mode
-                    </div>
-                    <div className="text-sm font-medium text-navy-800 dark:text-dark-text">{automationMode}</div>
-                  </div>
-                  <p className="mt-1.5 text-sm leading-6 text-navy-500 dark:text-dark-muted">{automationNote}</p>
-                </div>
-              </div>
-
-              <div className="rounded-[24px] border border-navy-200/70 bg-cream-50/60 p-4 dark:border-dark-border/70 dark:bg-dark-bg/70">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
-                      Primary routes
-                    </div>
-                    <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">
-                      The routes worth using first. Research tools stay tucked away until you need them.
-                    </p>
-                  </div>
-                  <div className="rounded-full border border-navy-200/70 bg-white/80 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-navy-500 dark:border-dark-border/70 dark:bg-dark-card dark:text-dark-muted">
-                    {chosenContact ? "Route ready" : "Still resolving"}
-                  </div>
-                </div>
-
-                <div className="mt-4 grid gap-2">
-                  <RouteRow
-                    actionLabel={primaryEmail ? "Copy" : undefined}
-                    icon={Mail}
-                    label="Email"
-                    onAction={primaryEmail ? () => copyValue("Email", primaryEmail) : undefined}
-                    value={primaryEmail}
-                  />
-                  <RouteRow
-                    actionLabel={phone ? "Copy" : undefined}
-                    icon={Phone}
-                    label="Phone"
-                    onAction={phone ? () => copyValue("Phone", phone) : undefined}
-                    value={phone}
-                  />
-                  <RouteRow
-                    actionLabel={website ? "Open" : undefined}
-                    icon={Globe}
-                    label="Website"
-                    onAction={website ? () => openExternal(website.startsWith("http") ? website : `https://${website}`) : undefined}
-                    value={website}
-                  />
-                  <RouteRow
-                    actionLabel={linkedIn ? "Open" : undefined}
-                    icon={Linkedin}
-                    label="LinkedIn"
-                    onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
-                    value={linkedIn}
-                  />
-                </div>
-
-                <Collapsible className="mt-4 rounded-[20px] border border-navy-200/70 bg-white/80 p-2 dark:border-dark-border/70 dark:bg-dark-card/80">
-                  <CollapsibleTrigger asChild>
-                    <button
-                      className="group flex w-full items-center justify-between rounded-[16px] px-3 py-2 text-left"
-                      type="button"
-                    >
-                      <div>
-                        <div className="text-sm font-semibold text-navy-900 dark:text-dark-text">Research shortcuts</div>
-                        <div className="text-xs text-navy-500 dark:text-dark-muted">BIS, maps, search, and copy helpers.</div>
-                      </div>
-                      <ChevronDown className="h-4 w-4 text-navy-500 transition-transform group-data-[state=open]:rotate-180 dark:text-dark-muted" />
-                    </button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="px-1 pb-1 pt-2">
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {actionLinks.map((link) => (
-                        <ControlButton key={link.label} icon={link.icon} label={link.label} onClick={link.action} />
-                      ))}
-                      <ControlButton
-                        disabled={!lead.job_description}
-                        icon={Clipboard}
-                        label="Copy permit description"
-                        onClick={() => copyValue("Permit description", lead.job_description)}
-                      />
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
               </div>
             </div>
-          </SectionCard>
+
+            <div className="border-b border-navy-200/70 p-4 dark:border-dark-border/70">
+              <div className="grid gap-2 md:grid-cols-3">
+                <ControlButton
+                  icon={Bot}
+                  label="Run enrichment"
+                  loading={isEnriching}
+                  onClick={() => onRunEnrichment(lead.id)}
+                  variant="default"
+                />
+                <ControlButton
+                  icon={Sparkles}
+                  label="Refresh draft"
+                  onClick={() => onGenerateDraft(lead.id)}
+                />
+                <ControlButton
+                  disabled={!canSendNow || !automationHealth?.hasGmail}
+                  icon={Send}
+                  label="Send now"
+                  loading={isSending}
+                  onClick={() => onSendNow(lead.id)}
+                />
+              </div>
+
+              <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto]">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Pipeline status</label>
+                  <Select onValueChange={(value) => onStatusChange(lead.id, value as LeadStatus)} value={lead.workflow.status}>
+                    <SelectTrigger className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STATUS_OPTIONS.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          {status}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Follow-up date</label>
+                  <Input
+                    className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                    onChange={(event) => onFollowUpDateChange(lead.id, event.target.value)}
+                    type="date"
+                    value={lead.enrichment.followUpDate}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Queue</label>
+                  <Button
+                    className="h-10 w-full justify-start rounded-2xl border-navy-200 bg-white/90 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+                    onClick={() => onToggleIgnored(lead.id)}
+                    type="button"
+                    variant="outline"
+                  >
+                    <TimerReset className="h-4 w-4" />
+                    {lead.workflow.ignored ? "Restore" : "Archive"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                    Primary routes
+                  </div>
+                  <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">
+                    Use the cleanest route first. Everything else stays secondary.
+                  </p>
+                </div>
+                <div className="rounded-full border border-navy-200/70 bg-cream-50/80 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-navy-500 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-muted">
+                  {chosenContact ? "Route ready" : "Still resolving"}
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                <RouteRow
+                  actionLabel={primaryEmail ? "Copy" : undefined}
+                  icon={Mail}
+                  label="Email"
+                  onAction={primaryEmail ? () => copyValue("Email", primaryEmail) : undefined}
+                  value={primaryEmail}
+                />
+                <RouteRow
+                  actionLabel={phone ? "Copy" : undefined}
+                  icon={Phone}
+                  label="Phone"
+                  onAction={phone ? () => copyValue("Phone", phone) : undefined}
+                  value={phone}
+                />
+                <RouteRow
+                  actionLabel={website ? "Open" : undefined}
+                  icon={Globe}
+                  label="Website"
+                  onAction={website ? () => openExternal(website.startsWith("http") ? website : `https://${website}`) : undefined}
+                  value={website}
+                />
+                <RouteRow
+                  actionLabel={linkedIn ? "Open" : undefined}
+                  icon={Linkedin}
+                  label="LinkedIn"
+                  onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
+                  value={linkedIn}
+                />
+              </div>
+
+              <Collapsible className="mt-4 rounded-[20px] border border-navy-200/70 bg-cream-50/70 p-2 dark:border-dark-border/70 dark:bg-dark-bg">
+                <CollapsibleTrigger asChild>
+                  <button
+                    className="group flex w-full items-center justify-between rounded-[16px] px-3 py-2 text-left"
+                    type="button"
+                  >
+                    <div>
+                      <div className="text-sm font-semibold text-navy-900 dark:text-dark-text">Research tools</div>
+                      <div className="text-xs text-navy-500 dark:text-dark-muted">Open BIS, maps, search routes, and copy helpers only when needed.</div>
+                    </div>
+                    <ChevronDown className="h-4 w-4 text-navy-500 transition-transform group-data-[state=open]:rotate-180 dark:text-dark-muted" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-1 pb-1 pt-2">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {actionLinks.map((link) => (
+                      <ControlButton key={link.label} icon={link.icon} label={link.label} onClick={link.action} />
+                    ))}
+                    <ControlButton
+                      disabled={!lead.job_description}
+                      icon={Clipboard}
+                      label="Copy permit description"
+                      onClick={() => copyValue("Permit description", lead.job_description)}
+                    />
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            </div>
+          </div>
 
           <Tabs className="space-y-4" defaultValue="overview">
               <TabsList className="h-auto w-full justify-start rounded-[24px] bg-cream-100/90 p-1 dark:bg-dark-border/70">
