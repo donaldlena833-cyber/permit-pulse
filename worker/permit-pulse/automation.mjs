@@ -766,6 +766,7 @@ async function searchCompanyDomain(env, permit, leadScore, options = {}) {
       search_query: fallbackSeed?.name || '',
       search_results: [],
       social_links: {},
+      candidates: [],
       match_strength: 'weak',
     };
   }
@@ -812,7 +813,27 @@ async function searchCompanyDomain(env, permit, leadScore, options = {}) {
 
     scoredCandidates.sort((left, right) => right.score - left.score);
 
-    const winningCandidate = scoredCandidates[0] || null;
+    const candidateByUrl = new Map();
+    scoredCandidates.forEach((candidate) => {
+      const url = originFromUrl(candidate.result.url) || candidate.result.url || '';
+      if (!url) {
+        return;
+      }
+
+      const existing = candidateByUrl.get(url);
+      if (!existing || candidate.score > existing.score) {
+        candidateByUrl.set(url, {
+          ...candidate,
+          url,
+        });
+      }
+    });
+
+    const rankedCandidates = [...candidateByUrl.values()]
+      .sort((left, right) => right.score - left.score)
+      .slice(0, options.force ? 6 : 4);
+
+    const winningCandidate = rankedCandidates[0] || null;
     const searchSignals = extractSearchSignals(allResults);
     const website = winningCandidate ? originFromUrl(winningCandidate.result.url) : searchSignals.website || '';
     const domain = rootDomain(website);
@@ -833,6 +854,20 @@ async function searchCompanyDomain(env, permit, leadScore, options = {}) {
         instagram_url: searchSignals.instagram_url || '',
         contact_form_url: searchSignals.contact_form_url || '',
       },
+      candidates: rankedCandidates.map((candidate, index) =>
+        buildResolutionCandidate({
+          type: 'company',
+          role: candidate.seed.role || fallbackSeed.role,
+          label: candidate.seed.name || candidate.result.title || candidate.url,
+          url: candidate.url,
+          domain: rootDomain(candidate.url),
+          source: 'brave_search',
+          confidence: clamp(candidate.score, 18, 96),
+          status: index === 0 ? 'selected' : 'rejected',
+          detail: candidate.result.description || candidate.result.title || '',
+          matchedQuery: candidate.query,
+        }),
+      ),
       linked_in_url: searchSignals.linkedin_url || '',
       instagram_url: searchSignals.instagram_url || '',
       match_strength: confidence >= 76 ? 'strong' : confidence >= 52 ? 'medium' : 'weak',
@@ -849,6 +884,7 @@ async function searchCompanyDomain(env, permit, leadScore, options = {}) {
       search_query: fallbackSeed.name,
       search_results: [],
       social_links: {},
+      candidates: [],
       linked_in_url: '',
       instagram_url: '',
       match_strength: 'weak',
@@ -961,6 +997,35 @@ function mapSearchResults(results) {
     url: result.url || '',
     description: result.description || '',
   }));
+}
+
+function buildResolutionCandidate({
+  confidence,
+  detail = '',
+  domain = '',
+  label = '',
+  matchedQuery = '',
+  role = '',
+  source = '',
+  status = 'candidate',
+  type,
+  url = '',
+}) {
+  return {
+    id: createId('candidate'),
+    candidate_type: type,
+    role,
+    label,
+    url,
+    domain,
+    source,
+    confidence,
+    status,
+    metadata: {
+      detail,
+      matchedQuery,
+    },
+  };
 }
 
 function isSkippableSearchDomain(url) {
@@ -1090,6 +1155,20 @@ async function resolvePersonSignals(env, permit, companyProfile, options = {}) {
         organization_url: organizationPage ? originFromUrl(organizationPage) : '',
         organization_name: organizationName || companyName,
         confidence: clamp(scored[0]?.score || 0, 0, 92),
+        candidates: scored.slice(0, options.force ? 5 : 3).map((candidate, index) =>
+          buildResolutionCandidate({
+            type: 'person',
+            role: person.role,
+            label: candidate.result.title || person.name,
+            url: candidate.result.url || '',
+            domain: rootDomain(candidate.result.url || ''),
+            source: 'brave_person_search',
+            confidence: clamp(candidate.score, 18, 92),
+            status: index === 0 ? 'selected' : 'rejected',
+            detail: candidate.result.description || '',
+            matchedQuery: queries.join(' | '),
+          }),
+        ),
       };
     }),
   );
@@ -1236,12 +1315,13 @@ function dedupeContacts(contacts) {
 
 async function enrichLead(env, gateway, leadRow, options = {}) {
   const permit = leadRow.raw_permit || {};
-  const [geo, pluto, hpd, company] = await Promise.all([
+  const [geo, pluto, hpd, companySearch] = await Promise.all([
     geocodeAddress(env, leadRow.address),
     fetchPlutoProfile(permit),
     fetchHpdSummary(permit),
     searchCompanyDomain(env, permit, leadRow.score, options),
   ]);
+  const { candidates: companyCandidates = [], ...company } = companySearch;
   const searchSignals = extractSearchSignals(company.search_results || []);
 
   const propertyProfile = {
@@ -1268,6 +1348,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     options,
   );
   const personSignals = await resolvePersonSignals(env, permit, company, options);
+  const resolutionCandidates = [...companyCandidates];
   const contacts = [];
   const facts = [];
   const socialLinks = {
@@ -1325,6 +1406,10 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
   }
 
   personSignals.forEach((person) => {
+    if (Array.isArray(person.candidates) && person.candidates.length > 0) {
+      resolutionCandidates.push(...person.candidates);
+    }
+
     if (person.linkedin_url) {
       facts.push({
         id: createId('fact'),
@@ -1579,6 +1664,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     gateway.upsert('company_profiles', [{ ...company, lead_id: leadId }], 'lead_id'),
     gateway.replaceContacts(leadId, dedupedContacts),
     gateway.replaceFacts(leadId, facts),
+    gateway.replaceResolutionCandidates(leadId, resolutionCandidates),
     gateway.patch('leads', [eq('id', leadId)], enrichedLead),
     gateway.insert('activity_log', {
       id: createId('activity'),
@@ -1719,6 +1805,7 @@ function mapSnapshot(snapshot) {
   const factsMap = new Map();
   const outreachMap = new Map();
   const activityMap = new Map();
+  const candidatesMap = new Map();
 
   snapshot.contacts.forEach((contact) => {
     const list = contactsMap.get(contact.lead_id) || [];
@@ -1739,6 +1826,11 @@ function mapSnapshot(snapshot) {
     const list = activityMap.get(row.lead_id) || [];
     list.push(row);
     activityMap.set(row.lead_id, list);
+  });
+  (snapshot.candidates || []).forEach((row) => {
+    const list = candidatesMap.get(row.lead_id) || [];
+    list.push(row);
+    candidatesMap.set(row.lead_id, list);
   });
 
   const leads = snapshot.leads.map((lead) => {
@@ -1898,6 +1990,24 @@ function mapSnapshot(snapshot) {
         linkedInUrl: company.linked_in_url || '',
         instagramUrl: company.instagram_url || '',
       },
+      resolutionCandidates: (candidatesMap.get(lead.id) || []).map((candidate) => ({
+        id: candidate.id,
+        type: candidate.candidate_type === 'person' ? 'person' : 'company',
+        role: candidate.role || '',
+        label: candidate.label || '',
+        url: candidate.url || '',
+        domain: candidate.domain || '',
+        source: candidate.source || '',
+        confidence: candidate.confidence || 0,
+        status:
+          candidate.status === 'selected'
+            ? 'selected'
+            : candidate.status === 'rejected'
+              ? 'rejected'
+              : 'candidate',
+        detail: candidate.metadata?.detail || '',
+        matchedQuery: candidate.metadata?.matchedQuery || '',
+      })),
       contacts: contacts.map((contact) => ({
         id: contact.id,
         name: contact.name || '',

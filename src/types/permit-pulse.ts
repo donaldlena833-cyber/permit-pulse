@@ -274,6 +274,24 @@ export interface AutomationSummary {
   lastAutomationRunAt: string | null
 }
 
+export type ResolutionCandidateType = "company" | "person"
+
+export type ResolutionCandidateStatus = "selected" | "rejected" | "candidate"
+
+export interface ResolutionCandidate {
+  id: string
+  type: ResolutionCandidateType
+  role: string
+  label: string
+  url: string
+  domain: string
+  source: string
+  confidence: number
+  status: ResolutionCandidateStatus
+  detail: string
+  matchedQuery: string
+}
+
 export interface AutomationHealth {
   ok: boolean
   hasSupabase: boolean
@@ -388,6 +406,7 @@ export interface PermitLead extends PermitRecord {
   scannedCount: number
   propertyProfile: PropertyProfile
   companyProfile: CompanyProfile
+  resolutionCandidates: ResolutionCandidate[]
   contacts: ContactRecord[]
   enrichmentFacts: EnrichmentFact[]
   outreachReadiness: OutreachReadiness

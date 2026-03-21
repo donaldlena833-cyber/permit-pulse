@@ -227,6 +227,37 @@ function InfoBlock({
   )
 }
 
+function CandidateCard({
+  candidate,
+}: {
+  candidate: PermitLead["resolutionCandidates"][number]
+}) {
+  return (
+    <div className="rounded-[18px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-navy-800 dark:text-dark-text">{candidate.label || "Unnamed candidate"}</div>
+          <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">
+            {[candidate.role, candidate.source, `${candidate.confidence}% confidence`].filter(Boolean).join(" • ")}
+          </div>
+        </div>
+        <div className="rounded-full border border-navy-200 bg-white/80 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-navy-500 dark:border-dark-border dark:bg-dark-card dark:text-dark-muted">
+          {candidate.status}
+        </div>
+      </div>
+      <div className="mt-2 text-sm leading-6 text-navy-700 dark:text-dark-text">{candidate.url || candidate.domain || "No route stored"}</div>
+      {candidate.detail ? (
+        <p className="mt-2 text-xs leading-5 text-navy-500 dark:text-dark-muted">{candidate.detail}</p>
+      ) : null}
+      {candidate.matchedQuery ? (
+        <div className="mt-2 text-[10px] uppercase tracking-[0.14em] text-navy-400 dark:text-dark-muted">
+          Query: {candidate.matchedQuery}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function LeadDetailPanel({
   lead,
   automationHealth,
@@ -327,6 +358,12 @@ export function LeadDetailPanel({
 
   const chosenContact = lead.contacts.find((contact) => contact.isPrimary) || lead.contacts[0] || null
   const alternativeContacts = chosenContact ? lead.contacts.filter((contact) => contact.id !== chosenContact.id) : lead.contacts
+  const companyCandidates = lead.resolutionCandidates.filter((candidate) => candidate.type === "company")
+  const personCandidates = lead.resolutionCandidates.filter((candidate) => candidate.type === "person")
+  const selectedCompanyCandidate = companyCandidates.find((candidate) => candidate.status === "selected") || null
+  const rejectedCompanyCandidates = companyCandidates.filter((candidate) => candidate.status !== "selected").slice(0, 4)
+  const selectedPeople = personCandidates.filter((candidate) => candidate.status === "selected").slice(0, 3)
+  const rejectedPeople = personCandidates.filter((candidate) => candidate.status !== "selected").slice(0, 4)
   const blocker = getLeadBlocker(lead)
   const canSendNow = Boolean(primaryEmail && lead.outreachDraft.subject && lead.outreachDraft.shortEmail)
   const automationSources = uniq([
@@ -647,7 +684,7 @@ export function LeadDetailPanel({
 
               <TabsContent className="space-y-4" value="research">
                 <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-                  <InfoBlock title="Resolver output" description="The main facts and contact candidates currently backing this lead.">
+                  <InfoBlock title="Resolver output" description="The main facts, chosen winner, and rejected candidates currently backing this lead.">
                     <div className="space-y-3">
                       <div className="grid gap-2 md:grid-cols-2">
                         <CompactField label="Neighborhood" value={lead.propertyProfile.neighborhood || "—"} />
@@ -655,6 +692,32 @@ export function LeadDetailPanel({
                         <CompactField label="Property class" value={lead.propertyProfile.propertyClass || "—"} />
                         <CompactField label="Search query" value={lead.companyProfile.searchQuery || "—"} />
                       </div>
+
+                      <div className="space-y-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                          Chosen company
+                        </div>
+                        {selectedCompanyCandidate ? (
+                          <CandidateCard candidate={selectedCompanyCandidate} />
+                        ) : (
+                          <p className="text-sm text-navy-500 dark:text-dark-muted">
+                            No chosen company candidate has been stored yet.
+                          </p>
+                        )}
+                      </div>
+
+                      {selectedPeople.length > 0 ? (
+                        <div>
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                            Chosen people
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {selectedPeople.map((candidate) => (
+                              <CandidateCard key={candidate.id} candidate={candidate} />
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
 
                       <div className="space-y-2">
                         {lead.enrichmentFacts.length === 0 ? (
@@ -676,6 +739,32 @@ export function LeadDetailPanel({
                           ))
                         )}
                       </div>
+
+                      {rejectedCompanyCandidates.length > 0 ? (
+                        <div>
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                            Rejected company candidates
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {rejectedCompanyCandidates.map((candidate) => (
+                              <CandidateCard key={candidate.id} candidate={candidate} />
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {rejectedPeople.length > 0 ? (
+                        <div>
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                            Rejected people candidates
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {rejectedPeople.map((candidate) => (
+                              <CandidateCard key={candidate.id} candidate={candidate} />
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
 
                       {alternativeContacts.length > 0 ? (
                         <div>

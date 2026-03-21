@@ -80,12 +80,14 @@ Apply the migration in:
 
 - `supabase/migrations/001_permit_pulse_automation.sql`
 - `supabase/migrations/002_security_hardening.sql`
+- `supabase/migrations/003_resolution_candidates.sql`
 
 Core tables:
 
 - `leads`
 - `property_profiles`
 - `company_profiles`
+- `resolution_candidates`
 - `contacts`
 - `enrichment_facts`
 - `outreach`

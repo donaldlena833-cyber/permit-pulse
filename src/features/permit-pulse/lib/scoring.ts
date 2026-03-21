@@ -875,6 +875,7 @@ export function buildLeadFromPermit(
     scannedCount: (existingLead?.scannedCount ?? 0) + 1,
     propertyProfile,
     companyProfile,
+    resolutionCandidates: existingLead?.resolutionCandidates ?? [],
     contacts: existingLead?.contacts ?? createEmptyContactRecords(),
     enrichmentFacts: existingLead?.enrichmentFacts ?? createEmptyEnrichmentFacts(),
     outreachReadiness: existingLead?.outreachReadiness ?? createEmptyOutreachReadiness(),

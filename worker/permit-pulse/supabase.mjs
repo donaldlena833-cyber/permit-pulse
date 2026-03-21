@@ -44,6 +44,16 @@ async function request(env, table, { method = 'GET', query = '', body, extraHead
   return text ? JSON.parse(text) : null;
 }
 
+function isMissingRelationError(error, table) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('42P01') ||
+    message.includes(`relation "${table}" does not exist`) ||
+    message.includes(`Could not find the table '${table}'`) ||
+    message.includes(`Could not find the relation '${table}'`)
+  );
+}
+
 function escapeValue(value) {
   return encodeURIComponent(String(value));
 }
@@ -143,7 +153,7 @@ export function createSupabaseGateway(env) {
     },
 
     async getQueueSnapshot() {
-      const [leads, properties, companies, contacts, facts, outreach, activity] = await Promise.all([
+      const [leads, properties, companies, contacts, facts, outreach, activity, candidates] = await Promise.all([
         this.select('leads', {
           ordering: [order('priority_score', 'desc'), order('updated_at', 'desc')],
           pageLimit: 200,
@@ -154,9 +164,22 @@ export function createSupabaseGateway(env) {
         this.select('enrichment_facts', { ordering: [order('created_at', 'desc')], pageLimit: 1000 }),
         this.select('outreach', { ordering: [order('created_at', 'desc')], pageLimit: 500 }),
         this.select('activity_log', { ordering: [order('created_at', 'desc')], pageLimit: 1000 }),
+        this.safeSelect('resolution_candidates', { ordering: [order('confidence', 'desc')], pageLimit: 1000 }),
       ]);
 
-      return { leads, properties, companies, contacts, facts, outreach, activity };
+      return { leads, properties, companies, contacts, facts, outreach, activity, candidates };
+    },
+
+    async safeSelect(table, options = {}) {
+      try {
+        return await this.select(table, options);
+      } catch (error) {
+        if (isMissingRelationError(error, table)) {
+          return [];
+        }
+
+        throw error;
+      }
     },
 
     async countSentSince(isoDate) {
@@ -200,6 +223,35 @@ export function createSupabaseGateway(env) {
         'enrichment_facts',
         facts.map((fact) => ({ ...fact, lead_id: leadId })),
       );
+    },
+
+    async replaceResolutionCandidates(leadId, candidates) {
+      try {
+        await this.deleteWhere('resolution_candidates', [eq('lead_id', leadId)]);
+      } catch (error) {
+        if (isMissingRelationError(error, 'resolution_candidates')) {
+          return [];
+        }
+
+        throw error;
+      }
+
+      if (candidates.length === 0) {
+        return [];
+      }
+
+      try {
+        return this.insert(
+          'resolution_candidates',
+          candidates.map((candidate) => ({ ...candidate, lead_id: leadId })),
+        );
+      } catch (error) {
+        if (isMissingRelationError(error, 'resolution_candidates')) {
+          return [];
+        }
+
+        throw error;
+      }
     },
 
     eq,
