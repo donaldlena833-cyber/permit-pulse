@@ -67,7 +67,8 @@ Worker secrets or vars:
 - `GMAIL_CLIENT_SECRET`
 - `GMAIL_REFRESH_TOKEN`
 - `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` preferred
+- `SUPABASE_ANON_KEY` temporary fallback only
 
 Optional frontend build var:
 
@@ -78,6 +79,7 @@ Optional frontend build var:
 Apply the migration in:
 
 - `supabase/migrations/001_permit_pulse_automation.sql`
+- `supabase/migrations/002_security_hardening.sql`
 
 Core tables:
 

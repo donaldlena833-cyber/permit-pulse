@@ -277,6 +277,7 @@ export interface AutomationSummary {
 export interface AutomationHealth {
   ok: boolean
   hasSupabase: boolean
+  supabaseAuthMode: "service_role" | "anon" | "missing"
   hasGmail: boolean
   hasBrave: boolean
   hasGoogleMaps: boolean

@@ -87,8 +87,32 @@ curl -X POST https://permit-pulse-scanner.donaldlena833.workers.dev/gmail-test
 | `GMAIL_REFRESH_TOKEN` | Yes (for Gmail) | OAuth flow above |
 | `GMAIL_CLIENT_ID` | Yes (for Gmail) | OAuth client ID |
 | `GMAIL_CLIENT_SECRET` | Yes (for Gmail) | OAuth client secret |
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes, preferred | Worker-only database access, required before enabling RLS hardening |
+| `SUPABASE_ANON_KEY` | Temporary fallback | Only keep during migration, then remove once service role is set |
 | `RESEND_API_KEY` | Optional | For digest notification emails |
 | `APOLLO_API_KEY` | Optional | For contact enrichment (free 10K/mo) |
+
+## Supabase Security Hardening
+
+PermitPulse now expects the worker to use `SUPABASE_SERVICE_ROLE_KEY` before you enable RLS on the lead tables.
+
+1. Set the worker secret:
+
+```bash
+npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+```
+
+2. Apply:
+
+- `supabase/migrations/001_permit_pulse_automation.sql`
+- `supabase/migrations/002_security_hardening.sql`
+
+3. Redeploy the worker:
+
+```bash
+npx wrangler deploy
+```
 
 ---
 

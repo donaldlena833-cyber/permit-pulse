@@ -162,6 +162,13 @@ export function getSystemAlerts(
         description: "Remote lead memory, enrichment history, and automation state will not persist correctly.",
         tone: "warning",
       })
+    } else if (health.supabaseAuthMode === "anon") {
+      alerts.push({
+        id: "supabase-auth",
+        title: "Supabase is using anon fallback",
+        description: "The worker is still talking to Supabase with the anon key. Move it to the service-role key before locking RLS down.",
+        tone: "warning",
+      })
     }
 
     const missingProviders = [

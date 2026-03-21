@@ -35,9 +35,15 @@ export async function handlePermitPulseAutomationRequest(request, env) {
   try {
     if (url.pathname === '/api/v2/health' && request.method === 'GET') {
       const attachment = await getDefaultAttachmentStatus(env);
+      const supabaseAuthMode = env.SUPABASE_SERVICE_ROLE_KEY
+        ? 'service_role'
+        : env.SUPABASE_ANON_KEY
+          ? 'anon'
+          : 'missing';
       return json({
         ok: true,
-        hasSupabase: Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY),
+        hasSupabase: Boolean(env.SUPABASE_URL && (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY)),
+        supabaseAuthMode,
         hasGmail: Boolean(env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET && env.GMAIL_REFRESH_TOKEN),
         hasBrave: Boolean(env.BRAVE_API_KEY),
         hasGoogleMaps: Boolean(env.GOOGLE_MAPS_API_KEY),

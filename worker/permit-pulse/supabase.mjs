@@ -7,10 +7,14 @@ function buildUrl(env, table, query = '') {
   return `${base}/rest/v1/${table}${query}`;
 }
 
+function getSupabaseKey(env) {
+  return env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY || '';
+}
+
 function headers(env, extra = {}) {
-  const key = env.SUPABASE_ANON_KEY;
+  const key = getSupabaseKey(env);
   if (!key) {
-    throw new Error('SUPABASE_ANON_KEY is not configured');
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY is not configured');
   }
 
   return {

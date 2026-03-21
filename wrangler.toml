@@ -33,5 +33,6 @@ id = "6bd0ca87c13d448c80381159511f8e40"
 # npx wrangler secret put GMAIL_CLIENT_SECRET     — Gmail OAuth client secret
 # npx wrangler secret put GMAIL_REFRESH_TOKEN     — Gmail OAuth refresh token
 # npx wrangler secret put SUPABASE_URL            — Supabase project URL
-# npx wrangler secret put SUPABASE_ANON_KEY       — Supabase anon key for REST access
+# npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY — preferred for secure worker-only REST access
+# npx wrangler secret put SUPABASE_ANON_KEY       — fallback only, keep temporarily while migrating
 # npx wrangler kv key put --binding=PERMIT_PULSE default_outreach_attachment --path /Users/donaldlena/Downloads/permit-pulse.pdf

@@ -76,7 +76,11 @@ export function SystemView({
       label: "Supabase",
       active: Boolean(automationHealth?.hasSupabase),
       icon: Database,
-      detail: "Stores lead memory, enrichment, outreach history, and activity logs.",
+      detail: automationHealth?.hasSupabase
+        ? automationHealth.supabaseAuthMode === "service_role"
+          ? "Stores lead memory, enrichment, outreach history, and activity logs through the secure service-role path."
+          : "Stores lead memory and automation state, but the worker is still using the anon fallback and should be hardened."
+        : "Stores lead memory, enrichment, outreach history, and activity logs.",
     },
     {
       label: "Gmail",
