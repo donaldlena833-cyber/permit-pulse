@@ -1,7 +1,6 @@
 import { type ReactNode, useMemo } from "react"
 import type { LucideIcon } from "lucide-react"
 import {
-  ArrowUpRight,
   Bot,
   Clipboard,
   Globe,
@@ -303,19 +302,10 @@ export function LeadDetailPanel({
     lead.contacts.find((contact) => contact.email)?.email ||
     ""
   const phone = lead.enrichment.phone || lead.contacts.find((contact) => contact.phone)?.phone || ""
-  const contactForm =
-    lead.enrichment.contactFormUrl ||
-    lead.contacts.find((contact) => contact.contactFormUrl)?.contactFormUrl ||
-    ""
   const linkedIn =
     lead.enrichment.linkedInUrl ||
     lead.companyProfile.linkedInUrl ||
     lead.contacts.find((contact) => contact.linkedInUrl)?.linkedInUrl ||
-    ""
-  const instagram =
-    lead.enrichment.instagramUrl ||
-    lead.companyProfile.instagramUrl ||
-    lead.contacts.find((contact) => contact.instagramUrl)?.instagramUrl ||
     ""
 
   const chosenContact = lead.contacts.find((contact) => contact.isPrimary) || lead.contacts[0] || null
@@ -346,40 +336,173 @@ export function LeadDetailPanel({
   return (
     <div className="h-full rounded-[30px] border border-navy-200/70 bg-white/80 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
       <ScrollArea className="h-[calc(100vh-13rem)]">
-        <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="space-y-4">
+        <div className="space-y-4 p-4">
+          <SectionCard
+            className="rounded-[30px]"
+            contentClassName="space-y-4"
+            description="Chosen company, best route, and the most important signal summary for this lead."
+            title={getPermitAddress(lead)}
+          >
+            <div className="flex flex-wrap gap-2">
+              <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+              <ContactabilityBadge contactability={lead.contactability} />
+              <PriorityBadge label={lead.priorityLabel} />
+              <StatusBadge status={lead.workflow.status} />
+              <BoroughBadge borough={lead.borough} />
+            </div>
+
+            <p className="text-sm leading-6 text-navy-500 dark:text-dark-muted">{lead.humanSummary}</p>
+
+            <div className="grid gap-3 xl:grid-cols-3">
+              <SignalCard helper={lead.scoreBreakdown.summary} label="Lead score" value={lead.score} />
+              <SignalCard
+                helper={lead.contactability.explanation}
+                label="Contactability"
+                value={lead.contactability.total}
+              />
+              <SignalCard
+                helper={lead.outreachReadiness.explanation}
+                label="Outreach readiness"
+                value={lead.outreachReadiness.score}
+              />
+            </div>
+          </SectionCard>
+
+          <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
             <SectionCard
-              className="rounded-[30px]"
               contentClassName="space-y-4"
-              description="Chosen company, best route, and the most important signal summary for this lead."
-              title={getPermitAddress(lead)}
+              description="Best next move, fast controls, and the one operational blocker that matters most."
+              title="Operator controls"
             >
-              <div className="flex flex-wrap gap-2">
-                <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
-                <ContactabilityBadge contactability={lead.contactability} />
-                <PriorityBadge label={lead.priorityLabel} />
-                <StatusBadge status={lead.workflow.status} />
-                <BoroughBadge borough={lead.borough} />
-              </div>
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="rounded-[22px] border border-orange-200/70 bg-gradient-to-br from-orange-50 to-white p-4 dark:border-orange-800/40 dark:from-orange-900/15 dark:to-dark-card">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
+                    Best next step
+                  </div>
+                  <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                    {lead.nextAction.label}
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">{lead.nextAction.detail}</p>
+                  <div className="mt-4 rounded-[18px] border border-navy-200/70 bg-white/80 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                      Current blocker
+                    </div>
+                    <div className="mt-1 text-sm text-navy-700 dark:text-dark-text">{blocker}</div>
+                  </div>
+                </div>
 
-              <p className="text-sm leading-6 text-navy-500 dark:text-dark-muted">{lead.humanSummary}</p>
+                <div className="grid gap-2">
+                  <ControlButton
+                    icon={Bot}
+                    label="Run enrichment"
+                    loading={isEnriching}
+                    onClick={() => onRunEnrichment(lead.id)}
+                    variant="default"
+                  />
+                  <ControlButton
+                    icon={Sparkles}
+                    label="Refresh draft"
+                    onClick={() => onGenerateDraft(lead.id)}
+                  />
+                  <ControlButton
+                    disabled={!canSendNow || !automationHealth?.hasGmail}
+                    icon={Send}
+                    label="Send now"
+                    loading={isSending}
+                    onClick={() => onSendNow(lead.id)}
+                  />
+                  <div className="grid gap-3 pt-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Pipeline status</label>
+                      <Select onValueChange={(value) => onStatusChange(lead.id, value as LeadStatus)} value={lead.workflow.status}>
+                        <SelectTrigger className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card">
+                          <SelectValue placeholder="Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {STATUS_OPTIONS.map((status) => (
+                            <SelectItem key={status} value={status}>
+                              {status}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
 
-              <div className="grid gap-3 xl:grid-cols-3">
-                <SignalCard helper={lead.scoreBreakdown.summary} label="Lead score" value={lead.score} />
-                <SignalCard
-                  helper={lead.contactability.explanation}
-                  label="Contactability"
-                  value={lead.contactability.total}
-                />
-                <SignalCard
-                  helper={lead.outreachReadiness.explanation}
-                  label="Outreach readiness"
-                  value={lead.outreachReadiness.score}
-                />
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Follow-up date</label>
+                      <Input
+                        className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                        onChange={(event) => onFollowUpDateChange(lead.id, event.target.value)}
+                        type="date"
+                        value={lead.enrichment.followUpDate}
+                      />
+                    </div>
+
+                    <Button
+                      className="h-10 justify-start rounded-2xl border-navy-200 bg-white/90 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+                      onClick={() => onToggleIgnored(lead.id)}
+                      type="button"
+                      variant="outline"
+                    >
+                      <TimerReset className="h-4 w-4" />
+                      {lead.workflow.ignored ? "Bring back into queue" : "Archive from active queue"}
+                    </Button>
+                  </div>
+                </div>
               </div>
             </SectionCard>
 
-            <Tabs className="space-y-4" defaultValue="overview">
+            <SectionCard
+              contentClassName="space-y-3"
+              description="The cleanest current routes, plus the shortcuts you actually use during research."
+              title="Routes and shortcuts"
+            >
+              <div className="grid gap-2">
+                <RouteRow
+                  actionLabel={primaryEmail ? "Copy" : undefined}
+                  icon={Mail}
+                  label="Email"
+                  onAction={primaryEmail ? () => copyValue("Email", primaryEmail) : undefined}
+                  value={primaryEmail}
+                />
+                <RouteRow
+                  actionLabel={phone ? "Copy" : undefined}
+                  icon={Phone}
+                  label="Phone"
+                  onAction={phone ? () => copyValue("Phone", phone) : undefined}
+                  value={phone}
+                />
+                <RouteRow
+                  actionLabel={website ? "Open" : undefined}
+                  icon={Globe}
+                  label="Website"
+                  onAction={website ? () => openExternal(website.startsWith("http") ? website : `https://${website}`) : undefined}
+                  value={website}
+                />
+                <RouteRow
+                  actionLabel={linkedIn ? "Open" : undefined}
+                  icon={Linkedin}
+                  label="LinkedIn"
+                  onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
+                  value={linkedIn}
+                />
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                {actionLinks.map((link) => (
+                  <ControlButton key={link.label} icon={link.icon} label={link.label} onClick={link.action} />
+                ))}
+                <ControlButton
+                  disabled={!lead.job_description}
+                  icon={Clipboard}
+                  label="Copy permit description"
+                  onClick={() => copyValue("Permit description", lead.job_description)}
+                />
+              </div>
+            </SectionCard>
+          </div>
+
+          <Tabs className="space-y-4" defaultValue="overview">
               <TabsList className="h-auto w-full justify-start rounded-[24px] bg-cream-100/90 p-1 dark:bg-dark-border/70">
                 <TabsTrigger className="rounded-[18px] px-4 py-2" value="overview">
                   Overview
@@ -810,150 +933,6 @@ export function LeadDetailPanel({
                 </div>
               </TabsContent>
             </Tabs>
-          </div>
-
-          <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-            <SectionCard
-              contentClassName="space-y-4"
-              description="Best next move, fast controls, and only the routes you actually need to use."
-              title="Action rail"
-            >
-              <div className="rounded-[22px] border border-orange-200/70 bg-gradient-to-br from-orange-50 to-white p-4 dark:border-orange-800/40 dark:from-orange-900/15 dark:to-dark-card">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
-                  Best next step
-                </div>
-                <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
-                  {lead.nextAction.label}
-                </div>
-                <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">{lead.nextAction.detail}</p>
-              </div>
-
-              <div className="grid gap-2">
-                <ControlButton
-                  icon={Bot}
-                  label="Run enrichment"
-                  loading={isEnriching}
-                  onClick={() => onRunEnrichment(lead.id)}
-                  variant="default"
-                />
-                <ControlButton
-                  icon={Sparkles}
-                  label="Refresh draft"
-                  onClick={() => onGenerateDraft(lead.id)}
-                />
-                <ControlButton
-                  disabled={!canSendNow || !automationHealth?.hasGmail}
-                  icon={Send}
-                  label="Send now"
-                  loading={isSending}
-                  onClick={() => onSendNow(lead.id)}
-                />
-              </div>
-
-              <div className="grid gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Pipeline status</label>
-                  <Select onValueChange={(value) => onStatusChange(lead.id, value as LeadStatus)} value={lead.workflow.status}>
-                    <SelectTrigger className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card">
-                      <SelectValue placeholder="Status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {STATUS_OPTIONS.map((status) => (
-                        <SelectItem key={status} value={status}>
-                          {status}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Follow-up date</label>
-                  <Input
-                    className="h-10 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
-                    onChange={(event) => onFollowUpDateChange(lead.id, event.target.value)}
-                    type="date"
-                    value={lead.enrichment.followUpDate}
-                  />
-                </div>
-
-                <Button
-                  className="h-10 justify-start rounded-2xl border-navy-200 bg-white/90 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
-                  onClick={() => onToggleIgnored(lead.id)}
-                  type="button"
-                  variant="outline"
-                >
-                  <TimerReset className="h-4 w-4" />
-                  {lead.workflow.ignored ? "Bring back into queue" : "Archive from active queue"}
-                </Button>
-              </div>
-            </SectionCard>
-
-            <SectionCard
-              contentClassName="space-y-3"
-              description="The cleanest current routes for reaching this lead."
-              title="Contact routes"
-            >
-              <RouteRow
-                actionLabel={primaryEmail ? "Copy" : undefined}
-                icon={Mail}
-                label="Email"
-                onAction={primaryEmail ? () => copyValue("Email", primaryEmail) : undefined}
-                value={primaryEmail}
-              />
-              <RouteRow
-                actionLabel={phone ? "Copy" : undefined}
-                icon={Phone}
-                label="Phone"
-                onAction={phone ? () => copyValue("Phone", phone) : undefined}
-                value={phone}
-              />
-              <RouteRow
-                actionLabel={website ? "Open" : undefined}
-                icon={Globe}
-                label="Website"
-                onAction={website ? () => openExternal(website.startsWith("http") ? website : `https://${website}`) : undefined}
-                value={website}
-              />
-              <RouteRow
-                actionLabel={contactForm ? "Open" : undefined}
-                icon={ArrowUpRight}
-                label="Contact form"
-                onAction={contactForm ? () => openExternal(contactForm) : undefined}
-                value={contactForm}
-              />
-              <RouteRow
-                actionLabel={linkedIn ? "Open" : undefined}
-                icon={Linkedin}
-                label="LinkedIn"
-                onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
-                value={linkedIn}
-              />
-              <RouteRow
-                actionLabel={instagram ? "Open" : undefined}
-                icon={Instagram}
-                label="Instagram"
-                onAction={instagram ? () => openExternal(instagram) : undefined}
-                value={instagram}
-              />
-            </SectionCard>
-
-            <SectionCard
-              contentClassName="grid gap-2"
-              description="Fast manual research actions when you want to verify the resolver yourself."
-              title="Research shortcuts"
-            >
-              {actionLinks.map((link) => (
-                <ControlButton key={link.label} icon={link.icon} label={link.label} onClick={link.action} />
-              ))}
-              <ControlButton
-                disabled={!lead.job_description}
-                icon={Clipboard}
-                label="Copy permit description"
-                onClick={() => copyValue("Permit description", lead.job_description)}
-              />
-            </SectionCard>
-          </div>
         </div>
       </ScrollArea>
     </div>

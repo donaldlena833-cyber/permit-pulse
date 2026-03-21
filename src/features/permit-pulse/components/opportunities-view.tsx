@@ -1,9 +1,7 @@
 import type { ReactNode } from "react"
 import { MailCheck, Radar, Rows3, SendHorizontal } from "lucide-react"
 
-import { PageHeader } from "@/features/permit-pulse/components/page-header"
 import { SavedViewTabs, SmartFilterBar } from "@/features/permit-pulse/components/filters"
-import { SectionCard } from "@/features/permit-pulse/components/section-card"
 import { SentLogView } from "@/features/permit-pulse/components/sent-log-view"
 import type { LeadFilters, OpportunityLane, PermitLead, SavedView, SentLogEntry } from "@/types/permit-pulse"
 import { cn } from "@/lib/utils"
@@ -11,26 +9,25 @@ import { cn } from "@/lib/utils"
 const LANE_META: Array<{
   id: OpportunityLane
   label: string
+  shortLabel: string
   description: string
   icon: typeof Rows3
 }> = [
-  { id: "feed", label: "Fresh feed", description: "Review new permits and qualify fit quickly.", icon: Rows3 },
-  { id: "research", label: "Research", description: "Resolve weak company or contact data.", icon: Radar },
-  { id: "ready", label: "Ready", description: "Everything usable enough to move toward outreach.", icon: SendHorizontal },
-  { id: "sent", label: "Sent", description: "Recent delivery history and follow-up context.", icon: MailCheck },
+  { id: "feed", label: "Fresh feed", shortLabel: "Feed", description: "Review new permits and qualify fit.", icon: Rows3 },
+  { id: "research", label: "Research", shortLabel: "Research", description: "Resolve company and contact gaps.", icon: Radar },
+  { id: "ready", label: "Ready", shortLabel: "Ready", description: "Move usable leads toward outreach.", icon: SendHorizontal },
+  { id: "sent", label: "Sent", shortLabel: "Sent", description: "Check delivery history and follow-ups.", icon: MailCheck },
 ]
 
-function LaneButton({
+function LanePill({
   active,
   count,
-  description,
   icon: Icon,
   label,
   onClick,
 }: {
   active: boolean
   count: number
-  description: string
   icon: typeof Rows3
   label: string
   onClick: () => void
@@ -38,36 +35,22 @@ function LaneButton({
   return (
     <button
       className={cn(
-        "flex min-w-[190px] flex-1 items-start gap-3 rounded-[26px] border p-4 text-left transition-all duration-200",
+        "flex items-center gap-2 rounded-full border px-4 py-2 text-sm whitespace-nowrap transition-all duration-200",
         active
-          ? "border-orange-200 bg-orange-50 shadow-sm dark:border-orange-800/40 dark:bg-orange-900/20"
-          : "border-navy-200/70 bg-white/75 hover:border-navy-300 hover:bg-cream-50 dark:border-dark-border/70 dark:bg-dark-card/80 dark:hover:border-dark-muted/40",
+          ? "border-orange-200 bg-orange-50 text-orange-700 shadow-sm dark:border-orange-800/40 dark:bg-orange-900/20 dark:text-orange-200"
+          : "border-navy-200/70 bg-white/80 text-navy-600 hover:border-navy-300 hover:bg-cream-50 dark:border-dark-border/70 dark:bg-dark-card/80 dark:text-dark-text",
       )}
       onClick={onClick}
       type="button"
     >
-      <div
-        className={cn(
-          "rounded-2xl p-2.5",
-          active
-            ? "bg-orange-500 text-white"
-            : "bg-cream-100 text-navy-600 dark:bg-dark-border/70 dark:text-dark-text",
-        )}
-      >
-        <Icon className="h-4 w-4" />
-      </div>
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-navy-900 dark:text-dark-text">{label}</span>
-          <span className="rounded-full bg-black/5 px-2 py-0.5 text-[11px] dark:bg-white/10">{count}</span>
-        </div>
-        <div className="mt-1 text-xs leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
-      </div>
+      <Icon className="h-4 w-4" />
+      <span className="font-medium">{label}</span>
+      <span className="rounded-full bg-black/5 px-2 py-0.5 text-[11px] dark:bg-white/10">{count}</span>
     </button>
   )
 }
 
-function SummaryMetric({
+function SummaryChip({
   label,
   value,
 }: {
@@ -75,11 +58,9 @@ function SummaryMetric({
   value: string
 }) {
   return (
-    <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/80 px-4 py-3 dark:border-dark-border/70 dark:bg-dark-bg">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-        {label}
-      </div>
-      <div className="mt-1 text-lg font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">{value}</div>
+    <div className="rounded-full border border-navy-200/70 bg-cream-50/80 px-3 py-1.5 text-sm text-navy-600 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-muted">
+      <span className="font-medium text-navy-800 dark:text-dark-text">{value}</span>
+      <span className="ml-2 text-[11px] uppercase tracking-[0.18em]">{label}</span>
     </div>
   )
 }
@@ -134,82 +115,82 @@ export function OpportunitiesView({
   workspace,
 }: OpportunitiesViewProps) {
   const laneMeta = LANE_META.find((item) => item.id === lane) ?? LANE_META[0]
+  const visibleCount = lane === "feed" ? scannerCount : lane === "research" ? enrichmentCount : lane === "ready" ? outreachCount : sentCount
+  const currentLens =
+    lane === "feed"
+      ? savedViews.find((view) => view.id === activeScannerViewId)?.name ?? "Hot Today"
+      : lane === "research"
+        ? enrichmentViews.find((view) => view.id === activeEnrichmentViewId)?.name ?? "Research"
+        : lane === "ready"
+          ? outreachViews.find((view) => view.id === activeOutreachViewId)?.name ?? "Ready to email"
+          : "Sent history"
+  const operatorFocus =
+    lane === "feed"
+      ? "Qualify fit"
+      : lane === "research"
+        ? "Resolve route"
+        : lane === "ready"
+          ? "Move to outreach"
+          : "Track delivery"
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        eyebrow="Opportunities"
-        title="One place to review, research, and move leads forward."
-        description="The feed, research queue, and ready-to-act lane all live here so you can keep context while deciding what matters and what still needs work."
-      />
-
-      <div className="grid gap-3 xl:grid-cols-4">
-        {LANE_META.map((item) => (
-          <LaneButton
-            key={item.id}
-            active={item.id === lane}
-            count={
-              item.id === "feed"
-                ? scannerCount
-                : item.id === "research"
-                  ? enrichmentCount
-                  : item.id === "ready"
-                    ? outreachCount
-                    : sentCount
-            }
-            description={item.description}
-            icon={item.icon}
-            label={item.label}
-            onClick={() => onLaneChange(item.id)}
-          />
-        ))}
-      </div>
-
-      <SectionCard
-        className="overflow-hidden"
-        contentClassName="space-y-4"
-        description={laneMeta.description}
-        title={`${laneMeta.label} workspace`}
-      >
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryMetric
-            label="Visible now"
-            value={String(lane === "feed" ? scannerCount : lane === "research" ? enrichmentCount : lane === "ready" ? outreachCount : sentCount)}
-          />
-          <SummaryMetric
-            label="Current lens"
-            value={
-              lane === "feed"
-                ? savedViews.find((view) => view.id === activeScannerViewId)?.name ?? "Hot Today"
-                : lane === "research"
-                  ? enrichmentViews.find((view) => view.id === activeEnrichmentViewId)?.name ?? "Research"
-                  : lane === "ready"
-                    ? outreachViews.find((view) => view.id === activeOutreachViewId)?.name ?? "Ready to email"
-                    : "Sent history"
-            }
-          />
-          <SummaryMetric label="Search" value={filters.search ? "Filtered" : "All active leads"} />
-          <SummaryMetric
-            label="Operator focus"
-            value={lane === "feed" ? "Qualify fit" : lane === "research" ? "Resolve route" : lane === "ready" ? "Move to outreach" : "Track delivery"}
-          />
+    <div className="space-y-4">
+      <div className="rounded-[28px] border border-navy-200/70 bg-white/80 p-4 shadow-[0_24px_80px_rgba(70,55,37,0.08)] backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
+              Opportunities
+            </div>
+            <div className="mt-1 text-2xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">
+              Review queue
+            </div>
+            <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">{laneMeta.description}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <SummaryChip label="Visible" value={String(visibleCount)} />
+            <SummaryChip label="Lens" value={currentLens} />
+            <SummaryChip label="Focus" value={operatorFocus} />
+          </div>
         </div>
 
-        {lane === "feed" ? (
-          <>
-            <SavedViewTabs activeViewId={activeScannerViewId} onSelect={onScannerViewChange} views={savedViews} />
-            <SmartFilterBar filters={filters} onChange={onFiltersChange} onReset={onResetFilters} />
-          </>
-        ) : null}
+        <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+          {LANE_META.map((item) => (
+            <LanePill
+              key={item.id}
+              active={item.id === lane}
+              count={
+                item.id === "feed"
+                  ? scannerCount
+                  : item.id === "research"
+                    ? enrichmentCount
+                    : item.id === "ready"
+                      ? outreachCount
+                      : sentCount
+              }
+              icon={item.icon}
+              label={item.shortLabel}
+              onClick={() => onLaneChange(item.id)}
+            />
+          ))}
+        </div>
 
-        {lane === "research" ? (
-          <SavedViewTabs activeViewId={activeEnrichmentViewId} onSelect={onEnrichmentViewChange} views={enrichmentViews} />
-        ) : null}
+        <div className="mt-4 space-y-3">
+          {lane === "feed" ? (
+            <>
+              <SavedViewTabs activeViewId={activeScannerViewId} onSelect={onScannerViewChange} views={savedViews} />
+              <SmartFilterBar filters={filters} onChange={onFiltersChange} onReset={onResetFilters} />
+            </>
+          ) : null}
 
-        {lane === "ready" ? (
-          <SavedViewTabs activeViewId={activeOutreachViewId} onSelect={onOutreachViewChange} views={outreachViews} />
-        ) : null}
-      </SectionCard>
+          {lane === "research" ? (
+            <SavedViewTabs activeViewId={activeEnrichmentViewId} onSelect={onEnrichmentViewChange} views={enrichmentViews} />
+          ) : null}
+
+          {lane === "ready" ? (
+            <SavedViewTabs activeViewId={activeOutreachViewId} onSelect={onOutreachViewChange} views={outreachViews} />
+          ) : null}
+        </div>
+      </div>
 
       {lane === "sent" ? (
         <SentLogView entries={sentLog} leads={allLeads} onOpenLead={onOpenLead} showHeader={false} />

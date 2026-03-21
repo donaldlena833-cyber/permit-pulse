@@ -256,7 +256,7 @@ export default function App() {
   const currentWorkspacePane =
     opportunityLane === "feed" ? (
       <WorkspacePane
-        description="Review fit, keep a lead selected, and make the keep, research, or move decision without leaving the page."
+        description="Review fit and decide keep, research, or move."
         emptyDescription="Try a wider date window, a lower cost floor, or a different saved view."
         emptyTitle="No matching opportunities"
         leads={scannerLeads}
@@ -271,7 +271,7 @@ export default function App() {
       />
     ) : opportunityLane === "research" ? (
       <WorkspacePane
-        description="Everything here still needs a clearer company match, better contact route, or a stronger personalization angle."
+        description="Fix company and contact gaps before outreach."
         emptyDescription="Current rescans are not leaving much unresolved. That is a good problem."
         emptyTitle="Research queue is clear"
         leads={enrichmentLeads}
@@ -286,7 +286,7 @@ export default function App() {
       />
     ) : (
       <WorkspacePane
-        description="These leads are reachable enough to move into outreach without reopening the whole research loop."
+        description="Reachable enough to move toward outreach now."
         emptyDescription="Nothing is ready right now. That usually means the real work is still in research."
         emptyTitle="Ready lane is empty"
         leads={outreachLeads}

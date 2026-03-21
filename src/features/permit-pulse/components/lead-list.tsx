@@ -49,18 +49,18 @@ export function LeadList({
 
   return (
     <div className="flex h-full flex-col rounded-[30px] border border-navy-200/70 bg-white/80 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
-      <div className="border-b border-navy-200/70 p-3.5 dark:border-dark-border/70">
+      <div className="border-b border-navy-200/70 p-3 dark:border-dark-border/70">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-lg font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">{title}</div>
-            <div className="mt-1 text-sm leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
-            <div className="mt-2.5 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+            <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">{title}</div>
+            <div className="mt-1 text-xs leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
+            <div className="mt-2 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
               <span>{leads.length} visible</span>
               <span>{selectedIds.length} selected</span>
             </div>
           </div>
           <button
-            className="rounded-full border border-navy-200 bg-cream-50 px-3 py-1.5 text-sm dark:border-dark-border dark:bg-dark-bg"
+            className="rounded-full border border-navy-200 bg-cream-50 px-3 py-1.5 text-xs font-medium dark:border-dark-border dark:bg-dark-bg"
             onClick={onToggleAll}
             type="button"
           >
@@ -69,23 +69,23 @@ export function LeadList({
         </div>
 
         {selectedIds.length > 0 ? (
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-2 text-sm dark:border-dark-border dark:bg-dark-bg"
+              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-xs dark:border-dark-border dark:bg-dark-bg"
               onClick={() => onBulkSetStatus("reviewed")}
               type="button"
             >
               Mark reviewed
             </button>
             <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-2 text-sm dark:border-dark-border dark:bg-dark-bg"
+              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-xs dark:border-dark-border dark:bg-dark-bg"
               onClick={() => onBulkSetStatus("enriched")}
               type="button"
             >
               Move to enriched
             </button>
             <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-2 text-sm dark:border-dark-border dark:bg-dark-bg"
+              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-xs dark:border-dark-border dark:bg-dark-bg"
               onClick={() => onBulkSetStatus("archived")}
               type="button"
             >
