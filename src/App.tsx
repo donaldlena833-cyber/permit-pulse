@@ -70,6 +70,9 @@ function WorkspacePane({
   onSendNow,
   onFollowUpDateChange,
   onToggleIgnored,
+  onAcceptCandidate,
+  onRejectCandidate,
+  onSetPrimaryContact,
   automationHealth,
   enrichingLeadId,
   sendingLeadId,
@@ -93,6 +96,9 @@ function WorkspacePane({
   onSendNow: (leadId: string) => void
   onFollowUpDateChange: (leadId: string, value: string) => void
   onToggleIgnored: (leadId: string) => void
+  onAcceptCandidate: (leadId: string, candidateId: string) => void
+  onRejectCandidate: (leadId: string, candidateId: string) => void
+  onSetPrimaryContact: (leadId: string, contactId: string) => void
   automationHealth: ReturnType<typeof usePermitPulse>["automationHealth"]
   enrichingLeadId: string | null
   sendingLeadId: string | null
@@ -131,6 +137,9 @@ function WorkspacePane({
           onSendNow={onSendNow}
           onStatusChange={onStatusChange}
           onToggleIgnored={onToggleIgnored}
+          onAcceptCandidate={onAcceptCandidate}
+          onRejectCandidate={onRejectCandidate}
+          onSetPrimaryContact={onSetPrimaryContact}
         />
       </ResizablePanel>
     </ResizablePanelGroup>
@@ -200,6 +209,9 @@ export default function App() {
     updateProfile,
     generateDraft,
     refreshLeadAutomation,
+    acceptResolverCandidate,
+    rejectResolverCandidate,
+    setPrimaryContactRoute,
     setFollowUpDate,
   } = usePermitPulse()
 
@@ -251,6 +263,9 @@ export default function App() {
     onSendNow: sendLeadNow,
     onFollowUpDateChange: setFollowUpDate,
     onToggleIgnored: toggleIgnored,
+    onAcceptCandidate: acceptResolverCandidate,
+    onRejectCandidate: rejectResolverCandidate,
+    onSetPrimaryContact: setPrimaryContactRoute,
   }
 
   const currentWorkspacePane =

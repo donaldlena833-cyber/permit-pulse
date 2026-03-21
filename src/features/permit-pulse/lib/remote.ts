@@ -130,6 +130,33 @@ export async function refreshLeadDraft(leadId: string): Promise<AutomationSnapsh
   })
 }
 
+export async function selectResolverCandidate(leadId: string, candidateId: string): Promise<AutomationSnapshot> {
+  return requestJson<AutomationSnapshot>(
+    `/api/v2/leads/${encodeURIComponent(leadId)}/candidates/${encodeURIComponent(candidateId)}/select`,
+    {
+      method: "POST",
+    },
+  )
+}
+
+export async function rejectResolverCandidate(leadId: string, candidateId: string): Promise<AutomationSnapshot> {
+  return requestJson<AutomationSnapshot>(
+    `/api/v2/leads/${encodeURIComponent(leadId)}/candidates/${encodeURIComponent(candidateId)}/reject`,
+    {
+      method: "POST",
+    },
+  )
+}
+
+export async function setPrimaryLeadContact(leadId: string, contactId: string): Promise<AutomationSnapshot> {
+  return requestJson<AutomationSnapshot>(
+    `/api/v2/leads/${encodeURIComponent(leadId)}/contacts/${encodeURIComponent(contactId)}/primary`,
+    {
+      method: "POST",
+    },
+  )
+}
+
 export async function sendLeadImmediately(
   leadId: string,
 ): Promise<{ success: boolean; recipient?: string; sentAt?: string }> {

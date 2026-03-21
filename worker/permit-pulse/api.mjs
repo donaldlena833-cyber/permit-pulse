@@ -1,11 +1,14 @@
 import {
   enrichLeadNow,
   getPermitAutomationSnapshot,
+  rejectLeadCandidate,
   refreshLeadDraftNow,
   runEnrichmentBatch,
   runPermitIngest,
   runPermitAutomationCycle,
   sendLeadNow,
+  selectLeadCandidate,
+  setLeadPrimaryContact,
   updateLeadAutomationState,
 } from './automation.mjs';
 import { getDefaultAttachmentStatus } from './gmail.mjs';
@@ -120,6 +123,36 @@ export async function handlePermitPulseAutomationRequest(request, env) {
       return json(snapshot);
     }
 
+    const selectCandidateMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/candidates\/([^/]+)\/select$/);
+    if (selectCandidateMatch && request.method === 'POST') {
+      const snapshot = await selectLeadCandidate(
+        env,
+        decodeURIComponent(selectCandidateMatch[1]),
+        decodeURIComponent(selectCandidateMatch[2]),
+      );
+      return json(snapshot);
+    }
+
+    const rejectCandidateMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/candidates\/([^/]+)\/reject$/);
+    if (rejectCandidateMatch && request.method === 'POST') {
+      const snapshot = await rejectLeadCandidate(
+        env,
+        decodeURIComponent(rejectCandidateMatch[1]),
+        decodeURIComponent(rejectCandidateMatch[2]),
+      );
+      return json(snapshot);
+    }
+
+    const primaryContactMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/contacts\/([^/]+)\/primary$/);
+    if (primaryContactMatch && request.method === 'POST') {
+      const snapshot = await setLeadPrimaryContact(
+        env,
+        decodeURIComponent(primaryContactMatch[1]),
+        decodeURIComponent(primaryContactMatch[2]),
+      );
+      return json(snapshot);
+    }
+
     const sendMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/send$/);
     if (sendMatch && request.method === 'POST') {
       const result = await sendLeadNow(env, decodeURIComponent(sendMatch[1]));
@@ -141,6 +174,9 @@ export async function handlePermitPulseAutomationRequest(request, env) {
           'POST /api/v2/leads/:id/enrichment': 'Persist manual enrichment',
           'POST /api/v2/leads/:id/draft': 'Persist an outreach draft',
           'POST /api/v2/leads/:id/draft/refresh': 'Regenerate the latest outreach draft from resolver data',
+          'POST /api/v2/leads/:id/candidates/:candidateId/select': 'Accept a resolver candidate',
+          'POST /api/v2/leads/:id/candidates/:candidateId/reject': 'Reject a resolver candidate',
+          'POST /api/v2/leads/:id/contacts/:contactId/primary': 'Promote a contact as the primary route',
           'POST /api/v2/leads/:id/send': 'Send the latest draft now',
         },
       },

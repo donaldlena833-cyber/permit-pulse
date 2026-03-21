@@ -254,6 +254,26 @@ export function createSupabaseGateway(env) {
       }
     },
 
+    async getResolutionCandidates(leadId) {
+      return this.safeSelect('resolution_candidates', {
+        filters: [eq('lead_id', leadId)],
+        ordering: [order('confidence', 'desc')],
+        pageLimit: 100,
+      });
+    },
+
+    async patchResolutionCandidate(candidateId, payload) {
+      try {
+        return await this.patch('resolution_candidates', [eq('id', candidateId)], payload);
+      } catch (error) {
+        if (isMissingRelationError(error, 'resolution_candidates')) {
+          return [];
+        }
+
+        throw error;
+      }
+    },
+
     eq,
     gt,
     gte,

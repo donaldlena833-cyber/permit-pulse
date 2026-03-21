@@ -8,9 +8,12 @@ import {
   persistLeadDraft,
   persistLeadEnrichment,
   persistLeadStatus,
+  rejectResolverCandidate,
   refreshLeadDraft,
   runLeadEnrichment,
   sendLeadImmediately,
+  selectResolverCandidate,
+  setPrimaryLeadContact,
   triggerAutomationRun,
 } from "@/features/permit-pulse/lib/remote"
 import { loadStore, saveStore } from "@/features/permit-pulse/lib/storage"
@@ -602,6 +605,51 @@ export function usePermitPulse() {
       .catch(() => undefined)
   }, [applyRemoteSnapshot, store.leads, updateLead, usesBackendDecisionState])
 
+  const acceptResolverCandidate = useCallback(async (leadId: string, candidateId: string) => {
+    try {
+      const snapshot = await selectResolverCandidate(leadId, candidateId)
+      applyRemoteSnapshot(snapshot)
+      toast.success("Resolver choice accepted", {
+        description: "The worker updated the chosen candidate and recalculated the route.",
+      })
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Resolver update failed"
+      toast.error("Resolver update failed", {
+        description: message,
+      })
+    }
+  }, [applyRemoteSnapshot])
+
+  const rejectResolverCandidateAction = useCallback(async (leadId: string, candidateId: string) => {
+    try {
+      const snapshot = await rejectResolverCandidate(leadId, candidateId)
+      applyRemoteSnapshot(snapshot)
+      toast.success("Candidate rejected", {
+        description: "That candidate has been pushed out of the trusted path.",
+      })
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Candidate rejection failed"
+      toast.error("Candidate rejection failed", {
+        description: message,
+      })
+    }
+  }, [applyRemoteSnapshot])
+
+  const setPrimaryContactRoute = useCallback(async (leadId: string, contactId: string) => {
+    try {
+      const snapshot = await setPrimaryLeadContact(leadId, contactId)
+      applyRemoteSnapshot(snapshot)
+      toast.success("Primary route updated", {
+        description: "This contact now drives the route decision and draft flow.",
+      })
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Primary route update failed"
+      toast.error("Primary route update failed", {
+        description: message,
+      })
+    }
+  }, [applyRemoteSnapshot])
+
   const refreshLeadAutomation = useCallback(async (leadId: string) => {
     if (!automationHealth?.hasSupabase) {
       toast.error("Automation setup incomplete", {
@@ -733,6 +781,9 @@ export function usePermitPulse() {
     generateDraft,
     setFollowUpDate,
     toggleIgnored,
+    acceptResolverCandidate,
+    rejectResolverCandidate: rejectResolverCandidateAction,
+    setPrimaryContactRoute,
     refreshLeadAutomation,
     sendLeadNow,
     updateProfile,

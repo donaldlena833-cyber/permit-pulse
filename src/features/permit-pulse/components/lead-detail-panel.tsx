@@ -14,6 +14,7 @@ import {
   Phone,
   Search,
   Send,
+  ShieldCheck,
   Sparkles,
   TimerReset,
 } from "lucide-react"
@@ -82,6 +83,25 @@ interface LeadDetailPanelProps {
   onSendNow: (leadId: string) => void
   onFollowUpDateChange: (leadId: string, value: string) => void
   onToggleIgnored: (leadId: string) => void
+  onAcceptCandidate: (leadId: string, candidateId: string) => void
+  onRejectCandidate: (leadId: string, candidateId: string) => void
+  onSetPrimaryContact: (leadId: string, contactId: string) => void
+}
+
+function getTrustScore(lead: PermitLead) {
+  return Math.round(
+    ((lead.companyProfile.confidence || 0) * 0.38) +
+    ((lead.channelDecision.routeConfidence || 0) * 0.28) +
+    (lead.contactability.total * 0.2) +
+    (lead.outreachReadiness.score * 0.14),
+  )
+}
+
+function getTrustLabel(score: number) {
+  if (score >= 80) return "High trust"
+  if (score >= 60) return "Solid trust"
+  if (score >= 40) return "Mixed trust"
+  return "Low trust"
 }
 
 function copyValue(label: string, value: string) {
@@ -229,8 +249,12 @@ function InfoBlock({
 
 function CandidateCard({
   candidate,
+  onAccept,
+  onReject,
 }: {
   candidate: PermitLead["resolutionCandidates"][number]
+  onAccept?: () => void
+  onReject?: () => void
 }) {
   return (
     <div className="rounded-[18px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg">
@@ -254,6 +278,20 @@ function CandidateCard({
           Query: {candidate.matchedQuery}
         </div>
       ) : null}
+      {onAccept || onReject ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {candidate.status !== "selected" && onAccept ? (
+            <Button className="h-8 rounded-xl px-3 text-[11px]" onClick={onAccept} type="button">
+              Use this
+            </Button>
+          ) : null}
+          {candidate.status !== "rejected" && onReject ? (
+            <Button className="h-8 rounded-xl px-3 text-[11px]" onClick={onReject} type="button" variant="outline">
+              Reject
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -271,6 +309,9 @@ export function LeadDetailPanel({
   onSendNow,
   onFollowUpDateChange,
   onToggleIgnored,
+  onAcceptCandidate,
+  onRejectCandidate,
+  onSetPrimaryContact,
 }: LeadDetailPanelProps) {
   const actionLinks = useMemo(() => {
     if (!lead) {
@@ -366,6 +407,11 @@ export function LeadDetailPanel({
   const rejectedPeople = personCandidates.filter((candidate) => candidate.status !== "selected").slice(0, 4)
   const blocker = getLeadBlocker(lead)
   const canSendNow = Boolean(primaryEmail && lead.outreachDraft.subject && lead.outreachDraft.shortEmail)
+  const trustScore = getTrustScore(lead)
+  const trustLabel = getTrustLabel(trustScore)
+  const trustGaps = uniq([...lead.outreachReadiness.blockers, ...lead.contactability.missing]).slice(0, 4)
+  const chosenTarget = lead.channelDecision.targetRole || chosenContact?.role || lead.companyProfile.role || "company"
+  const routeQuality = lead.channelDecision.recipientType || (chosenContact?.type ?? "unrated")
   const automationSources = uniq([
     ...lead.enrichment.sourceTags,
     ...lead.propertyProfile.sourceTags,
@@ -439,6 +485,8 @@ export function LeadDetailPanel({
                   <div className="flex flex-wrap gap-2">
                     <ActionMeta label="Primary route" value={lead.channelDecision.primary} />
                     <ActionMeta label="Readiness" value={lead.outreachReadiness.label} />
+                    <ActionMeta label="Route confidence" value={`${lead.channelDecision.routeConfidence ?? 0}`} />
+                    <ActionMeta label="Target" value={chosenTarget} />
                   </div>
                 </div>
 
@@ -447,6 +495,50 @@ export function LeadDetailPanel({
                     Current blocker
                   </div>
                   <div className="mt-1 text-sm font-medium text-navy-700 dark:text-dark-text">{blocker}</div>
+                </div>
+
+                <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+                  <div className="rounded-[18px] border border-navy-200/70 bg-white/90 px-3 py-3 dark:border-dark-border/70 dark:bg-dark-bg">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                          <ShieldCheck className="h-3.5 w-3.5" />
+                          Resolver trust
+                        </div>
+                        <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                          {trustLabel}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">{trustScore}</div>
+                        <div className="text-[10px] uppercase tracking-[0.16em] text-navy-400 dark:text-dark-muted">score</div>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">{lead.channelDecision.reason}</p>
+                    <div className="mt-2 text-[11px] text-navy-500 dark:text-dark-muted">
+                      {selectedCompanyCandidate?.label || lead.companyProfile.name || "No chosen company"} • {routeQuality} route • {chosenTarget}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] border border-navy-200/70 bg-white/90 px-3 py-3 dark:border-dark-border/70 dark:bg-dark-bg">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                      What still needs work
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {trustGaps.length > 0 ? (
+                        trustGaps.map((item) => (
+                          <span
+                            key={item}
+                            className="rounded-full border border-navy-200 bg-cream-50 px-3 py-1 text-xs text-navy-600 dark:border-dark-border dark:bg-dark-card dark:text-dark-muted"
+                          >
+                            {item}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-sm text-navy-500 dark:text-dark-muted">No major blockers stored right now.</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -628,6 +720,8 @@ export function LeadDetailPanel({
                     <div className="grid gap-2 md:grid-cols-2">
                       <CompactField label="Chosen company" value={lead.companyProfile.name || "—"} />
                       <CompactField label="Primary contact" value={chosenContact?.name || lead.enrichment.contactPersonName || "—"} />
+                      <CompactField label="Route quality" value={routeQuality} />
+                      <CompactField label="Target role" value={chosenTarget} />
                       <CompactField label="Neighborhood" value={lead.propertyProfile.neighborhood || "—"} />
                       <CompactField label="Building type" value={lead.propertyProfile.buildingType || "—"} />
                       <CompactField label="Search query" value={lead.companyProfile.searchQuery || "—"} />
@@ -698,7 +792,10 @@ export function LeadDetailPanel({
                           Chosen company
                         </div>
                         {selectedCompanyCandidate ? (
-                          <CandidateCard candidate={selectedCompanyCandidate} />
+                          <CandidateCard
+                            candidate={selectedCompanyCandidate}
+                            onReject={() => onRejectCandidate(lead.id, selectedCompanyCandidate.id)}
+                          />
                         ) : (
                           <p className="text-sm text-navy-500 dark:text-dark-muted">
                             No chosen company candidate has been stored yet.
@@ -713,7 +810,11 @@ export function LeadDetailPanel({
                           </div>
                           <div className="mt-2 space-y-2">
                             {selectedPeople.map((candidate) => (
-                              <CandidateCard key={candidate.id} candidate={candidate} />
+                              <CandidateCard
+                                key={candidate.id}
+                                candidate={candidate}
+                                onReject={() => onRejectCandidate(lead.id, candidate.id)}
+                              />
                             ))}
                           </div>
                         </div>
@@ -747,7 +848,11 @@ export function LeadDetailPanel({
                           </div>
                           <div className="mt-2 space-y-2">
                             {rejectedCompanyCandidates.map((candidate) => (
-                              <CandidateCard key={candidate.id} candidate={candidate} />
+                              <CandidateCard
+                                key={candidate.id}
+                                candidate={candidate}
+                                onAccept={() => onAcceptCandidate(lead.id, candidate.id)}
+                              />
                             ))}
                           </div>
                         </div>
@@ -760,7 +865,11 @@ export function LeadDetailPanel({
                           </div>
                           <div className="mt-2 space-y-2">
                             {rejectedPeople.map((candidate) => (
-                              <CandidateCard key={candidate.id} candidate={candidate} />
+                              <CandidateCard
+                                key={candidate.id}
+                                candidate={candidate}
+                                onAccept={() => onAcceptCandidate(lead.id, candidate.id)}
+                              />
                             ))}
                           </div>
                         </div>
@@ -786,6 +895,18 @@ export function LeadDetailPanel({
                                 <div className="mt-2 text-sm text-navy-700 dark:text-dark-text">
                                   {contact.email || contact.phone || contact.linkedInUrl || contact.website || "No direct route"}
                                 </div>
+                                {!contact.isPrimary ? (
+                                  <div className="mt-3">
+                                    <Button
+                                      className="h-8 rounded-xl px-3 text-[11px]"
+                                      onClick={() => onSetPrimaryContact(lead.id, contact.id)}
+                                      type="button"
+                                      variant="outline"
+                                    >
+                                      Set primary route
+                                    </Button>
+                                  </div>
+                                ) : null}
                               </div>
                             ))}
                           </div>

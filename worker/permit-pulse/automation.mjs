@@ -2445,9 +2445,13 @@ function mapActivityType(eventType) {
     case 'lead_enriched':
     case 'manual_enrichment':
       return 'enriched';
+    case 'contact_selected':
+      return 'contact-found';
     case 'email_sent':
       return 'draft-created';
     case 'status_updated':
+    case 'candidate_selected':
+    case 'candidate_rejected':
       return 'status-changed';
     default:
       return 'reviewed';
@@ -2628,6 +2632,169 @@ async function recomputeLeadAutomationState(gateway, leadRow, options = {}) {
   return updated[0] || { ...leadRow, ...payload };
 }
 
+function getCandidateMatchStrength(confidence) {
+  return confidence >= 76 ? 'strong' : confidence >= 52 ? 'medium' : 'weak';
+}
+
+function normalizeCandidateWebsite(candidate) {
+  if (!candidate?.url) {
+    return candidate?.domain ? `https://${candidate.domain}` : '';
+  }
+
+  return candidate.url.startsWith('http') ? candidate.url : `https://${candidate.url}`;
+}
+
+function getCandidatePersonName(candidate) {
+  const label = candidate?.label || '';
+  const trimmed = label.split('|')[0]?.split(' - ')[0]?.split(',')[0]?.trim();
+  return trimmed || label || '';
+}
+
+async function applyCandidateDecision(gateway, lead, candidateId, mode) {
+  const candidates = await gateway.getResolutionCandidates(lead.id);
+  if (candidates.length === 0) {
+    throw new Error('No resolver candidates stored yet. Run enrichment first.');
+  }
+
+  const target = candidates.find((candidate) => candidate.id === candidateId);
+  if (!target) {
+    throw new Error('Resolver candidate not found');
+  }
+
+  const siblingCandidates = candidates
+    .filter((candidate) => candidate.candidate_type === target.candidate_type)
+    .sort((left, right) => (right.confidence || 0) - (left.confidence || 0));
+
+  let fallbackSelectedId = '';
+  if (mode === 'reject' && target.status === 'selected') {
+    fallbackSelectedId = siblingCandidates.find((candidate) => candidate.id !== target.id && candidate.status !== 'rejected')?.id || '';
+  }
+
+  await Promise.all(
+    siblingCandidates.map((candidate) => {
+      let status = candidate.status || 'candidate';
+
+      if (mode === 'select') {
+        status = candidate.id === target.id ? 'selected' : 'rejected';
+      } else if (candidate.id === target.id) {
+        status = 'rejected';
+      } else if (candidate.id === fallbackSelectedId) {
+        status = 'selected';
+      } else if (candidate.status === 'selected' && !fallbackSelectedId) {
+        status = 'candidate';
+      }
+
+      return gateway.patchResolutionCandidate(candidate.id, { status });
+    }),
+  );
+
+  if (target.candidate_type === 'company') {
+    const companyProfile = (
+      await gateway.select('company_profiles', {
+        filters: [eq('lead_id', lead.id)],
+        pageLimit: 1,
+      })
+    )[0] || {};
+
+    const selectedCompany =
+      mode === 'select'
+        ? target
+        : siblingCandidates.find((candidate) => candidate.id === fallbackSelectedId) || null;
+
+    const nextCompanyPayload = selectedCompany
+      ? {
+          company_name: selectedCompany.label || companyProfile.company_name || '',
+          normalized_name: normalizeText(selectedCompany.label || companyProfile.company_name || ''),
+          role: selectedCompany.role || companyProfile.role || 'owner',
+          website: normalizeCandidateWebsite(selectedCompany) || companyProfile.website || '',
+          domain: selectedCompany.domain || rootDomain(selectedCompany.url || '') || companyProfile.domain || '',
+          confidence: Math.round(selectedCompany.confidence || 0),
+          description: selectedCompany.metadata?.detail || companyProfile.description || '',
+          match_strength: getCandidateMatchStrength(Math.round(selectedCompany.confidence || 0)),
+        }
+      : {
+          confidence: 0,
+          match_strength: 'weak',
+          website: '',
+          domain: '',
+        };
+
+    await gateway.upsert('company_profiles', [{ ...companyProfile, ...nextCompanyPayload, lead_id: lead.id }], 'lead_id');
+  }
+
+  if (target.candidate_type === 'person' && mode === 'select') {
+    const nextManualEnrichment = {
+      ...(lead.enrichment_summary?.manualEnrichment || {}),
+      contactPersonName: getCandidatePersonName(target),
+      contactRole: target.role || lead.enrichment_summary?.manualEnrichment?.contactRole || '',
+      linkedInUrl:
+        normalizeText(target.url).includes('linkedin.com')
+          ? target.url
+          : lead.enrichment_summary?.manualEnrichment?.linkedInUrl || '',
+    };
+
+    await gateway.patch('leads', [eq('id', lead.id)], {
+      enrichment_summary: {
+        ...(lead.enrichment_summary || {}),
+        manualEnrichment: nextManualEnrichment,
+      },
+    });
+  }
+
+  await gateway.insert('activity_log', {
+    id: createId('activity'),
+    lead_id: lead.id,
+    event_type: mode === 'select' ? 'candidate_selected' : 'candidate_rejected',
+    summary: mode === 'select' ? 'Resolver candidate accepted' : 'Resolver candidate rejected',
+    detail: `${target.label || 'Candidate'} was ${mode === 'select' ? 'accepted' : 'rejected'} by the operator.`,
+    metadata: {
+      candidateId: target.id,
+      candidateType: target.candidate_type,
+      role: target.role || '',
+    },
+  });
+
+  const latestLead = (await gateway.getLeadById(lead.id)) || lead;
+  await recomputeLeadAutomationState(gateway, latestLead);
+}
+
+async function setPrimaryContactSelection(gateway, lead, contactId) {
+  const contacts = await gateway.select('contacts', {
+    filters: [eq('lead_id', lead.id)],
+    ordering: [order('is_primary', 'desc'), order('confidence', 'desc')],
+    pageLimit: 100,
+  });
+
+  if (contacts.length === 0) {
+    throw new Error('No contacts stored yet for this lead');
+  }
+
+  const target = contacts.find((contact) => contact.id === contactId);
+  if (!target) {
+    throw new Error('Contact not found');
+  }
+
+  const nextContacts = contacts.map((contact) => ({
+    ...contact,
+    is_primary: contact.id === contactId,
+  }));
+
+  await gateway.replaceContacts(lead.id, nextContacts);
+  await gateway.insert('activity_log', {
+    id: createId('activity'),
+    lead_id: lead.id,
+    event_type: 'contact_selected',
+    summary: 'Primary contact updated',
+    detail: `${target.name || target.email || target.phone || 'Contact'} is now the primary route.`,
+    metadata: {
+      contactId: target.id,
+    },
+  });
+
+  const latestLead = (await gateway.getLeadById(lead.id)) || lead;
+  await recomputeLeadAutomationState(gateway, latestLead);
+}
+
 export async function getPermitAutomationSnapshot(env) {
   const gateway = createSupabaseGateway(env);
   const snapshot = await gateway.getQueueSnapshot();
@@ -2678,6 +2845,39 @@ export async function refreshLeadDraftNow(env, leadId) {
   );
 
   await recomputeLeadAutomationState(gateway, lead, { promoteDrafted: true });
+  return getPermitAutomationSnapshot(env);
+}
+
+export async function selectLeadCandidate(env, leadId, candidateId) {
+  const gateway = createSupabaseGateway(env);
+  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  await applyCandidateDecision(gateway, lead, candidateId, 'select');
+  return getPermitAutomationSnapshot(env);
+}
+
+export async function rejectLeadCandidate(env, leadId, candidateId) {
+  const gateway = createSupabaseGateway(env);
+  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  await applyCandidateDecision(gateway, lead, candidateId, 'reject');
+  return getPermitAutomationSnapshot(env);
+}
+
+export async function setLeadPrimaryContact(env, leadId, contactId) {
+  const gateway = createSupabaseGateway(env);
+  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  await setPrimaryContactSelection(gateway, lead, contactId);
   return getPermitAutomationSnapshot(env);
 }
 
