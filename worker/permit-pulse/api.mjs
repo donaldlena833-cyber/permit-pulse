@@ -35,6 +35,10 @@ export async function handlePermitPulseAutomationRequest(request, env) {
         ok: true,
         hasSupabase: Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY),
         hasGmail: Boolean(env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET && env.GMAIL_REFRESH_TOKEN),
+        hasBrave: Boolean(env.BRAVE_API_KEY),
+        hasGoogleMaps: Boolean(env.GOOGLE_MAPS_API_KEY),
+        hasFirecrawl: Boolean(env.FIRECRAWL_API_KEY),
+        hasZeroBounce: Boolean(env.ZEROBOUNCE_API_KEY),
       });
     }
 

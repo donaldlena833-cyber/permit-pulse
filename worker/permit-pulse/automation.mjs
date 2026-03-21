@@ -685,7 +685,7 @@ function buildAcrisSummary(permit) {
   };
 }
 
-async function searchCompanyDomain(env, permit, leadScore) {
+async function searchCompanyDomain(env, permit, leadScore, options = {}) {
   const rawCandidates = uniq([
     permit.owner_business_name,
     permit.applicant_business_name,
@@ -711,37 +711,46 @@ async function searchCompanyDomain(env, permit, leadScore) {
   }
 
   try {
-    const query = `${seedName} NYC ${leadScore >= HIGH_VALUE_SCORE ? 'glass contractor' : 'company'}`;
-    const url = `${API_ENDPOINTS.braveSearch}?${new URLSearchParams({ q: query, count: '5' }).toString()}`;
-    const payload = await fetchJson(url, {
-      headers: {
-        Accept: 'application/json',
-        'X-Subscription-Token': env.BRAVE_API_KEY,
-      },
-    });
+    const queries = uniq([
+      `${seedName} NYC ${leadScore >= HIGH_VALUE_SCORE ? 'glass contractor' : 'company'}`,
+      options.force ? `${seedName} LinkedIn` : '',
+      options.force ? `${seedName} Instagram` : '',
+      options.force ? `${seedName} contact email phone` : '',
+    ]);
 
-    const results = payload.web?.results || [];
-    const firstSite = results.find((result) => {
-      const domain = rootDomain(result.url || '');
-      return domain && !domain.includes('linkedin.com') && !domain.includes('instagram.com') && !domain.includes('yelp.com');
-    });
-    const domain = rootDomain(firstSite?.url || '');
+    const resultSets = await Promise.all(queries.map((query) => runBraveSearch(env, query)));
+    const results = uniq(
+      resultSets
+        .flat()
+        .map((result) => JSON.stringify({
+          title: result.title || '',
+          url: result.url || '',
+          description: result.description || '',
+        })),
+    ).map((entry) => JSON.parse(entry));
+
+    const searchSignals = extractSearchSignals(results);
+    const firstSite = results.find((result) => !isSkippableSearchDomain(result.url || ''));
+    const website = firstSite?.url || searchSignals.website || '';
+    const domain = rootDomain(website);
     const confidence = firstSite ? 78 : 18;
     return {
       company_name: seedName,
       normalized_name: normalizeText(seedName),
       role: permit.owner_business_name ? 'owner' : permit.applicant_business_name ? 'applicant' : 'filing_rep',
-      website: firstSite?.url || '',
+      website,
       domain,
       confidence,
       description: firstSite?.description || '',
-      search_query: query,
-      search_results: results.map((result) => ({
-        title: result.title,
-        url: result.url,
-        description: result.description,
-      })),
-      social_links: {},
+      search_query: queries.join(' | '),
+      search_results: mapSearchResults(results),
+      social_links: {
+        linkedin_url: searchSignals.linkedin_url || '',
+        instagram_url: searchSignals.instagram_url || '',
+        contact_form_url: searchSignals.contact_form_url || '',
+      },
+      linked_in_url: searchSignals.linkedin_url || '',
+      instagram_url: searchSignals.instagram_url || '',
       match_strength: confidence >= 70 ? 'strong' : confidence >= 45 ? 'medium' : 'weak',
     };
   } catch {
@@ -756,6 +765,8 @@ async function searchCompanyDomain(env, permit, leadScore) {
       search_query: seedName,
       search_results: [],
       social_links: {},
+      linked_in_url: '',
+      instagram_url: '',
       match_strength: 'weak',
     };
   }
@@ -782,8 +793,58 @@ function extractLinks(markdown) {
   return uniq(links);
 }
 
-async function scrapeWebsiteSignals(env, leadScore, website) {
-  if (!env.FIRECRAWL_API_KEY || !website || leadScore < HIGH_VALUE_SCORE) {
+function mapSearchResults(results) {
+  return results.map((result) => ({
+    title: result.title || '',
+    url: result.url || '',
+    description: result.description || '',
+  }));
+}
+
+function isSkippableSearchDomain(url) {
+  const domain = rootDomain(url || '');
+  return (
+    !domain ||
+    domain.includes('linkedin.com') ||
+    domain.includes('instagram.com') ||
+    domain.includes('facebook.com') ||
+    domain.includes('yelp.com')
+  );
+}
+
+function extractSearchSignals(searchResults = []) {
+  const urls = searchResults.map((result) => result.url).filter(Boolean);
+  const textBlob = searchResults
+    .map((result) => [result.title, result.description].filter(Boolean).join(' '))
+    .join('\n');
+
+  return {
+    website: urls.find((url) => !isSkippableSearchDomain(url)) || '',
+    linkedin_url: urls.find((url) => url.includes('linkedin.com')) || '',
+    instagram_url: urls.find((url) => url.includes('instagram.com')) || '',
+    contact_form_url:
+      urls.find((url) => normalizeText(url).includes('/contact')) ||
+      urls.find((url) => normalizeText(url).includes('contact-us')) ||
+      '',
+    emails: extractEmails(textBlob),
+    phones: extractPhones(textBlob),
+  };
+}
+
+async function runBraveSearch(env, query) {
+  const url = `${API_ENDPOINTS.braveSearch}?${new URLSearchParams({ q: query, count: '5' }).toString()}`;
+  const payload = await fetchJson(url, {
+    headers: {
+      Accept: 'application/json',
+      'X-Subscription-Token': env.BRAVE_API_KEY,
+    },
+  });
+
+  return payload.web?.results || [];
+}
+
+async function scrapeWebsiteSignals(env, leadScore, website, options = {}) {
+  if (!env.FIRECRAWL_API_KEY || !website || (!options.force && leadScore < HIGH_VALUE_SCORE)) {
     return null;
   }
 
@@ -863,10 +924,18 @@ function generateGuessedEmails(companyProfile, permit, contacts) {
   const [first, ...rest] = parts;
   const last = rest[rest.length - 1];
   const patterns = uniq([
-    `${first}@${domain}`,
-    `${first}.${last}@${domain}`,
-    `${first[0]}${last}@${domain}`,
-  ]);
+    'info',
+    'contact',
+    'office',
+    'sales',
+    'hello',
+    'estimating',
+    parts.length >= 2 ? `${first}` : '',
+    parts.length >= 2 ? `${first}.${last}` : '',
+    parts.length >= 2 ? `${first[0]}${last}` : '',
+  ]
+    .filter(Boolean)
+    .map((localPart) => `${localPart}@${domain}`));
 
   const existing = new Set(contacts.map((contact) => contact.email).filter(Boolean));
   return patterns.filter((entry) => !existing.has(entry));
@@ -911,14 +980,15 @@ function dedupeContacts(contacts) {
   return deduped;
 }
 
-async function enrichLead(env, gateway, leadRow) {
+async function enrichLead(env, gateway, leadRow, options = {}) {
   const permit = leadRow.raw_permit || {};
   const [geo, pluto, hpd, company] = await Promise.all([
     geocodeAddress(env, leadRow.address),
     fetchPlutoProfile(permit),
     fetchHpdSummary(permit),
-    searchCompanyDomain(env, permit, leadRow.score),
+    searchCompanyDomain(env, permit, leadRow.score, options),
   ]);
+  const searchSignals = extractSearchSignals(company.search_results || []);
 
   const propertyProfile = {
     bin: permit.bin || '',
@@ -937,17 +1007,53 @@ async function enrichLead(env, gateway, leadRow) {
     confidence: Math.round(((geo?.confidence || 0) * 0.55) + (pluto ? 28 : 0) + (hpd ? 12 : 0)),
   };
 
-  const websiteSignals = await scrapeWebsiteSignals(env, leadRow.score, company.website);
+  const websiteSignals = await scrapeWebsiteSignals(
+    env,
+    leadRow.score,
+    company.website || searchSignals.website,
+    options,
+  );
   const contacts = [];
   const facts = [];
+  const socialLinks = {
+    linkedin_url: company.linked_in_url || searchSignals.linkedin_url || websiteSignals?.socialLinks?.linkedin_url || '',
+    instagram_url: company.instagram_url || searchSignals.instagram_url || websiteSignals?.socialLinks?.instagram_url || '',
+    contact_form_url:
+      company.social_links?.contact_form_url ||
+      searchSignals.contact_form_url ||
+      websiteSignals?.socialLinks?.contact_form_url ||
+      '',
+  };
 
-  if (company.website) {
+  if (company.website || searchSignals.website) {
     facts.push({
       id: createId('fact'),
       field: 'company_website',
-      value: company.website,
+      value: company.website || searchSignals.website,
       source: 'brave_search',
       confidence: company.confidence,
+      metadata: {},
+    });
+  }
+
+  if (socialLinks.linkedin_url) {
+    facts.push({
+      id: createId('fact'),
+      field: 'linkedin_profile',
+      value: socialLinks.linkedin_url,
+      source: 'brave_search',
+      confidence: Math.max(company.confidence - 5, 52),
+      metadata: {},
+    });
+  }
+
+  if (socialLinks.instagram_url) {
+    facts.push({
+      id: createId('fact'),
+      field: 'instagram_profile',
+      value: socialLinks.instagram_url,
+      source: 'brave_search',
+      confidence: Math.max(company.confidence - 10, 45),
       metadata: {},
     });
   }
@@ -963,6 +1069,44 @@ async function enrichLead(env, gateway, leadRow) {
     });
   }
 
+  searchSignals.emails.forEach((email, index) => {
+    contacts.push({
+      id: createId('contact'),
+      name: permit.owner_name || getApplicantName(permit) || '',
+      role: company.role || 'owner',
+      email,
+      phone: '',
+      website_url: company.website || searchSignals.website || '',
+      linkedin_url: socialLinks.linkedin_url || '',
+      instagram_url: socialLinks.instagram_url || '',
+      contact_form_url: socialLinks.contact_form_url || '',
+      type: 'public',
+      confidence: 66,
+      source: 'brave_search',
+      verified: false,
+      is_primary: index === 0,
+    });
+  });
+
+  searchSignals.phones.forEach((phone, index) => {
+    contacts.push({
+      id: createId('contact'),
+      name: permit.owner_name || getApplicantName(permit) || '',
+      role: company.role || 'owner',
+      email: '',
+      phone,
+      website_url: company.website || searchSignals.website || '',
+      linkedin_url: socialLinks.linkedin_url || '',
+      instagram_url: socialLinks.instagram_url || '',
+      contact_form_url: socialLinks.contact_form_url || '',
+      type: 'public',
+      confidence: 62,
+      source: 'brave_search',
+      verified: false,
+      is_primary: index === 0 && searchSignals.emails.length === 0,
+    });
+  });
+
   (websiteSignals?.emails || []).forEach((email, index) => {
     contacts.push({
       id: createId('contact'),
@@ -970,10 +1114,10 @@ async function enrichLead(env, gateway, leadRow) {
       role: company.role || 'owner',
       email,
       phone: '',
-      website_url: company.website || '',
-      linkedin_url: websiteSignals?.socialLinks?.linkedin_url || '',
-      instagram_url: websiteSignals?.socialLinks?.instagram_url || '',
-      contact_form_url: websiteSignals?.socialLinks?.contact_form_url || '',
+      website_url: company.website || searchSignals.website || '',
+      linkedin_url: socialLinks.linkedin_url || '',
+      instagram_url: socialLinks.instagram_url || '',
+      contact_form_url: socialLinks.contact_form_url || '',
       type: index === 0 ? 'public' : 'public',
       confidence: 72,
       source: 'firecrawl',
@@ -989,10 +1133,10 @@ async function enrichLead(env, gateway, leadRow) {
       role: company.role || 'owner',
       email: '',
       phone,
-      website_url: company.website || '',
-      linkedin_url: websiteSignals?.socialLinks?.linkedin_url || '',
-      instagram_url: websiteSignals?.socialLinks?.instagram_url || '',
-      contact_form_url: websiteSignals?.socialLinks?.contact_form_url || '',
+      website_url: company.website || searchSignals.website || '',
+      linkedin_url: socialLinks.linkedin_url || '',
+      instagram_url: socialLinks.instagram_url || '',
+      contact_form_url: socialLinks.contact_form_url || '',
       type: 'public',
       confidence: 70,
       source: 'firecrawl',
@@ -1009,10 +1153,10 @@ async function enrichLead(env, gateway, leadRow) {
       role: company.role || 'owner',
       email,
       phone: '',
-      website_url: company.website || '',
-      linkedin_url: '',
-      instagram_url: '',
-      contact_form_url: '',
+      website_url: company.website || searchSignals.website || '',
+      linkedin_url: socialLinks.linkedin_url || '',
+      instagram_url: socialLinks.instagram_url || '',
+      contact_form_url: socialLinks.contact_form_url || '',
       type: 'guessed',
       confidence: 48,
       source: 'pattern_guess',
@@ -1021,17 +1165,17 @@ async function enrichLead(env, gateway, leadRow) {
     });
   });
 
-  if (company.website && !contacts.some((contact) => contact.website_url)) {
+  if ((company.website || searchSignals.website) && !contacts.some((contact) => contact.website_url)) {
     contacts.push({
       id: createId('contact'),
       name: '',
       role: company.role || 'owner',
       email: '',
       phone: '',
-      website_url: company.website,
-      linkedin_url: websiteSignals?.socialLinks?.linkedin_url || '',
-      instagram_url: websiteSignals?.socialLinks?.instagram_url || '',
-      contact_form_url: websiteSignals?.socialLinks?.contact_form_url || '',
+      website_url: company.website || searchSignals.website,
+      linkedin_url: socialLinks.linkedin_url || '',
+      instagram_url: socialLinks.instagram_url || '',
+      contact_form_url: socialLinks.contact_form_url || '',
       type: 'public',
       confidence: 55,
       source: 'website_resolution',
@@ -1603,7 +1747,7 @@ export async function enrichLeadNow(env, leadId) {
     throw new Error('Lead not found');
   }
 
-  await enrichLead(env, gateway, lead);
+  await enrichLead(env, gateway, lead, { force: true });
   return getPermitAutomationSnapshot(env);
 }
 
