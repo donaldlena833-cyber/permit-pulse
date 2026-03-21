@@ -194,6 +194,13 @@ export function getSystemAlerts(
         description: "Drafts can be generated, but direct send and auto-send should stay off.",
         tone: "warning",
       })
+    } else if (!health.hasDefaultAttachment) {
+      alerts.push({
+        id: "attachment",
+        title: "Outreach attachment is not loaded",
+        description: "Emails can send now, but the default PDF attachment is still missing from the worker.",
+        tone: "warning",
+      })
     }
   }
 

@@ -7,6 +7,7 @@ import {
   sendLeadNow,
   updateLeadAutomationState,
 } from './automation.mjs';
+import { getDefaultAttachmentStatus } from './gmail.mjs';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
@@ -33,6 +34,7 @@ export async function handlePermitPulseAutomationRequest(request, env) {
 
   try {
     if (url.pathname === '/api/v2/health' && request.method === 'GET') {
+      const attachment = await getDefaultAttachmentStatus(env);
       return json({
         ok: true,
         hasSupabase: Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY),
@@ -41,6 +43,8 @@ export async function handlePermitPulseAutomationRequest(request, env) {
         hasGoogleMaps: Boolean(env.GOOGLE_MAPS_API_KEY),
         hasFirecrawl: Boolean(env.FIRECRAWL_API_KEY),
         hasZeroBounce: Boolean(env.ZEROBOUNCE_API_KEY),
+        hasDefaultAttachment: attachment.loaded,
+        defaultAttachmentName: attachment.filename || null,
       });
     }
 

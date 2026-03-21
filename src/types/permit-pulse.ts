@@ -282,6 +282,8 @@ export interface AutomationHealth {
   hasGoogleMaps: boolean
   hasFirecrawl: boolean
   hasZeroBounce: boolean
+  hasDefaultAttachment: boolean
+  defaultAttachmentName: string | null
 }
 
 export interface SentLogEntry {

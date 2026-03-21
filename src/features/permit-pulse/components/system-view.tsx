@@ -1,5 +1,6 @@
 import {
   Bot,
+  FileText,
   Database,
   Globe,
   Mail,
@@ -82,6 +83,14 @@ export function SystemView({
       active: Boolean(automationHealth?.hasGmail),
       icon: Mail,
       detail: "Used for direct send and later auto-send once resolver trust is high enough.",
+    },
+    {
+      label: "Default PDF",
+      active: Boolean(automationHealth?.hasDefaultAttachment),
+      icon: FileText,
+      detail: automationHealth?.hasDefaultAttachment
+        ? `${automationHealth.defaultAttachmentName || "Default attachment"} will be added to every sent outreach email.`
+        : "No default PDF attachment is loaded yet, so sends will go out without the one-pager.",
     },
     {
       label: "Brave Search",
