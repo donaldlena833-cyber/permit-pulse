@@ -1,8 +1,20 @@
 import { DEFAULT_FILTERS, METROGLASSPRO_PROFILE } from "@/features/permit-pulse/data/profile"
-import type { PermitPulseStore, TenantProfile } from "@/types/permit-pulse"
+import type { AppTheme, MainSection, OpportunityLane, PermitPulseStore, TenantProfile } from "@/types/permit-pulse"
 
 const STORAGE_KEY = "permit-pulse-v2"
-const STORAGE_VERSION = 4
+const STORAGE_VERSION = 5
+
+function isTheme(value: unknown): value is AppTheme {
+  return value === "light" || value === "dark"
+}
+
+function isMainSection(value: unknown): value is MainSection {
+  return value === "dashboard" || value === "opportunities" || value === "pipeline" || value === "system"
+}
+
+function isOpportunityLane(value: unknown): value is OpportunityLane {
+  return value === "feed" || value === "research" || value === "ready" || value === "sent"
+}
 
 export function createInitialStore(profile: TenantProfile = METROGLASSPRO_PROFILE): PermitPulseStore {
   return {
@@ -43,6 +55,11 @@ export function loadStore(profile: TenantProfile = METROGLASSPRO_PROFILE): Permi
     return {
       ...emptyStore,
       ...parsedValue,
+      theme: isTheme(parsedValue.theme) ? parsedValue.theme : emptyStore.theme,
+      section: isMainSection(parsedValue.section) ? parsedValue.section : emptyStore.section,
+      opportunityLane: isOpportunityLane(parsedValue.opportunityLane)
+        ? parsedValue.opportunityLane
+        : emptyStore.opportunityLane,
       filters: {
         ...emptyStore.filters,
         ...parsedValue.filters,

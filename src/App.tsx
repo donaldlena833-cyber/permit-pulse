@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react"
+import { Component, type ReactNode, useMemo, useState } from "react"
 import { Target } from "lucide-react"
 import { Toaster } from "sonner"
 
+import { Button } from "@/components/ui/button"
 import {
   ResizableHandle,
   ResizablePanel,
@@ -20,6 +21,56 @@ import { usePermitPulse } from "@/features/permit-pulse/hooks/use-permit-pulse"
 import { getAttentionItems, getPipelineColumns, getSystemAlerts } from "@/features/permit-pulse/lib/operator"
 import { isOutreachReady, needsEnrichment } from "@/features/permit-pulse/lib/views"
 import type { LeadStatus, OpportunityLane, PermitLead } from "@/types/permit-pulse"
+
+class AppErrorBoundary extends Component<{
+  children: ReactNode
+  onReset: () => void
+}, { hasError: boolean }> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error("PermitPulse render error", error)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-[32px] border border-orange-200/70 bg-orange-50/80 p-8 shadow-sm dark:border-orange-800/40 dark:bg-orange-900/15">
+          <div className="max-w-2xl">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-orange-700 dark:text-orange-200">
+              Workspace issue
+            </div>
+            <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">
+              This screen hit a render problem.
+            </h2>
+            <p className="mt-3 text-sm leading-7 text-navy-600 dark:text-dark-muted">
+              The shell is still alive, but one part of the interface failed to render cleanly. Reset back to the dashboard and hard refresh if the issue lingers.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button className="rounded-full bg-orange-500 text-white hover:bg-orange-600" onClick={this.props.onReset} type="button">
+                Return to dashboard
+              </Button>
+              <Button
+                className="rounded-full"
+                onClick={() => window.location.reload()}
+                type="button"
+                variant="outline"
+              >
+                Reload app
+              </Button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    return this.props.children
+  }
+}
 
 function useBulkSelection(leads: PermitLead[]) {
   const [rawSelectedIds, setRawSelectedIds] = useState<string[]>([])
@@ -406,7 +457,13 @@ export default function App() {
         section={section}
         theme={theme}
       >
-        {content}
+        <AppErrorBoundary
+          onReset={() => {
+            setSection("dashboard")
+          }}
+        >
+          {content}
+        </AppErrorBoundary>
       </AppShell>
       <Toaster closeButton position="top-right" richColors />
     </>
