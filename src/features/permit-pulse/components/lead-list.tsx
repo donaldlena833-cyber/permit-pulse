@@ -4,7 +4,6 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { EmptyState } from "@/features/permit-pulse/components/empty-state"
 import {
   BoroughBadge,
-  ContactabilityBadge,
   LeadScoreBadge,
   StatusBadge,
 } from "@/features/permit-pulse/components/badges"
@@ -51,14 +50,14 @@ export function LeadList({
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">{title}</div>
-            <div className="mt-1 text-xs leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
-            <div className="mt-2 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+            <div className="mt-1 text-[11px] leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
+            <div className="mt-2 flex flex-wrap gap-3 text-[10px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
               <span>{leads.length} visible</span>
               <span>{selectedIds.length} selected</span>
             </div>
           </div>
           <button
-            className="rounded-full border border-navy-200 bg-cream-50 px-3 py-1.5 text-xs font-medium dark:border-dark-border dark:bg-dark-bg"
+            className="rounded-full border border-navy-200 bg-cream-50 px-3 py-1.5 text-[11px] font-medium dark:border-dark-border dark:bg-dark-bg"
             onClick={onToggleAll}
             type="button"
           >
@@ -69,21 +68,21 @@ export function LeadList({
         {selectedIds.length > 0 ? (
           <div className="mt-3 flex flex-wrap gap-2">
             <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-xs dark:border-dark-border dark:bg-dark-bg"
+              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
               onClick={() => onBulkSetStatus("reviewed")}
               type="button"
             >
               Mark reviewed
             </button>
             <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-xs dark:border-dark-border dark:bg-dark-bg"
+              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
               onClick={() => onBulkSetStatus("enriched")}
               type="button"
             >
               Move to enriched
             </button>
             <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-xs dark:border-dark-border dark:bg-dark-bg"
+              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
               onClick={() => onBulkSetStatus("archived")}
               type="button"
             >
@@ -103,7 +102,7 @@ export function LeadList({
               <button
                 key={lead.id}
                 className={cn(
-                  "group w-full rounded-[22px] border px-3 py-3 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-sm dark:hover:border-orange-800/40",
+                  "group w-full rounded-[20px] border px-3 py-2.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-sm dark:hover:border-orange-800/40",
                   isActive
                     ? "border-orange-200 bg-orange-50/80 shadow-sm dark:border-orange-800/50 dark:bg-orange-900/10"
                     : "border-navy-200/70 bg-cream-50/70 dark:border-dark-border/70 dark:bg-dark-bg",
@@ -119,28 +118,21 @@ export function LeadList({
                     onClick={(event) => event.stopPropagation()}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[15px] font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text sm:text-base">
-                          {getPermitAddress(lead)}
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-navy-500 dark:text-dark-muted">
-                          <span>{formatCurrency(lead.estimated_job_costs)}</span>
-                          <span className="inline-flex items-center gap-1">
-                            <Clock3 className="h-3.5 w-3.5" />
-                            {formatRelativeDate(lead.issued_date)}
-                          </span>
-                        </div>
+                    <div className="min-w-0">
+                      <div className="text-[15px] font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text sm:text-base">
+                        {getPermitAddress(lead)}
                       </div>
-                      <div className="shrink-0 text-right text-xs text-navy-500 dark:text-dark-muted">
-                        <div className="font-medium text-navy-800 dark:text-dark-text">{lead.nextAction.label}</div>
-                        <div className="mt-1 uppercase tracking-[0.18em]">{lead.nextAction.urgency}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-navy-500 dark:text-dark-muted">
+                        <span>{formatCurrency(lead.estimated_job_costs)}</span>
+                        <span className="inline-flex items-center gap-1">
+                          <Clock3 className="h-3.5 w-3.5" />
+                          {formatRelativeDate(lead.issued_date)}
+                        </span>
                       </div>
                     </div>
 
-                    <div className="mt-2.5 flex flex-wrap gap-2">
+                    <div className="mt-2 flex flex-wrap gap-2">
                       <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
-                      <ContactabilityBadge contactability={lead.contactability} />
                       <StatusBadge status={lead.workflow.status} />
                       <BoroughBadge borough={lead.borough} />
                     </div>
