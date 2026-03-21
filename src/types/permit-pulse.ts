@@ -309,6 +309,36 @@ export interface AutomationHealth {
   defaultAttachmentName: string | null
 }
 
+export type AutomationJobType =
+  | "permit_ingest"
+  | "enrichment_batch"
+  | "lead_enrichment"
+  | "draft_refresh"
+  | "send"
+  | "status_update"
+  | "manual_enrichment"
+  | "candidate_select"
+  | "candidate_reject"
+  | "primary_contact"
+
+export type AutomationJobStatus = "queued" | "running" | "retrying" | "succeeded" | "failed"
+
+export interface AutomationJob {
+  id: string
+  leadId: string | null
+  jobType: AutomationJobType
+  status: AutomationJobStatus
+  provider: string
+  summary: string
+  detail: string
+  attemptCount: number
+  retryable: boolean
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  metadata: Record<string, unknown>
+}
+
 export interface SentLogEntry {
   id: string
   leadId: string

@@ -1,8 +1,16 @@
-import type { AutomationHealth, EnrichmentData, LeadStatus, PermitLead, SentLogEntry } from "@/types/permit-pulse"
+import type {
+  AutomationHealth,
+  AutomationJob,
+  EnrichmentData,
+  LeadStatus,
+  PermitLead,
+  SentLogEntry,
+} from "@/types/permit-pulse"
 
 interface AutomationSnapshot {
   leads: PermitLead[]
   sentLog: SentLogEntry[]
+  jobs: AutomationJob[]
 }
 
 function isAutomationSnapshot(value: unknown): value is AutomationSnapshot {
@@ -11,7 +19,7 @@ function isAutomationSnapshot(value: unknown): value is AutomationSnapshot {
   }
 
   const candidate = value as Partial<AutomationSnapshot>
-  return Array.isArray(candidate.leads) && Array.isArray(candidate.sentLog)
+  return Array.isArray(candidate.leads) && Array.isArray(candidate.sentLog) && Array.isArray(candidate.jobs)
 }
 
 function getApiBase(): string {
@@ -69,6 +77,12 @@ export async function fetchAutomationHealth(): Promise<AutomationHealth | null> 
 
 export async function triggerAutomationRun(): Promise<void> {
   await requestJson("/api/v2/run", {
+    method: "POST",
+  })
+}
+
+export async function retryAutomationJob(jobId: string): Promise<AutomationSnapshot> {
+  return requestJson<AutomationSnapshot>(`/api/v2/jobs/${encodeURIComponent(jobId)}/retry`, {
     method: "POST",
   })
 }

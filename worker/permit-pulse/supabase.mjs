@@ -153,7 +153,7 @@ export function createSupabaseGateway(env) {
     },
 
     async getQueueSnapshot() {
-      const [leads, properties, companies, contacts, facts, outreach, activity, candidates] = await Promise.all([
+      const [leads, properties, companies, contacts, facts, outreach, activity, candidates, jobs] = await Promise.all([
         this.select('leads', {
           ordering: [order('priority_score', 'desc'), order('updated_at', 'desc')],
           pageLimit: 200,
@@ -165,9 +165,10 @@ export function createSupabaseGateway(env) {
         this.select('outreach', { ordering: [order('created_at', 'desc')], pageLimit: 500 }),
         this.select('activity_log', { ordering: [order('created_at', 'desc')], pageLimit: 1000 }),
         this.safeSelect('resolution_candidates', { ordering: [order('confidence', 'desc')], pageLimit: 1000 }),
+        this.safeSelect('automation_jobs', { ordering: [order('created_at', 'desc')], pageLimit: 60 }),
       ]);
 
-      return { leads, properties, companies, contacts, facts, outreach, activity, candidates };
+      return { leads, properties, companies, contacts, facts, outreach, activity, candidates, jobs };
     },
 
     async safeSelect(table, options = {}) {
@@ -260,6 +261,37 @@ export function createSupabaseGateway(env) {
         ordering: [order('confidence', 'desc')],
         pageLimit: 100,
       });
+    },
+
+    async getAutomationJobById(jobId) {
+      return (await this.safeSelect('automation_jobs', {
+        filters: [eq('id', jobId)],
+        pageLimit: 1,
+      }))[0] || null;
+    },
+
+    async safeInsertAutomationJob(payload) {
+      try {
+        return await this.insert('automation_jobs', payload);
+      } catch (error) {
+        if (isMissingRelationError(error, 'automation_jobs')) {
+          return [];
+        }
+
+        throw error;
+      }
+    },
+
+    async safePatchAutomationJob(jobId, payload) {
+      try {
+        return await this.patch('automation_jobs', [eq('id', jobId)], payload);
+      } catch (error) {
+        if (isMissingRelationError(error, 'automation_jobs')) {
+          return [];
+        }
+
+        throw error;
+      }
     },
 
     async patchResolutionCandidate(candidateId, payload) {

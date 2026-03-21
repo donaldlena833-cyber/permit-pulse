@@ -169,6 +169,7 @@ export default function App() {
     activeOutreachQueueId,
     activeViewId,
     automationHealth,
+    automationJobs,
     dashboardActivities,
     dashboardStats,
     enrichingLeadId,
@@ -184,6 +185,7 @@ export default function App() {
     profile,
     resetFilters,
     resetProfile,
+    retryJob,
     savedViews,
     scannerLeads,
     scanLeads,
@@ -235,8 +237,8 @@ export default function App() {
   )
   const pipelineColumns = useMemo(() => getPipelineColumns(allLeads), [allLeads])
   const systemAlerts = useMemo(
-    () => getSystemAlerts(allLeads, automationHealth, error, lastScanAt),
-    [allLeads, automationHealth, error, lastScanAt],
+    () => getSystemAlerts(allLeads, automationHealth, automationJobs, error, lastScanAt),
+    [allLeads, automationHealth, automationJobs, error, lastScanAt],
   )
 
   const bulkSetStatus = (status: LeadStatus) => {
@@ -382,7 +384,9 @@ export default function App() {
       <SystemView
         alerts={systemAlerts}
         automationHealth={automationHealth}
+        jobs={automationJobs}
         onResetProfile={resetProfile}
+        onRetryJob={retryJob}
         onUpdateProfile={updateProfile}
         profile={profile}
       />

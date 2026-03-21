@@ -10,6 +10,7 @@ import {
   persistLeadStatus,
   rejectResolverCandidate,
   refreshLeadDraft,
+  retryAutomationJob,
   runLeadEnrichment,
   sendLeadImmediately,
   selectResolverCandidate,
@@ -36,6 +37,7 @@ import {
 } from "@/features/permit-pulse/lib/views"
 import type {
   AutomationHealth,
+  AutomationJob,
   AppTheme,
   EnrichmentData,
   LeadFilters,
@@ -90,6 +92,7 @@ export function usePermitPulse() {
   const [error, setError] = useState<string | null>(null)
   const [remoteHydrating, setRemoteHydrating] = useState(true)
   const [automationHealth, setAutomationHealth] = useState<AutomationHealth | null>(null)
+  const [automationJobs, setAutomationJobs] = useState<AutomationJob[]>([])
   const [enrichingLeadId, setEnrichingLeadId] = useState<string | null>(null)
   const [sendingLeadId, setSendingLeadId] = useState<string | null>(null)
   const initialScanRef = useRef(false)
@@ -187,8 +190,13 @@ export function usePermitPulse() {
     saveStore(store)
   }, [store])
 
-  const applyRemoteSnapshot = useCallback((snapshot: { leads: PermitLead[]; sentLog: SentLogEntry[] }) => {
+  const applyRemoteSnapshot = useCallback((snapshot: { leads: PermitLead[]; sentLog: SentLogEntry[]; jobs: AutomationJob[] }) => {
     const orderedLeads = sortLeads(snapshot.leads, "priority")
+    const orderedJobs = [...snapshot.jobs].sort(
+      (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+    )
+
+    setAutomationJobs(orderedJobs)
 
     setStore((currentStore) => ({
       ...currentStore,
@@ -712,6 +720,21 @@ export function usePermitPulse() {
     }
   }, [applyRemoteSnapshot, automationHealth])
 
+  const retryJob = useCallback(async (jobId: string) => {
+    try {
+      const snapshot = await retryAutomationJob(jobId)
+      applyRemoteSnapshot(snapshot)
+      toast.success("Automation retried", {
+        description: "The worker re-ran that failed automation step and refreshed the latest state.",
+      })
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Retry failed"
+      toast.error("Retry failed", {
+        description: message,
+      })
+    }
+  }, [applyRemoteSnapshot])
+
   const updateProfile = useCallback((patch: Partial<TenantProfile>) => {
     setStore((currentStore) => ({
       ...currentStore,
@@ -750,6 +773,7 @@ export function usePermitPulse() {
     selectedLead,
     lastScanAt: store.lastScanAt,
     sentLog,
+    automationJobs,
     loading,
     error,
     automationHealth,
@@ -786,6 +810,7 @@ export function usePermitPulse() {
     setPrimaryContactRoute,
     refreshLeadAutomation,
     sendLeadNow,
+    retryJob,
     updateProfile,
     resetProfile,
   }

@@ -1,4 +1,4 @@
-import type { AutomationHealth, PermitLead } from "@/types/permit-pulse"
+import type { AutomationHealth, AutomationJob, PermitLead } from "@/types/permit-pulse"
 import { formatRelativeDate, getPermitAddress } from "@/features/permit-pulse/lib/format"
 import { isOutreachReady, needsEnrichment, sortLeads } from "@/features/permit-pulse/lib/views"
 
@@ -133,10 +133,15 @@ export function getPipelineColumns(leads: PermitLead[]): PipelineColumn[] {
 export function getSystemAlerts(
   leads: PermitLead[],
   health: AutomationHealth | null,
+  jobs: AutomationJob[],
   error: string | null,
   lastScanAt: string | null,
 ): SystemAlert[] {
   const alerts: SystemAlert[] = []
+  const latestFailedJob = [...jobs].find((job) => job.status === "failed")
+  const latestSuccessfulIngest = [...jobs].find(
+    (job) => job.jobType === "permit_ingest" && job.status === "succeeded",
+  )
 
   if (error) {
     alerts.push({
@@ -209,6 +214,31 @@ export function getSystemAlerts(
         tone: "warning",
       })
     }
+  }
+
+  if (latestFailedJob) {
+    alerts.unshift({
+      id: `job-${latestFailedJob.id}`,
+      title: "Latest automation needs attention",
+      description: latestFailedJob.detail || latestFailedJob.summary,
+      tone: "warning",
+    })
+  } else if (jobs.length > 0) {
+    alerts.unshift({
+      id: "jobs-healthy",
+      title: "Latest automation completed cleanly",
+      description: jobs[0]?.summary || "Recent ingest and enrichment steps finished without a logged failure.",
+      tone: "success",
+    })
+  }
+
+  if (health?.hasSupabase && leads.length > 0 && !latestSuccessfulIngest) {
+    alerts.push({
+      id: "ingest-missing",
+      title: "No successful ingest logged yet",
+      description: "The workspace has lead memory, but this environment has not logged a clean permit ingest run yet.",
+      tone: "warning",
+    })
   }
 
   if (!lastScanAt && leads.length === 0) {

@@ -3,6 +3,7 @@ import {
   getPermitAutomationSnapshot,
   rejectLeadCandidate,
   refreshLeadDraftNow,
+  retryAutomationJob,
   runEnrichmentBatch,
   runPermitIngest,
   runPermitAutomationCycle,
@@ -77,6 +78,11 @@ export async function handlePermitPulseAutomationRequest(request, env) {
     if (url.pathname === '/api/v2/state' && request.method === 'GET') {
       const snapshot = await getPermitAutomationSnapshot(env);
       return json(snapshot);
+    }
+
+    if (url.pathname === '/api/v2/jobs' && request.method === 'GET') {
+      const snapshot = await getPermitAutomationSnapshot(env);
+      return json({ jobs: snapshot.jobs });
     }
 
     if (url.pathname === '/api/v2/sent-log' && request.method === 'GET') {
@@ -159,12 +165,19 @@ export async function handlePermitPulseAutomationRequest(request, env) {
       return json(result);
     }
 
+    const retryJobMatch = url.pathname.match(/^\/api\/v2\/jobs\/([^/]+)\/retry$/);
+    if (retryJobMatch && request.method === 'POST') {
+      const snapshot = await retryAutomationJob(env, decodeURIComponent(retryJobMatch[1]));
+      return json(snapshot);
+    }
+
     return json(
       {
         error: 'Not found',
         endpoints: {
           'GET /api/v2/health': 'Automation health',
           'GET /api/v2/state': 'Full lead workspace snapshot',
+          'GET /api/v2/jobs': 'Recent automation job records',
           'GET /api/v2/sent-log': 'Sent outreach records',
           'POST /api/v2/run': 'Run ingest plus a small enrichment/send batch',
           'POST /api/v2/jobs/ingest': 'Run permit ingest only',
@@ -178,6 +191,7 @@ export async function handlePermitPulseAutomationRequest(request, env) {
           'POST /api/v2/leads/:id/candidates/:candidateId/reject': 'Reject a resolver candidate',
           'POST /api/v2/leads/:id/contacts/:contactId/primary': 'Promote a contact as the primary route',
           'POST /api/v2/leads/:id/send': 'Send the latest draft now',
+          'POST /api/v2/jobs/:id/retry': 'Retry a failed automation job',
         },
       },
       404,

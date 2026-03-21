@@ -1,19 +1,23 @@
 import {
+  AlertTriangle,
   Bot,
+  Clock3,
   FileText,
   Database,
   Globe,
   Mail,
   MapPinned,
+  RotateCcw,
   Search,
   ShieldCheck,
 } from "lucide-react"
 
+import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PageHeader } from "@/features/permit-pulse/components/page-header"
 import { ProfileSettingsView } from "@/features/permit-pulse/components/profile-settings-view"
 import { SectionCard } from "@/features/permit-pulse/components/section-card"
-import type { AutomationHealth, TenantProfile } from "@/types/permit-pulse"
+import type { AutomationHealth, AutomationJob, TenantProfile } from "@/types/permit-pulse"
 import type { SystemAlert } from "@/features/permit-pulse/lib/operator"
 import { cn } from "@/lib/utils"
 
@@ -56,10 +60,82 @@ function ProviderCard({
   )
 }
 
+function JobStatCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone: "neutral" | "success" | "warning"
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-[24px] border px-4 py-3",
+        tone === "success"
+          ? "border-emerald-200/60 bg-emerald-50/80 dark:border-emerald-900/40 dark:bg-emerald-950/20"
+          : tone === "warning"
+            ? "border-orange-200/60 bg-orange-50/80 dark:border-orange-800/40 dark:bg-orange-950/20"
+            : "border-navy-200/70 bg-cream-50/80 dark:border-dark-border/70 dark:bg-dark-bg",
+      )}
+    >
+      <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-navy-500 dark:text-dark-muted">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold text-navy-900 dark:text-dark-text">{value}</div>
+    </div>
+  )
+}
+
+function formatJobLabel(job: AutomationJob): string {
+  switch (job.jobType) {
+    case "permit_ingest":
+      return "Permit ingest"
+    case "enrichment_batch":
+      return "Enrichment batch"
+    case "lead_enrichment":
+      return "Lead enrichment"
+    case "draft_refresh":
+      return "Draft refresh"
+    case "send":
+      return "Send"
+    case "status_update":
+      return "Status update"
+    case "manual_enrichment":
+      return "Manual enrichment"
+    case "candidate_select":
+      return "Resolver accept"
+    case "candidate_reject":
+      return "Resolver reject"
+    case "primary_contact":
+      return "Primary route"
+    default:
+      return job.jobType
+  }
+}
+
+function formatJobStatus(job: AutomationJob): string {
+  switch (job.status) {
+    case "running":
+      return "Running"
+    case "retrying":
+      return "Retrying"
+    case "succeeded":
+      return "Succeeded"
+    case "failed":
+      return "Failed"
+    default:
+      return "Queued"
+  }
+}
+
 interface SystemViewProps {
   automationHealth: AutomationHealth | null
   alerts: SystemAlert[]
+  jobs: AutomationJob[]
   profile: TenantProfile
+  onRetryJob: (jobId: string) => void
   onUpdateProfile: (patch: Partial<TenantProfile>) => void
   onResetProfile: () => void
 }
@@ -67,10 +143,18 @@ interface SystemViewProps {
 export function SystemView({
   automationHealth,
   alerts,
+  jobs,
   profile,
+  onRetryJob,
   onUpdateProfile,
   onResetProfile,
 }: SystemViewProps) {
+  const jobStats = {
+    running: jobs.filter((job) => job.status === "running" || job.status === "retrying").length,
+    failed: jobs.filter((job) => job.status === "failed").length,
+    succeeded: jobs.filter((job) => job.status === "succeeded").length,
+  }
+  const recentJobs = jobs.slice(0, 8)
   const providers = [
     {
       label: "Supabase",
@@ -211,6 +295,116 @@ export function SystemView({
                       {item.title}
                     </div>
                     <p className="mt-3 text-sm leading-6 text-navy-600 dark:text-dark-muted">{item.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
+            <SectionCard
+              description="Recent automation state, so you can tell whether the machine ran, stalled, or failed without reading raw logs."
+              title="Run ledger"
+            >
+              <div className="grid gap-4 sm:grid-cols-3">
+                <JobStatCard label="Running" tone="neutral" value={jobStats.running} />
+                <JobStatCard label="Failed" tone={jobStats.failed > 0 ? "warning" : "neutral"} value={jobStats.failed} />
+                <JobStatCard
+                  label="Succeeded"
+                  tone={jobStats.succeeded > 0 ? "success" : "neutral"}
+                  value={jobStats.succeeded}
+                />
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {recentJobs.length === 0 ? (
+                  <div className="rounded-[24px] border border-dashed border-navy-200/70 bg-cream-50/80 px-4 py-5 text-sm leading-6 text-navy-600 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-muted">
+                    No automation jobs are logged yet. Once ingest, enrichment, or send runs, they will appear here with clear success or failure state.
+                  </div>
+                ) : (
+                  recentJobs.map((job) => (
+                    <div
+                      key={job.id}
+                      className={cn(
+                        "rounded-[24px] border px-4 py-4",
+                        job.status === "failed"
+                          ? "border-orange-200/70 bg-orange-50/80 dark:border-orange-800/40 dark:bg-orange-950/15"
+                          : job.status === "succeeded"
+                            ? "border-emerald-200/60 bg-emerald-50/70 dark:border-emerald-900/40 dark:bg-emerald-950/15"
+                            : "border-navy-200/70 bg-cream-50/80 dark:border-dark-border/70 dark:bg-dark-bg",
+                      )}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-navy-900 dark:text-dark-text">
+                              {formatJobLabel(job)}
+                            </span>
+                            <span className="rounded-full border border-navy-200/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-navy-500 dark:border-dark-border dark:text-dark-muted">
+                              {formatJobStatus(job)}
+                            </span>
+                            <span className="text-xs text-navy-500 dark:text-dark-muted">
+                              Attempt {job.attemptCount}
+                            </span>
+                          </div>
+                          <div className="text-sm font-medium text-navy-700 dark:text-dark-text/90">{job.summary}</div>
+                          <p className="text-sm leading-6 text-navy-600 dark:text-dark-muted">{job.detail}</p>
+                        </div>
+                        {job.status === "failed" && job.retryable ? (
+                          <Button className="rounded-full" onClick={() => onRetryJob(job.id)} type="button" variant="outline">
+                            <RotateCcw className="mr-2 h-4 w-4" />
+                            Retry
+                          </Button>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-navy-500 dark:text-dark-muted">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Bot className="h-3.5 w-3.5" />
+                          {job.provider || "worker"}
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <Clock3 className="h-3.5 w-3.5" />
+                          {job.finishedAt || job.startedAt || job.createdAt}
+                        </span>
+                        {job.leadId ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            Lead {job.leadId}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              description="Treat these as safe operator answers to the most common question, which is whether retrying is worth your time."
+              title="Recovery guidance"
+            >
+              <div className="space-y-3">
+                {[
+                  {
+                    title: "Ingest failures",
+                    detail: "Usually mean the permit pull or write path stalled. Retry is safe and should not duplicate rows because ingest upserts by permit key.",
+                  },
+                  {
+                    title: "Enrichment failures",
+                    detail: "Usually point to provider timeouts, weak search matches, or temporary API issues. Retry is worth doing once before manual research.",
+                  },
+                  {
+                    title: "Send failures",
+                    detail: "Treat these as sensitive. Retry only after confirming the route is still correct and the latest draft is the one you want going out.",
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.title}
+                    className="rounded-[24px] border border-navy-200/70 bg-cream-50/80 px-4 py-4 dark:border-dark-border/70 dark:bg-dark-bg"
+                  >
+                    <div className="text-sm font-semibold text-navy-900 dark:text-dark-text">{item.title}</div>
+                    <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">{item.detail}</p>
                   </div>
                 ))}
               </div>

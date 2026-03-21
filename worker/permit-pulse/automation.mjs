@@ -58,6 +58,126 @@ const DIRECTORY_DOMAIN_DENYLIST = [
   'nextdoor.com',
 ];
 
+function summarizeError(error) {
+  return error instanceof Error ? error.message : String(error || 'Automation step failed');
+}
+
+function detectJobProvider(error, fallback = 'worker') {
+  const message = normalizeText(summarizeError(error));
+
+  if (message.includes('supabase')) {
+    return 'supabase';
+  }
+  if (message.includes('gmail')) {
+    return 'gmail';
+  }
+  if (message.includes('brave')) {
+    return 'brave';
+  }
+  if (message.includes('google') || message.includes('maps') || message.includes('geocode')) {
+    return 'google-maps';
+  }
+  if (message.includes('firecrawl')) {
+    return 'firecrawl';
+  }
+  if (message.includes('zerobounce')) {
+    return 'zerobounce';
+  }
+  if (message.includes('dob') || message.includes('data.cityofnewyork') || message.includes('rbx6-tga4')) {
+    return 'dob';
+  }
+
+  return fallback;
+}
+
+async function runAutomationJob(gateway, config, work, options = {}) {
+  const startedAt = new Date().toISOString();
+  const existingJob = options.existingJob || null;
+  let job = existingJob;
+
+  if (existingJob) {
+    const patched = await gateway.safePatchAutomationJob(existingJob.id, {
+      status: 'retrying',
+      provider: config.provider || existingJob.provider || 'worker',
+      summary: config.summary || existingJob.summary || '',
+      detail: config.detail || existingJob.detail || '',
+      retryable: Boolean(config.retryable),
+      attempt_count: Math.max(Number(existingJob.attempt_count || 1) + 1, 2),
+      started_at: startedAt,
+      finished_at: null,
+      metadata: {
+        ...(existingJob.metadata || {}),
+        ...(config.metadata || {}),
+        retriedAt: startedAt,
+      },
+    });
+    job = patched[0] || {
+      ...existingJob,
+      status: 'retrying',
+      attempt_count: Math.max(Number(existingJob.attempt_count || 1) + 1, 2),
+      started_at: startedAt,
+      finished_at: null,
+    };
+  } else {
+    const inserted = await gateway.safeInsertAutomationJob({
+      id: createId(),
+      lead_id: config.leadId || null,
+      job_type: config.jobType,
+      status: 'running',
+      provider: config.provider || 'worker',
+      summary: config.summary,
+      detail: config.detail || '',
+      attempt_count: 1,
+      retryable: Boolean(config.retryable),
+      metadata: config.metadata || {},
+      started_at: startedAt,
+      finished_at: null,
+    });
+    job = inserted[0] || null;
+  }
+
+  try {
+    const result = await work(job);
+    const successPayload =
+      typeof config.onSuccess === 'function'
+        ? config.onSuccess(result)
+        : {};
+
+    if (job?.id) {
+      await gateway.safePatchAutomationJob(job.id, {
+        status: 'succeeded',
+        provider: successPayload.provider || config.provider || job.provider || 'worker',
+        summary: successPayload.summary || config.summary,
+        detail: successPayload.detail || config.detail || '',
+        retryable: false,
+        finished_at: new Date().toISOString(),
+        metadata: {
+          ...(job.metadata || {}),
+          ...(successPayload.metadata || {}),
+        },
+      });
+    }
+
+    return result;
+  } catch (error) {
+    if (job?.id) {
+      await gateway.safePatchAutomationJob(job.id, {
+        status: 'failed',
+        provider: detectJobProvider(error, config.provider || job.provider || 'worker'),
+        detail: summarizeError(error),
+        retryable: Boolean(config.retryable),
+        finished_at: new Date().toISOString(),
+        metadata: {
+          ...(job.metadata || {}),
+          error: summarizeError(error),
+        },
+      });
+    }
+
+    throw error;
+  }
+}
+
 function getPermitKey(permit) {
   return (
     permit.job_filing_number ||
@@ -2426,6 +2546,21 @@ function mapSnapshot(snapshot) {
         sentAt: item.sent_at,
         status: item.status,
       })),
+    jobs: (snapshot.jobs || []).map((job) => ({
+      id: job.id,
+      leadId: job.lead_id || null,
+      jobType: job.job_type,
+      status: job.status,
+      provider: job.provider || 'worker',
+      summary: job.summary || '',
+      detail: job.detail || '',
+      attemptCount: job.attempt_count || 1,
+      retryable: Boolean(job.retryable),
+      createdAt: job.created_at,
+      startedAt: job.started_at || null,
+      finishedAt: job.finished_at || null,
+      metadata: job.metadata || {},
+    })),
   };
 }
 
@@ -2482,65 +2617,148 @@ function needsAutomationPass(lead) {
   );
 }
 
-async function runPermitIngestInternal(env, gateway) {
-  const permits = await fetchDobPermits();
-  const leadRows = permits
-    .map((permit) => ({
-      permit,
-      scoreBreakdown: buildLeadScore(permit),
-    }))
-    .filter((entry) => entry.scoreBreakdown.total > 0 && entry.scoreBreakdown.disqualifiers.length === 0)
-    .map((entry) => buildLeadRow(entry.permit, entry.scoreBreakdown));
+async function runPermitIngestInternal(env, gateway, options = {}) {
+  return runAutomationJob(
+    gateway,
+    {
+      jobType: 'permit_ingest',
+      provider: 'dob',
+      summary: 'Scanning NYC DOB permits',
+      detail: 'Pulling fresh permits, scoring fit, and upserting lead rows.',
+      retryable: true,
+      onSuccess: (result) => ({
+        summary:
+          result.ingested > 0
+            ? `Ingested ${result.ingested} leads from ${result.scanned} scanned permits.`
+            : `Scanned ${result.scanned} permits, but none cleared the fit thresholds.`,
+        detail:
+          result.ingested > 0
+            ? 'Permit ingest completed and the lead queue was refreshed.'
+            : 'Permit ingest completed, but nothing new matched the MetroGlassPro profile.',
+        metadata: {
+          scanned: result.scanned,
+          ingested: result.ingested,
+        },
+      }),
+    },
+    async () => {
+      const permits = await fetchDobPermits();
+      const leadRows = permits
+        .map((permit) => ({
+          permit,
+          scoreBreakdown: buildLeadScore(permit),
+        }))
+        .filter((entry) => entry.scoreBreakdown.total > 0 && entry.scoreBreakdown.disqualifiers.length === 0)
+        .map((entry) => buildLeadRow(entry.permit, entry.scoreBreakdown));
 
-  if (leadRows.length === 0) {
-    return {
-      scanned: permits.length,
-      ingested: 0,
-      leads: [],
-    };
-  }
+      if (leadRows.length === 0) {
+        return {
+          scanned: permits.length,
+          ingested: 0,
+          leads: [],
+        };
+      }
 
-  const ingested = await gateway.upsert('leads', leadRows, 'permit_key');
-  return {
-    scanned: permits.length,
-    ingested: ingested.length,
-    leads: ingested,
-  };
+      const ingested = await gateway.upsert('leads', leadRows, 'permit_key');
+      return {
+        scanned: permits.length,
+        ingested: ingested.length,
+        leads: ingested,
+      };
+    },
+    options,
+  );
 }
 
 async function runEnrichmentBatchInternal(env, gateway, candidateLeads = [], options = {}) {
   const limit = options.limit || ENRICHMENT_BATCH_LIMIT;
-  const fallbackQueue =
-    candidateLeads.length > 0
-      ? candidateLeads
-      : await gateway.select('leads', {
-          ordering: [order('score', 'desc'), order('updated_at', 'desc')],
-          pageLimit: Math.max(limit * 4, 16),
-        });
+  return runAutomationJob(
+    gateway,
+    {
+      jobType: 'enrichment_batch',
+      provider: 'worker',
+      summary: 'Running enrichment batch',
+      detail: 'Resolving companies, contact routes, and draft readiness for the top queue.',
+      retryable: true,
+      onSuccess: (result) => ({
+        summary:
+          result.failed > 0
+            ? `Enriched ${result.enriched} leads, ${result.failed} still need attention.`
+            : `Enriched ${result.enriched} leads with ${result.sent} sends completed.`,
+        detail:
+          result.failed > 0
+            ? 'The batch completed, but one or more leads still need a retry or manual review.'
+            : 'The batch completed without a logged failure.',
+        metadata: {
+          attempted: result.attempted,
+          enriched: result.enriched,
+          failed: result.failed,
+          sent: result.sent,
+          failures: result.failures,
+        },
+      }),
+    },
+    async () => {
+      const fallbackQueue =
+        candidateLeads.length > 0
+          ? candidateLeads
+          : await gateway.select('leads', {
+              ordering: [order('score', 'desc'), order('updated_at', 'desc')],
+              pageLimit: Math.max(limit * 4, 16),
+            });
 
-  const queue = [...fallbackQueue]
-    .filter(needsAutomationPass)
-    .sort((left, right) => (right.score || 0) - (left.score || 0))
-    .slice(0, limit);
+      const queue = [...fallbackQueue]
+        .filter(needsAutomationPass)
+        .sort((left, right) => (right.score || 0) - (left.score || 0))
+        .slice(0, limit);
 
-  const enriched = [];
-  let sent = 0;
+      const enriched = [];
+      const failures = [];
+      let sent = 0;
 
-  for (const lead of queue) {
-    const enrichedLead = await enrichLead(env, gateway, lead);
-    enriched.push(enrichedLead);
-    const sendResult = await maybeAutoSend(env, gateway, enrichedLead);
-    if (sendResult.sent) {
-      sent += 1;
-    }
-  }
+      for (const lead of queue) {
+        try {
+          const enrichedLead = await runAutomationJob(
+            gateway,
+            {
+              jobType: 'lead_enrichment',
+              provider: 'worker',
+              leadId: lead.id,
+              summary: `Refreshing ${lead.address}`,
+              detail: 'Running company, contact, and draft resolution for one lead.',
+              retryable: true,
+              onSuccess: () => ({
+                summary: `Enriched ${lead.address}`,
+                detail: 'Resolver data, contact routes, and outreach draft were refreshed for this lead.',
+              }),
+            },
+            async () => enrichLead(env, gateway, lead),
+          );
 
-  return {
-    attempted: queue.length,
-    enriched: enriched.length,
-    sent,
-    leads: enriched,
-  };
+          enriched.push(enrichedLead);
+          const sendResult = await maybeAutoSend(env, gateway, enrichedLead);
+          if (sendResult.sent) {
+            sent += 1;
+          }
+        } catch (error) {
+          failures.push({
+            leadId: lead.id,
+            error: summarizeError(error),
+          });
+        }
+      }
+
+      return {
+        attempted: queue.length,
+        enriched: enriched.length,
+        failed: failures.length,
+        failures,
+        sent,
+        leads: enriched,
+      };
+    },
+    options,
+  );
 }
 
 export async function runPermitIngest(env) {
@@ -2795,275 +3013,510 @@ async function setPrimaryContactSelection(gateway, lead, contactId) {
   await recomputeLeadAutomationState(gateway, latestLead);
 }
 
+async function loadLeadForAction(gateway, leadId) {
+  return (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+}
+
 export async function getPermitAutomationSnapshot(env) {
   const gateway = createSupabaseGateway(env);
   const snapshot = await gateway.getQueueSnapshot();
   return mapSnapshot(snapshot);
 }
 
-export async function enrichLeadNow(env, leadId) {
-  const gateway = createSupabaseGateway(env);
-  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+async function enrichLeadNowInternal(env, gateway, leadId, options = {}) {
+  const lead = await loadLeadForAction(gateway, leadId);
   if (!lead) {
     throw new Error('Lead not found');
   }
 
-  await enrichLead(env, gateway, lead, { force: true });
+  await runAutomationJob(
+    gateway,
+    {
+      jobType: 'lead_enrichment',
+      provider: 'worker',
+      leadId: lead.id,
+      summary: `Refreshing ${lead.address}`,
+      detail: 'Running manual enrichment for the selected lead.',
+      retryable: true,
+      onSuccess: () => ({
+        summary: `Enrichment refreshed for ${lead.address}`,
+        detail: 'Manual enrichment completed and the route decision was recalculated.',
+      }),
+    },
+    async () => enrichLead(env, gateway, lead, { force: true }),
+    options,
+  );
+
+  return getPermitAutomationSnapshot(env);
+}
+
+export async function enrichLeadNow(env, leadId) {
+  const gateway = createSupabaseGateway(env);
+  return enrichLeadNowInternal(env, gateway, leadId);
+}
+
+async function refreshLeadDraftNowInternal(env, gateway, leadId, options = {}) {
+  const lead = await loadLeadForAction(gateway, leadId);
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  await runAutomationJob(
+    gateway,
+    {
+      jobType: 'draft_refresh',
+      provider: 'worker',
+      leadId: lead.id,
+      summary: `Refreshing draft for ${lead.address}`,
+      detail: 'Rebuilding the outreach draft from the latest resolver data.',
+      retryable: true,
+      onSuccess: () => ({
+        summary: `Draft refreshed for ${lead.address}`,
+        detail: 'The worker rebuilt the latest outreach draft from resolver-backed data.',
+      }),
+    },
+    async () => {
+      const context = await loadLeadAutomationContext(gateway, lead.id);
+      const draft = buildDraft({ ...lead, best_channel: lead.best_channel || 'email' }, context.company, context.contacts);
+
+      await upsertDraftRecord(
+        gateway,
+        lead.id,
+        {
+          channel: lead.best_channel || 'email',
+          recipient: draft.recipient || '',
+          recipientType: draft.recipientType || lead.best_channel || 'email',
+          subject: draft.subject,
+          body: draft.body,
+          pluginLine: draft.pluginLine,
+          callOpener: draft.callOpener,
+          followUpNote: draft.followUpNote,
+          status: 'draft',
+          metadata: {
+            introLine: draft.introLine,
+            refreshedFromResolver: true,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+        context.latestDraft,
+      );
+
+      await recomputeLeadAutomationState(gateway, lead, { promoteDrafted: true });
+    },
+    options,
+  );
+
   return getPermitAutomationSnapshot(env);
 }
 
 export async function refreshLeadDraftNow(env, leadId) {
   const gateway = createSupabaseGateway(env);
-  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+  return refreshLeadDraftNowInternal(env, gateway, leadId);
+}
+
+async function selectLeadCandidateInternal(env, gateway, leadId, candidateId, options = {}) {
+  const lead = await loadLeadForAction(gateway, leadId);
   if (!lead) {
     throw new Error('Lead not found');
   }
 
-  const context = await loadLeadAutomationContext(gateway, lead.id);
-  const draft = buildDraft({ ...lead, best_channel: lead.best_channel || 'email' }, context.company, context.contacts);
-
-  await upsertDraftRecord(
+  await runAutomationJob(
     gateway,
-    lead.id,
     {
-      channel: lead.best_channel || 'email',
-      recipient: draft.recipient || '',
-      recipientType: draft.recipientType || lead.best_channel || 'email',
-      subject: draft.subject,
-      body: draft.body,
-      pluginLine: draft.pluginLine,
-      callOpener: draft.callOpener,
-      followUpNote: draft.followUpNote,
-      status: 'draft',
-      metadata: {
-        introLine: draft.introLine,
-        refreshedFromResolver: true,
-        updatedAt: new Date().toISOString(),
-      },
+      jobType: 'candidate_select',
+      provider: 'worker',
+      leadId: lead.id,
+      summary: `Accepting resolver candidate for ${lead.address}`,
+      detail: 'Promoting the selected company or person candidate into the trusted path.',
+      retryable: false,
+      onSuccess: () => ({
+        summary: `Resolver candidate accepted for ${lead.address}`,
+        detail: 'The chosen candidate is now driving trust, route, and draft decisions.',
+      }),
     },
-    context.latestDraft,
+    async () => applyCandidateDecision(gateway, lead, candidateId, 'select'),
+    options,
   );
 
-  await recomputeLeadAutomationState(gateway, lead, { promoteDrafted: true });
+  return getPermitAutomationSnapshot(env);
+}
+
+async function rejectLeadCandidateInternal(env, gateway, leadId, candidateId, options = {}) {
+  const lead = await loadLeadForAction(gateway, leadId);
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  await runAutomationJob(
+    gateway,
+    {
+      jobType: 'candidate_reject',
+      provider: 'worker',
+      leadId: lead.id,
+      summary: `Rejecting resolver candidate for ${lead.address}`,
+      detail: 'Removing a candidate from the trusted resolver path.',
+      retryable: false,
+      onSuccess: () => ({
+        summary: `Resolver candidate rejected for ${lead.address}`,
+        detail: 'The rejected candidate was removed from the trusted resolver path.',
+      }),
+    },
+    async () => applyCandidateDecision(gateway, lead, candidateId, 'reject'),
+    options,
+  );
+
+  return getPermitAutomationSnapshot(env);
+}
+
+async function setLeadPrimaryContactInternal(env, gateway, leadId, contactId, options = {}) {
+  const lead = await loadLeadForAction(gateway, leadId);
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  await runAutomationJob(
+    gateway,
+    {
+      jobType: 'primary_contact',
+      provider: 'worker',
+      leadId: lead.id,
+      summary: `Promoting a primary route for ${lead.address}`,
+      detail: 'Making one contact the default route for channel choice and send.',
+      retryable: false,
+      onSuccess: () => ({
+        summary: `Primary route updated for ${lead.address}`,
+        detail: 'The selected contact now anchors route choice and readiness.',
+      }),
+    },
+    async () => setPrimaryContactSelection(gateway, lead, contactId),
+    options,
+  );
+
+  return getPermitAutomationSnapshot(env);
+}
+
+function getStateMutationJobConfig(lead, patch) {
+  if (patch.enrichment) {
+    return {
+      jobType: 'manual_enrichment',
+      summary: `Saving manual enrichment for ${lead.address}`,
+      detail: 'Persisting workspace research and refreshing the decision state.',
+    };
+  }
+
+  if (patch.draft) {
+    return {
+      jobType: 'draft_refresh',
+      summary: `Saving draft changes for ${lead.address}`,
+      detail: 'Persisting outreach edits and keeping the route state in sync.',
+    };
+  }
+
+  return {
+    jobType: 'status_update',
+    summary: `Updating pipeline state for ${lead.address}`,
+    detail: 'Persisting a status change and refreshing the next-action state.',
+  };
+}
+
+async function updateLeadAutomationStateInternal(env, gateway, leadId, patch, options = {}) {
+  const lead = await loadLeadForAction(gateway, leadId);
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  const jobConfig = getStateMutationJobConfig(lead, patch);
+
+  await runAutomationJob(
+    gateway,
+    {
+      jobType: jobConfig.jobType,
+      provider: 'worker',
+      leadId: lead.id,
+      summary: jobConfig.summary,
+      detail: jobConfig.detail,
+      retryable: false,
+      onSuccess: () => ({
+        summary: jobConfig.summary.replace(/^Saving|^Updating/, 'Updated'),
+        detail: 'The worker saved the change and recalculated the decision state.',
+      }),
+    },
+    async () => {
+      let workingLead = lead;
+      let explicitStatus = '';
+
+      if (patch.status) {
+        explicitStatus = patch.status;
+        const updated = await gateway.patch('leads', [eq('id', lead.id)], { status: patch.status });
+        workingLead = updated[0] || { ...workingLead, status: patch.status };
+        await gateway.insert('activity_log', {
+          id: createId(),
+          lead_id: lead.id,
+          event_type: 'status_updated',
+          summary: 'Lead status updated',
+          detail: `Status moved to ${patch.status}`,
+          metadata: {},
+        });
+      }
+
+      if (patch.enrichment) {
+        const existingContacts = await gateway.select('contacts', {
+          filters: [eq('lead_id', lead.id)],
+          ordering: [order('is_primary', 'desc'), order('confidence', 'desc')],
+          pageLimit: 100,
+        });
+        const nextManualEnrichment = {
+          ...(workingLead.enrichment_summary?.manualEnrichment || {}),
+          ...patch.enrichment,
+        };
+        const preservedContacts = existingContacts.filter((contact) => contact.source !== 'manual');
+        const manualContacts = [];
+
+        if (
+          nextManualEnrichment.directEmail ||
+          nextManualEnrichment.phone ||
+          nextManualEnrichment.companyWebsite ||
+          nextManualEnrichment.linkedInUrl ||
+          nextManualEnrichment.instagramUrl ||
+          nextManualEnrichment.contactFormUrl
+        ) {
+          manualContacts.push({
+            id: createId(),
+            name: nextManualEnrichment.contactPersonName || '',
+            role: nextManualEnrichment.contactRole || '',
+            email: nextManualEnrichment.directEmail || '',
+            phone: nextManualEnrichment.phone || '',
+            website_url: nextManualEnrichment.companyWebsite || '',
+            linkedin_url: nextManualEnrichment.linkedInUrl || '',
+            instagram_url: nextManualEnrichment.instagramUrl || '',
+            contact_form_url: nextManualEnrichment.contactFormUrl || '',
+            type: nextManualEnrichment.directEmail ? 'verified' : 'public',
+            confidence: nextManualEnrichment.directEmail ? 88 : 70,
+            source: 'manual',
+            verified: Boolean(nextManualEnrichment.directEmail),
+            is_primary: true,
+          });
+        }
+
+        if (nextManualEnrichment.genericEmail) {
+          manualContacts.push({
+            id: createId(),
+            name: nextManualEnrichment.contactPersonName || '',
+            role: nextManualEnrichment.contactRole || '',
+            email: nextManualEnrichment.genericEmail,
+            phone: nextManualEnrichment.phone || '',
+            website_url: nextManualEnrichment.companyWebsite || '',
+            linkedin_url: nextManualEnrichment.linkedInUrl || '',
+            instagram_url: nextManualEnrichment.instagramUrl || '',
+            contact_form_url: nextManualEnrichment.contactFormUrl || '',
+            type: 'public',
+            confidence: 72,
+            source: 'manual',
+            verified: false,
+            is_primary: manualContacts.length === 0,
+          });
+        }
+
+        const updated = await gateway.patch('leads', [eq('id', lead.id)], {
+          enrichment_summary: {
+            ...(workingLead.enrichment_summary || {}),
+            manualEnrichment: nextManualEnrichment,
+          },
+        });
+        workingLead = updated[0] || {
+          ...workingLead,
+          enrichment_summary: {
+            ...(workingLead.enrichment_summary || {}),
+            manualEnrichment: nextManualEnrichment,
+          },
+        };
+        await gateway.replaceContacts(lead.id, [...preservedContacts, ...manualContacts]);
+        await gateway.insert('activity_log', {
+          id: createId(),
+          lead_id: lead.id,
+          event_type: 'manual_enrichment',
+          summary: 'Lead enrichment updated',
+          detail: 'Manual enrichment changes were saved from the workspace.',
+          metadata: {},
+        });
+      }
+
+      if (patch.draft) {
+        const hasDraftField = (field) => Object.prototype.hasOwnProperty.call(patch.draft, field);
+
+        await upsertDraftRecord(gateway, lead.id, {
+          channel: 'email',
+          recipient: hasDraftField('recipient') ? patch.draft.recipient || '' : undefined,
+          recipientType: hasDraftField('recipientType') ? patch.draft.recipientType || 'manual' : undefined,
+          subject: hasDraftField('subject') ? patch.draft.subject || '' : undefined,
+          body: hasDraftField('body') ? patch.draft.body || '' : undefined,
+          pluginLine: hasDraftField('pluginLine') ? patch.draft.pluginLine || '' : undefined,
+          callOpener: hasDraftField('callOpener') ? patch.draft.callOpener || '' : undefined,
+          followUpNote: hasDraftField('followUpNote') ? patch.draft.followUpNote || '' : undefined,
+          status: 'draft',
+          metadata: {
+            introLine: hasDraftField('introLine') ? patch.draft.introLine || '' : undefined,
+            updatedAt: new Date().toISOString(),
+          },
+        });
+      }
+
+      await recomputeLeadAutomationState(gateway, workingLead, {
+        promoteDrafted: Boolean(patch.draft),
+        overrideStatus: explicitStatus || undefined,
+      });
+    },
+    options,
+  );
   return getPermitAutomationSnapshot(env);
 }
 
 export async function selectLeadCandidate(env, leadId, candidateId) {
   const gateway = createSupabaseGateway(env);
-  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
-  if (!lead) {
-    throw new Error('Lead not found');
-  }
-
-  await applyCandidateDecision(gateway, lead, candidateId, 'select');
-  return getPermitAutomationSnapshot(env);
+  return selectLeadCandidateInternal(env, gateway, leadId, candidateId);
 }
 
 export async function rejectLeadCandidate(env, leadId, candidateId) {
   const gateway = createSupabaseGateway(env);
-  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
-  if (!lead) {
-    throw new Error('Lead not found');
-  }
-
-  await applyCandidateDecision(gateway, lead, candidateId, 'reject');
-  return getPermitAutomationSnapshot(env);
+  return rejectLeadCandidateInternal(env, gateway, leadId, candidateId);
 }
 
 export async function setLeadPrimaryContact(env, leadId, contactId) {
   const gateway = createSupabaseGateway(env);
-  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
-  if (!lead) {
-    throw new Error('Lead not found');
-  }
-
-  await setPrimaryContactSelection(gateway, lead, contactId);
-  return getPermitAutomationSnapshot(env);
+  return setLeadPrimaryContactInternal(env, gateway, leadId, contactId);
 }
 
 export async function updateLeadAutomationState(env, leadId, patch) {
   const gateway = createSupabaseGateway(env);
-  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
+  return updateLeadAutomationStateInternal(env, gateway, leadId, patch);
+}
+
+async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
+  const leadRow = await loadLeadForAction(gateway, leadId);
+  if (!leadRow) {
+    throw new Error('Lead not found');
+  }
+
+  const snapshot = await gateway.getQueueSnapshot();
+  const mapped = mapSnapshot(snapshot);
+  const lead = mapped.leads.find((item) => item.id === leadRow.permit_key) || null;
   if (!lead) {
     throw new Error('Lead not found');
   }
 
-  let workingLead = lead;
-  let explicitStatus = '';
+  return runAutomationJob(
+    gateway,
+    {
+      jobType: 'send',
+      provider: 'gmail',
+      leadId: leadRow.id,
+      summary: `Sending outreach for ${lead.address}`,
+      detail: 'Delivering the current email draft through Gmail.',
+      retryable: true,
+      onSuccess: (result) => ({
+        summary: `Sent outreach for ${lead.address}`,
+        detail: result.recipient ? `Email delivered to ${result.recipient}.` : 'The latest draft was sent.',
+        metadata: {
+          recipient: result.recipient || '',
+          sentAt: result.sentAt || null,
+        },
+      }),
+    },
+    async () => {
+      const contacts = lead.contacts || [];
+      const latestOutreach = lead.outreachHistory?.[0];
+      if (!latestOutreach?.subject || !latestOutreach?.body) {
+        throw new Error('No draft available to send');
+      }
 
-  if (patch.status) {
-    explicitStatus = patch.status;
-    const updated = await gateway.patch('leads', [eq('id', lead.id)], { status: patch.status });
-    workingLead = updated[0] || { ...workingLead, status: patch.status };
-    await gateway.insert('activity_log', {
-      id: createId('activity'),
-      lead_id: lead.id,
-      event_type: 'status_updated',
-      summary: 'Lead status updated',
-      detail: `Status moved to ${patch.status}`,
-      metadata: {},
-    });
-  }
+      const primaryContact = contacts.find((contact) => contact.email) || null;
+      if (!primaryContact?.email) {
+        throw new Error('No email available');
+      }
 
-  if (patch.enrichment) {
-    const existingContacts = await gateway.select('contacts', {
-      filters: [eq('lead_id', lead.id)],
-      ordering: [order('is_primary', 'desc'), order('confidence', 'desc')],
-      pageLimit: 100,
-    });
-    const nextManualEnrichment = {
-      ...(workingLead.enrichment_summary?.manualEnrichment || {}),
-      ...patch.enrichment,
-    };
-    const preservedContacts = existingContacts.filter((contact) => contact.source !== 'manual');
-    const manualContacts = [];
-
-    if (
-      nextManualEnrichment.directEmail ||
-      nextManualEnrichment.phone ||
-      nextManualEnrichment.companyWebsite ||
-      nextManualEnrichment.linkedInUrl ||
-      nextManualEnrichment.instagramUrl ||
-      nextManualEnrichment.contactFormUrl
-    ) {
-      manualContacts.push({
-        id: createId('contact'),
-        name: nextManualEnrichment.contactPersonName || '',
-        role: nextManualEnrichment.contactRole || '',
-        email: nextManualEnrichment.directEmail || '',
-        phone: nextManualEnrichment.phone || '',
-        website_url: nextManualEnrichment.companyWebsite || '',
-        linkedin_url: nextManualEnrichment.linkedInUrl || '',
-        instagram_url: nextManualEnrichment.instagramUrl || '',
-        contact_form_url: nextManualEnrichment.contactFormUrl || '',
-        type: nextManualEnrichment.directEmail ? 'verified' : 'public',
-        confidence: nextManualEnrichment.directEmail ? 88 : 70,
-        source: 'manual',
-        verified: Boolean(nextManualEnrichment.directEmail),
-        is_primary: true,
+      const gmailResult = await sendAutomationEmail(env, {
+        recipient: primaryContact.email,
+        subject: latestOutreach.subject,
+        body: latestOutreach.body,
       });
-    }
 
-    if (nextManualEnrichment.genericEmail) {
-      manualContacts.push({
-        id: createId('contact'),
-        name: nextManualEnrichment.contactPersonName || '',
-        role: nextManualEnrichment.contactRole || '',
-        email: nextManualEnrichment.genericEmail,
-        phone: nextManualEnrichment.phone || '',
-        website_url: nextManualEnrichment.companyWebsite || '',
-        linkedin_url: nextManualEnrichment.linkedInUrl || '',
-        instagram_url: nextManualEnrichment.instagramUrl || '',
-        contact_form_url: nextManualEnrichment.contactFormUrl || '',
-        type: 'public',
-        confidence: 72,
-        source: 'manual',
-        verified: false,
-        is_primary: manualContacts.length === 0,
-      });
-    }
+      const sentAt = new Date().toISOString();
+      await Promise.all([
+        gateway.patch('outreach', [eq('id', latestOutreach.id)], {
+          status: 'sent',
+          sent_at: sentAt,
+          gmail_message_id: gmailResult.id || '',
+          gmail_thread_id: gmailResult.threadId || '',
+          recipient: primaryContact.email,
+          recipient_type: primaryContact.type,
+        }),
+        gateway.patch('leads', [eq('permit_key', lead.id)], {
+          status: 'contacted',
+          last_contacted_at: sentAt,
+          last_sent_at: sentAt,
+        }),
+      ]);
 
-    const updated = await gateway.patch('leads', [eq('id', lead.id)], {
-      enrichment_summary: {
-        ...(workingLead.enrichment_summary || {}),
-        manualEnrichment: nextManualEnrichment,
-      },
-    });
-    workingLead = updated[0] || {
-      ...workingLead,
-      enrichment_summary: {
-        ...(workingLead.enrichment_summary || {}),
-        manualEnrichment: nextManualEnrichment,
-      },
-    };
-    await gateway.replaceContacts(lead.id, [...preservedContacts, ...manualContacts]);
-    await gateway.insert('activity_log', {
-      id: createId('activity'),
-      lead_id: lead.id,
-      event_type: 'manual_enrichment',
-      summary: 'Lead enrichment updated',
-      detail: 'Manual enrichment changes were saved from the workspace.',
-      metadata: {},
-    });
-  }
+      const latestLead = (await gateway.getLeadById(leadRow.id)) || leadRow;
+      if (latestLead) {
+        await recomputeLeadAutomationState(gateway, latestLead, {
+          overrideStatus: 'contacted',
+        });
+      }
 
-  if (patch.draft) {
-    const hasDraftField = (field) => Object.prototype.hasOwnProperty.call(patch.draft, field);
-
-    await upsertDraftRecord(gateway, lead.id, {
-      channel: 'email',
-      recipient: hasDraftField('recipient') ? patch.draft.recipient || '' : undefined,
-      recipientType: hasDraftField('recipientType') ? patch.draft.recipientType || 'manual' : undefined,
-      subject: hasDraftField('subject') ? patch.draft.subject || '' : undefined,
-      body: hasDraftField('body') ? patch.draft.body || '' : undefined,
-      pluginLine: hasDraftField('pluginLine') ? patch.draft.pluginLine || '' : undefined,
-      callOpener: hasDraftField('callOpener') ? patch.draft.callOpener || '' : undefined,
-      followUpNote: hasDraftField('followUpNote') ? patch.draft.followUpNote || '' : undefined,
-      status: 'draft',
-      metadata: {
-        introLine: hasDraftField('introLine') ? patch.draft.introLine || '' : undefined,
-        updatedAt: new Date().toISOString(),
-      },
-    });
-  }
-
-  await recomputeLeadAutomationState(gateway, workingLead, {
-    promoteDrafted: Boolean(patch.draft),
-    overrideStatus: explicitStatus || undefined,
-  });
-
-  return getPermitAutomationSnapshot(env);
+      return { success: true, recipient: primaryContact.email, sentAt };
+    },
+    options,
+  );
 }
 
 export async function sendLeadNow(env, leadId) {
   const gateway = createSupabaseGateway(env);
-  const snapshot = await gateway.getQueueSnapshot();
-  const mapped = mapSnapshot(snapshot);
-  const lead = mapped.leads.find((item) => item.id === leadId);
-  if (!lead) {
-    throw new Error('Lead not found');
+  return sendLeadNowInternal(env, gateway, leadId);
+}
+
+export async function retryAutomationJob(env, jobId) {
+  const gateway = createSupabaseGateway(env);
+  const job = await gateway.getAutomationJobById(jobId);
+  if (!job) {
+    throw new Error('Automation job not found');
   }
 
-  const contacts = lead.contacts || [];
-  const latestOutreach = lead.outreachHistory?.[0];
-  if (!latestOutreach?.subject || !latestOutreach?.body) {
-    throw new Error('No draft available to send');
+  if (!job.retryable) {
+    throw new Error('This job is not retryable');
   }
 
-  const primaryContact = contacts.find((contact) => contact.email) || null;
-  if (!primaryContact?.email) {
-    throw new Error('No email available');
+  switch (job.job_type) {
+    case 'permit_ingest':
+      await runPermitIngestInternal(env, gateway, { existingJob: job });
+      break;
+    case 'enrichment_batch':
+      await runEnrichmentBatchInternal(env, gateway, [], {
+        limit: ENRICHMENT_BATCH_LIMIT,
+        existingJob: job,
+      });
+      break;
+    case 'lead_enrichment':
+      if (!job.lead_id) {
+        throw new Error('The failed enrichment job is missing its lead reference');
+      }
+      await enrichLeadNowInternal(env, gateway, job.lead_id, { existingJob: job });
+      break;
+    case 'draft_refresh':
+      if (!job.lead_id) {
+        throw new Error('The failed draft job is missing its lead reference');
+      }
+      await refreshLeadDraftNowInternal(env, gateway, job.lead_id, { existingJob: job });
+      break;
+    case 'send':
+      if (!job.lead_id) {
+        throw new Error('The failed send job is missing its lead reference');
+      }
+      await sendLeadNowInternal(env, gateway, job.lead_id, { existingJob: job });
+      break;
+    default:
+      throw new Error('Retry is not supported for this job type yet');
   }
 
-  const gmailResult = await sendAutomationEmail(env, {
-    recipient: primaryContact.email,
-    subject: latestOutreach.subject,
-    body: latestOutreach.body,
-  });
-
-  const sentAt = new Date().toISOString();
-  await Promise.all([
-    gateway.patch('outreach', [eq('id', latestOutreach.id)], {
-      status: 'sent',
-      sent_at: sentAt,
-      gmail_message_id: gmailResult.id || '',
-      gmail_thread_id: gmailResult.threadId || '',
-      recipient: primaryContact.email,
-      recipient_type: primaryContact.type,
-    }),
-    gateway.patch('leads', [eq('permit_key', leadId)], {
-      status: 'contacted',
-      last_contacted_at: sentAt,
-      last_sent_at: sentAt,
-    }),
-  ]);
-
-  const latestLead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
-  if (latestLead) {
-    await recomputeLeadAutomationState(gateway, latestLead, {
-      overrideStatus: 'contacted',
-    });
-  }
-
-  return { success: true, recipient: primaryContact.email, sentAt };
+  return getPermitAutomationSnapshot(env);
 }
