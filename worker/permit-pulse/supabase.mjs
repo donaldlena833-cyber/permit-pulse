@@ -49,8 +49,12 @@ function isMissingRelationError(error, table) {
   return (
     message.includes('42P01') ||
     message.includes(`relation "${table}" does not exist`) ||
+    message.includes(`relation "public.${table}" does not exist`) ||
     message.includes(`Could not find the table '${table}'`) ||
-    message.includes(`Could not find the relation '${table}'`)
+    message.includes(`Could not find the relation '${table}'`) ||
+    message.includes(`Could not find the table 'public.${table}'`) ||
+    message.includes(`Could not find the relation 'public.${table}'`) ||
+    (message.includes('schema cache') && message.includes(table))
   );
 }
 
