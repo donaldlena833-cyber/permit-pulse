@@ -29,8 +29,8 @@ function clamp(value, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
 }
 
-function createId(prefix) {
-  return `${prefix}_${crypto.randomUUID()}`;
+function createId() {
+  return crypto.randomUUID();
 }
 
 function getPermitKey(permit) {
