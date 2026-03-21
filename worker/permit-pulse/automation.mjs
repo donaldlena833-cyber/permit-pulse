@@ -1598,7 +1598,7 @@ export async function getPermitAutomationSnapshot(env) {
 
 export async function enrichLeadNow(env, leadId) {
   const gateway = createSupabaseGateway(env);
-  const lead = (await gateway.getLeadById(leadId)) || (await gateway.getLeadByPermitKey(leadId));
+  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
   if (!lead) {
     throw new Error('Lead not found');
   }
@@ -1609,7 +1609,7 @@ export async function enrichLeadNow(env, leadId) {
 
 export async function updateLeadAutomationState(env, leadId, patch) {
   const gateway = createSupabaseGateway(env);
-  const lead = (await gateway.getLeadById(leadId)) || (await gateway.getLeadByPermitKey(leadId));
+  const lead = (await gateway.getLeadByPermitKey(leadId)) || (await gateway.getLeadById(leadId));
   if (!lead) {
     throw new Error('Lead not found');
   }
