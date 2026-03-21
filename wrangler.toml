@@ -11,7 +11,7 @@ crons = ["0 12 * * *", "0 23 * * *"]
 NOTIFY_EMAIL = "operations@metroglasspro.com"
 GMAIL_SENDER = "operations@metroglasspro.com"
 OUTREACH_ATTACHMENT_KEY = "default_outreach_attachment"
-OUTREACH_ATTACHMENT_NAME = "permit-pulse.pdf"
+OUTREACH_ATTACHMENT_NAME = "MetroGlass Pro - About Us.pdf"
 OUTREACH_ATTACHMENT_CONTENT_TYPE = "application/pdf"
 
 # KV namespace — stores picked architects + email draft queue
@@ -35,4 +35,4 @@ id = "6bd0ca87c13d448c80381159511f8e40"
 # npx wrangler secret put SUPABASE_URL            — Supabase project URL
 # npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY — preferred for secure worker-only REST access
 # npx wrangler secret put SUPABASE_ANON_KEY       — fallback only, keep temporarily while migrating
-# npx wrangler kv key put --binding=PERMIT_PULSE default_outreach_attachment --path /Users/donaldlena/Downloads/permit-pulse.pdf
+# npx wrangler kv key put --binding=PERMIT_PULSE default_outreach_attachment --path "/Users/donaldlena/Downloads/MetroGlass Pro - About Us.pdf"
