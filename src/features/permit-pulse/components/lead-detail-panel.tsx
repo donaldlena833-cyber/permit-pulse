@@ -393,25 +393,27 @@ export function LeadDetailPanel({
   const propertySourceTags = Array.isArray(lead.propertyProfile?.sourceTags) ? lead.propertyProfile.sourceTags : []
   const confidenceTags = Array.isArray(lead.enrichment?.confidenceTags) ? lead.enrichment.confidenceTags : []
 
+  const chosenContact = contacts.find((contact) => contact.isPrimary) || contacts[0] || null
+  const alternativeContacts = chosenContact ? contacts.filter((contact) => contact.id !== chosenContact.id) : contacts
   const website =
+    chosenContact?.website ||
     lead.enrichment.companyWebsite ||
     lead.companyProfile.website ||
     contacts.find((contact) => contact.website)?.website ||
     ""
   const primaryEmail =
+    chosenContact?.email ||
     lead.enrichment.directEmail ||
     lead.enrichment.genericEmail ||
     contacts.find((contact) => contact.email)?.email ||
     ""
-  const phone = lead.enrichment.phone || contacts.find((contact) => contact.phone)?.phone || ""
+  const phone = chosenContact?.phone || lead.enrichment.phone || contacts.find((contact) => contact.phone)?.phone || ""
   const linkedIn =
+    chosenContact?.linkedInUrl ||
     lead.enrichment.linkedInUrl ||
     lead.companyProfile.linkedInUrl ||
     contacts.find((contact) => contact.linkedInUrl)?.linkedInUrl ||
     ""
-
-  const chosenContact = contacts.find((contact) => contact.isPrimary) || contacts[0] || null
-  const alternativeContacts = chosenContact ? contacts.filter((contact) => contact.id !== chosenContact.id) : contacts
   const companyCandidates = resolutionCandidates.filter((candidate) => candidate.type === "company")
   const personCandidates = resolutionCandidates.filter((candidate) => candidate.type === "person")
   const selectedCompanyCandidate = companyCandidates.find((candidate) => candidate.status === "selected") || null
