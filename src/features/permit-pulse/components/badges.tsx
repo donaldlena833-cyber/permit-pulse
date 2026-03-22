@@ -7,6 +7,7 @@ import type {
   LeadStatus,
   LeadTier,
   PriorityLabel,
+  QualityTier,
 } from "@/types/permit-pulse"
 import { cn } from "@/lib/utils"
 
@@ -94,6 +95,23 @@ export function StatusBadge({ status }: { status: LeadStatus }) {
   return (
     <Badge className={cn("rounded-full px-3 py-1 text-[11px] font-medium", toneClasses(tone))}>
       {STATUS_LABELS[status]}
+    </Badge>
+  )
+}
+
+export function QualityTierBadge({ tier }: { tier: QualityTier }) {
+  const tone =
+    tier === "hot"
+      ? "warm"
+      : tier === "warm"
+        ? "olive"
+        : tier === "cold"
+          ? "neutral"
+          : "danger"
+
+  return (
+    <Badge className={cn("rounded-full px-3 py-1 text-[11px] font-medium", toneClasses(tone))}>
+      Quality {tier}
     </Badge>
   )
 }

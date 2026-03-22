@@ -1,5 +1,7 @@
 export type LeadTier = "hot" | "warm" | "cold"
 
+export type QualityTier = "hot" | "warm" | "cold" | "dead"
+
 export type ContactabilityLabel = "Excellent" | "Good" | "Fair" | "Weak"
 
 export type PriorityLabel =
@@ -132,6 +134,9 @@ export interface ScoreBreakdown {
   reasons: string[]
   disqualifiers: string[]
   summary: string
+  relevanceScore?: number
+  relevanceKeyword?: string
+  serviceAngle?: string
 }
 
 export interface ContactabilityBreakdown {
@@ -425,6 +430,10 @@ export interface PermitLead extends PermitRecord {
   id: string
   score: number
   scoreBreakdown: ScoreBreakdown
+  relevanceScore: number
+  relevanceKeyword: string
+  serviceAngle: string
+  qualityTier: QualityTier
   leadTier: LeadTier
   contactability: ContactabilityBreakdown
   nextAction: NextActionRecommendation

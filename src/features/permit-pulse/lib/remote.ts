@@ -6,6 +6,7 @@ import type {
   PermitLead,
   SentLogEntry,
 } from "@/types/permit-pulse"
+import { getAccessToken } from "@/features/auth/lib/session"
 
 interface AutomationSnapshot {
   leads: PermitLead[]
@@ -27,7 +28,14 @@ function getApiBase(): string {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${getApiBase()}${path}`, init)
+  const accessToken = getAccessToken()
+  const response = await fetch(`${getApiBase()}${path}`, {
+    ...init,
+    headers: {
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(init?.headers ?? {}),
+    },
+  })
   const text = await response.text()
   let payload: unknown = null
 

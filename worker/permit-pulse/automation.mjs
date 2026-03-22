@@ -5,8 +5,10 @@ import {
   DEFAULT_SCAN_WINDOW_DAYS,
   HIGH_VALUE_SCORE,
   METROGLASS_PROFILE,
+  MIN_RELEVANCE_THRESHOLD,
   NYC_BUSINESS_HOURS,
   NYC_TIME_ZONE,
+  PERMIT_RELEVANCE_RULES,
   PLUGIN_LINES,
 } from './config.mjs';
 import { createSupabaseGateway, eq, gte, order } from './supabase.mjs';
@@ -282,25 +284,131 @@ function getPluginLine(seed) {
   return PLUGIN_LINES[hashString(seed) % PLUGIN_LINES.length];
 }
 
+function getPermitRelevance(permit) {
+  const searchable = normalizeText([
+    permit.job_description,
+    permit.work_type,
+    permit.filing_reason,
+  ].join(' '));
+
+  const match = PERMIT_RELEVANCE_RULES
+    .filter((rule) => searchable.includes(normalizeText(rule.keyword)))
+    .sort((left, right) => right.score - left.score)[0];
+
+  if (!match) {
+    return {
+      score: 0.3,
+      keyword: 'general renovation',
+      angle: 'custom glass scope',
+    };
+  }
+
+  return {
+    score: match.score,
+    keyword: match.keyword,
+    angle: match.angle,
+  };
+}
+
 function getProjectAngle(lead) {
-  const description = normalizeText(lead.description || lead.raw_permit?.job_description);
-  if (description.includes('storefront') || description.includes('retail')) {
-    return 'storefront and entry glass work';
+  if (lead?.score_breakdown?.serviceAngle) {
+    return lead.score_breakdown.serviceAngle;
   }
-  if (description.includes('partition') || description.includes('office')) {
-    return 'commercial glass partitions';
+
+  if (lead?.scoreBreakdown?.serviceAngle) {
+    return lead.scoreBreakdown.serviceAngle;
   }
-  if (description.includes('mirror')) {
-    return 'custom mirrors';
+
+  const permit = lead.raw_permit || lead;
+  return getPermitRelevance(permit).angle;
+}
+
+function sanitizeOutreachCopy(value) {
+  return String(value || '')
+    .replace(/[—–]/g, ', ')
+    .replace(/\s-\s/g, ', ')
+    .replace(/build-outs/gi, 'buildouts')
+    .replace(/fit-outs/gi, 'fit outs')
+    .replace(/(?<=\w)-(?=\w)/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function getDraftRecipientName(primaryContact, companyProfile, lead) {
+  return sanitizeOutreachCopy(
+    primaryContact?.name
+      || companyProfile.company_name
+      || permitLikeName(lead.owner_business_name)
+      || permitLikeName(lead.applicant_name)
+      || 'there',
+  );
+}
+
+function getDraftRole(lead, companyProfile, primaryContact) {
+  return normalizeText(
+    primaryContact?.role
+    || lead.channelDecision?.targetRole
+    || companyProfile.role
+    || lead.applicant_business_name
+    || '',
+  );
+}
+
+function getPermitReference(lead) {
+  return lead.permit_key || lead.job_filing_number || '';
+}
+
+function chooseDraftCta(lead, role, projectAngle, relevanceScore) {
+  if ((role.includes('applicant') || role.includes('gc') || role.includes('contractor')) && lead.score >= 65) {
+    return 'If drawings are available, I can turn around a quick glass takeoff and budget this week.';
   }
-  if (description.includes('shower') || description.includes('bathroom')) {
-    return 'shower glass';
+
+  if (relevanceScore >= 0.85) {
+    return `If helpful, I can send over a quick number for the ${projectAngle} at ${lead.address}.`;
   }
-  return 'custom glass scope';
+
+  if (
+    projectAngle.includes('storefront')
+    || projectAngle.includes('partition')
+    || projectAngle.includes('shower')
+    || projectAngle.includes('mirror')
+  ) {
+    return `We recently handled a similar ${projectAngle} scope nearby, and I can send a practical price range if useful.`;
+  }
+
+  return 'Would 10 minutes this week be useful to compare the glass scope and timing?';
+}
+
+function getDraftValueLine(role, projectAngle) {
+  if (role.includes('applicant') || role.includes('gc') || role.includes('contractor')) {
+    return `MetroGlass Pro handles ${projectAngle}, mirrors, storefronts, and partitions, and we keep pricing and field coordination straightforward.`;
+  }
+
+  if (role.includes('filing') || role.includes('architect') || role.includes('design')) {
+    return `MetroGlass Pro handles ${projectAngle} directly, and we can price or coordinate quickly if the team still needs a glass installer.`;
+  }
+
+  return `MetroGlass Pro handles ${projectAngle}, mirrors, storefronts, and partitions, from pricing through install across the city.`;
+}
+
+function buildDraftIntro(lead, projectAngle, relevanceKeyword) {
+  const permitReference = getPermitReference(lead);
+  const projectDescription = sanitizeOutreachCopy(lead.description || lead.raw_permit?.job_description || '');
+  const referenceLabel = permitReference ? `permit ${permitReference}` : 'the permit';
+  const projectLine = projectDescription
+    ? `${referenceLabel} at ${lead.address} mentions ${projectDescription.slice(0, 120).toLowerCase()}.`
+    : `${referenceLabel} at ${lead.address} reads like a real fit for ${projectAngle}.`;
+
+  if (relevanceKeyword) {
+    return sanitizeOutreachCopy(`${projectLine} The wording lines up with ${relevanceKeyword}.`);
+  }
+
+  return sanitizeOutreachCopy(projectLine);
 }
 
 function buildLeadScore(permit) {
   const text = buildSearchableText(permit);
+  const relevance = getPermitRelevance(permit);
   const directHits = countKeywordHits(text, METROGLASS_PROFILE.directKeywords);
   const inferredHits = countKeywordHits(text, METROGLASS_PROFILE.inferredKeywords);
   const commercialHits = countKeywordHits(text, METROGLASS_PROFILE.commercialKeywords);
@@ -322,6 +430,15 @@ function buildLeadScore(permit) {
     disqualifiers.push(`Out of scope signal: ${negativeHits[0]}`);
   }
 
+  if (
+    relevance.score < MIN_RELEVANCE_THRESHOLD &&
+    directHits.length === 0 &&
+    inferredHits.length === 0 &&
+    commercialHits.length === 0
+  ) {
+    disqualifiers.push(`Permit wording is weak for glazing work, matched: ${relevance.keyword}`);
+  }
+
   if (directHits.length >= 3) {
     directKeyword = 40;
     reasons.push(`Strong glazing match from ${directHits.slice(0, 3).join(', ')}`);
@@ -339,6 +456,18 @@ function buildLeadScore(permit) {
   } else if (inferredHits.length === 1) {
     inferredNeed = 10;
     reasons.push(`Inferred fit from ${inferredHits[0]}`);
+  }
+
+  if (relevance.score >= 0.85) {
+    inferredNeed = Math.max(inferredNeed, 20);
+    reasons.push(`Permit pattern strongly matches ${relevance.keyword}`);
+  } else if (relevance.score >= 0.6) {
+    inferredNeed = Math.max(inferredNeed, 14);
+    reasons.push(`Permit wording lines up with ${relevance.keyword}`);
+  } else if (relevance.score >= 0.4) {
+    inferredNeed = Math.max(inferredNeed, 8);
+  } else if (relevance.score < MIN_RELEVANCE_THRESHOLD) {
+    negativeSignals += 8;
   }
 
   if (commercialHits.length > 0) {
@@ -391,11 +520,13 @@ function buildLeadScore(permit) {
   );
 
   const summary =
-    directHits.length > 0
-      ? 'Strong glazing signal in permit description.'
-      : inferredHits.length > 0
-        ? 'Renovation scope suggests likely glass work.'
-        : 'Moderate fit that still needs manual qualification.';
+    relevance.score >= 0.85
+      ? `Permit wording strongly points to ${relevance.angle}.`
+      : directHits.length > 0
+        ? 'Strong glazing signal in permit description.'
+        : inferredHits.length > 0 || relevance.score >= 0.5
+          ? 'Renovation scope suggests likely glass work.'
+          : 'Moderate fit that still needs manual qualification.';
 
   return {
     directKeyword,
@@ -410,6 +541,9 @@ function buildLeadScore(permit) {
     reasons,
     disqualifiers,
     summary,
+    relevanceScore: relevance.score,
+    relevanceKeyword: relevance.keyword,
+    serviceAngle: relevance.angle,
   };
 }
 
@@ -755,6 +889,37 @@ function buildOutreachReadiness(score, contactability, companyProfile, contacts,
   };
 }
 
+function buildQualityTier({ leadRow, contactability, companyProfile, contacts }) {
+  const relevanceScore = Number(leadRow.score_breakdown?.relevanceScore || 0.3);
+  const ageDays = leadRow.issued_date
+    ? Math.floor((Date.now() - new Date(leadRow.issued_date).getTime()) / 86400000)
+    : 999;
+  const hasEmail = contacts.some((contact) => contact.email);
+  const hasPhone = contacts.some((contact) => contact.phone);
+  const isExpired = leadRow.expiry_date ? new Date(leadRow.expiry_date).getTime() < Date.now() : false;
+  const hasApplicant = Boolean(leadRow.applicant_business_name || leadRow.applicant_name);
+
+  if (isExpired || relevanceScore < MIN_RELEVANCE_THRESHOLD || ageDays > 90) {
+    return 'dead';
+  }
+
+  if (
+    relevanceScore >= 0.8 &&
+    hasApplicant &&
+    hasEmail &&
+    ageDays <= 30 &&
+    companyProfile.match_strength !== 'weak'
+  ) {
+    return 'hot';
+  }
+
+  if (relevanceScore >= 0.5 && (hasEmail || hasPhone || contactability.total >= 40)) {
+    return 'warm';
+  }
+
+  return 'cold';
+}
+
 function buildPriorityState(score, contactability, readiness) {
   const priorityScore = Math.round((score * 0.52) + (contactability.total * 0.23) + (readiness.score * 0.25));
 
@@ -815,6 +980,7 @@ function buildNextActionDecision({
   contacts,
   followUpDate,
   permit,
+  qualityTier,
   readiness,
   status,
 }) {
@@ -823,6 +989,15 @@ function buildNextActionDecision({
   const hasWebsite = Boolean(companyProfile.website);
   const hasForm = contacts.some((contact) => contact.contact_form_url);
   const hasGc = Boolean(getApplicantName(permit));
+
+  if (qualityTier === 'dead') {
+    return {
+      label: 'Discard / low fit',
+      detail: 'Permit relevance is too weak for active outreach right now.',
+      queue: 'discard',
+      urgency: 'low',
+    };
+  }
 
   if (followUpDue || status === 'follow-up-due') {
     return {
@@ -938,34 +1113,52 @@ function pickPrimaryContact(contacts) {
 
 function buildDraft(lead, companyProfile, contacts) {
   const primaryContact = pickPrimaryContact(contacts);
-  const address = lead.address;
+  const address = sanitizeOutreachCopy(lead.address);
   const projectAngle = getProjectAngle(lead);
-  const pluginLine = getPluginLine(`${lead.permit_key}:${lead.score}`);
-  const contactName = primaryContact?.name || permitLikeName(lead.owner_business_name) || permitLikeName(lead.applicant_name) || 'there';
-  const subject = `${address}, glass scope`;
+  const relevanceScore = Number(lead.score_breakdown?.relevanceScore || lead.scoreBreakdown?.relevanceScore || 0.3);
+  const relevanceKeyword = lead.score_breakdown?.relevanceKeyword || lead.scoreBreakdown?.relevanceKeyword || '';
+  const pluginLine = sanitizeOutreachCopy(getPluginLine(`${lead.permit_key}:${lead.score}`));
+  const role = getDraftRole(lead, companyProfile, primaryContact);
+  const contactName = getDraftRecipientName(primaryContact, companyProfile, lead);
+  const companyName = sanitizeOutreachCopy(companyProfile.company_name || lead.owner_business_name || lead.applicant_business_name || 'your team');
+  const introLine = sanitizeOutreachCopy(buildDraftIntro(lead, projectAngle, relevanceKeyword));
+  const valueLine = sanitizeOutreachCopy(getDraftValueLine(role, projectAngle));
+  const cta = sanitizeOutreachCopy(chooseDraftCta(lead, role, projectAngle, relevanceScore));
+  const subject = sanitizeOutreachCopy(
+    `${address} permit, ${projectAngle.includes('custom glass') ? 'glass scope' : projectAngle}`,
+  );
   const body = [
     `Hi ${contactName},`,
     '',
-    `I came across the permit at ${address}, and the project reads like a possible fit for ${projectAngle}.`,
+    introLine,
     '',
-    `MetroGlass Pro handles shower glass, mirrors, storefronts, and partitions around Manhattan, Brooklyn, and Queens.`,
+    `${valueLine} This looks relevant for ${companyName}.`,
     '',
     pluginLine,
     '',
-    'If this scope is still open, would it be useful if I sent over pricing or a quick takeoff?',
+    cta,
     '',
     'Donald',
     'MetroGlass Pro',
     '332 999 3846',
-  ].join('\n');
+  ]
+    .map((line) => sanitizeOutreachCopy(line))
+    .join('\n');
+
+  const callOpener = sanitizeOutreachCopy(
+    `Hi, this is Donald from MetroGlass Pro. I saw the permit at ${address} and wanted to check who is handling the ${projectAngle} on that job.`,
+  );
+  const followUpNote = sanitizeOutreachCopy(
+    `I reached out about the permit at ${address}. If the ${projectAngle} is still open, I can send pricing or a quick takeoff.`,
+  );
 
   return {
     subject,
     body,
     pluginLine,
-    introLine: `I came across the permit at ${address}, and the project reads like a possible fit for ${projectAngle}.`,
-    callOpener: `This is Donald from MetroGlass Pro. I saw the permit at ${address}, and wanted to ask who is handling the glass scope on that job.`,
-    followUpNote: `Following up on the permit at ${address}. If the glass scope is still open, I can send over a quick number.`,
+    introLine,
+    callOpener,
+    followUpNote,
     recipient: primaryContact?.email || '',
     recipientType: primaryContact?.type || '',
     autoChannel: lead.best_channel || 'email',
@@ -1030,6 +1223,7 @@ function buildDerivedLeadState({
     permit,
   });
   const readiness = buildOutreachReadiness(leadRow.score, contactability, companyProfile, contacts, channelDecision);
+  const qualityTier = buildQualityTier({ leadRow, contactability, companyProfile, contacts });
   const { priorityLabel, priorityScore } = buildPriorityState(leadRow.score, contactability, readiness);
   const followUpDate = leadRow.enrichment_summary?.manualEnrichment?.followUpDate || '';
   const status = resolveLeadStatus({
@@ -1044,6 +1238,7 @@ function buildDerivedLeadState({
     contacts,
     followUpDate,
     permit,
+    qualityTier,
     readiness,
     status,
   });
@@ -1061,13 +1256,16 @@ function buildDerivedLeadState({
       autoSendEligible,
     },
     readiness,
+    qualityTier,
     priorityLabel,
     priorityScore,
     status,
     nextAction,
     enrichmentConfidence: Math.round(((companyProfile.confidence || 0) * 0.45) + ((propertyProfile.confidence || 0) * 0.3) + (readiness.score * 0.25)),
     autoSendEligible,
-    autoSendReason: AUTO_SEND_ENABLED
+    autoSendReason: qualityTier === 'dead'
+      ? 'Permit relevance is too weak for active outreach.'
+      : AUTO_SEND_ENABLED
       ? autoSendEligible
         ? 'Lead clears route quality, confidence, and schedule checks.'
         : 'Lead still needs operator review before automatic sending.'
@@ -1094,7 +1292,7 @@ function buildLeadRow(permit, scoreBreakdown) {
     description: permit.job_description || '',
     score: scoreBreakdown.total,
     status: 'new',
-    lead_tier: getLeadTier(scoreBreakdown.total),
+    lead_tier: scoreBreakdown.relevanceScore >= 0.8 ? 'hot' : scoreBreakdown.relevanceScore >= 0.5 ? 'warm' : 'cold',
     priority_label: 'Monitor',
     priority_score: 0,
     contactability_score: 0,
@@ -1106,7 +1304,9 @@ function buildLeadRow(permit, scoreBreakdown) {
     best_next_action: {},
     score_breakdown: scoreBreakdown,
     contactability_breakdown: {},
-    enrichment_summary: {},
+    enrichment_summary: {
+      qualityTier: scoreBreakdown.relevanceScore < MIN_RELEVANCE_THRESHOLD ? 'dead' : scoreBreakdown.relevanceScore >= 0.8 ? 'hot' : scoreBreakdown.relevanceScore >= 0.5 ? 'warm' : 'cold',
+    },
     raw_permit: permit,
     project_tags: buildProjectTags(permit),
     work_type: permit.work_type || '',
@@ -2108,6 +2308,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
   const nowIso = new Date().toISOString();
   const enrichedLead = {
     ...leadRow,
+    lead_tier: derivedState.qualityTier === 'dead' ? 'cold' : derivedState.qualityTier,
     priority_label: derivedState.priorityLabel,
     priority_score: derivedState.priorityScore,
     status: derivedState.status,
@@ -2126,6 +2327,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       channelDecision: derivedState.channelDecision,
       draft,
       verification,
+      qualityTier: derivedState.qualityTier,
     },
     company_match_strength: company.match_strength,
     company_domain: company.domain,
@@ -2337,6 +2539,10 @@ function mapSnapshot(snapshot) {
       id: lead.permit_key,
       score: lead.score,
       scoreBreakdown: lead.score_breakdown || {},
+      relevanceScore: Number(lead.score_breakdown?.relevanceScore || 0.3),
+      relevanceKeyword: lead.score_breakdown?.relevanceKeyword || '',
+      serviceAngle: lead.score_breakdown?.serviceAngle || 'custom glass scope',
+      qualityTier: lead.enrichment_summary?.qualityTier || lead.lead_tier || 'cold',
       leadTier: lead.lead_tier || getLeadTier(lead.score),
       contactability: lead.contactability_breakdown || {
         total: lead.contactability_score,
@@ -2825,6 +3031,7 @@ async function recomputeLeadAutomationState(gateway, leadRow, options = {}) {
   });
 
   const payload = {
+    lead_tier: derivedState.qualityTier === 'dead' ? 'cold' : derivedState.qualityTier,
     priority_label: derivedState.priorityLabel,
     priority_score: derivedState.priorityScore,
     status: options.overrideStatus || derivedState.status,
@@ -2843,6 +3050,7 @@ async function recomputeLeadAutomationState(gateway, leadRow, options = {}) {
       ...(leadRow.enrichment_summary || {}),
       readiness: derivedState.readiness,
       channelDecision: derivedState.channelDecision,
+      qualityTier: derivedState.qualityTier,
     },
   };
 

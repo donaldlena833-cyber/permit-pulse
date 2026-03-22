@@ -14,16 +14,49 @@ import {
 } from './automation.mjs';
 import { getDefaultAttachmentStatus } from './gmail.mjs';
 
+function buildCorsHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  };
+}
+
 function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
+    headers: buildCorsHeaders(),
+  });
+}
+
+function getSupabaseApiKey(env) {
+  return env.SUPABASE_ANON_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '';
+}
+
+async function authenticateRequest(request, env) {
+  const authorization = request.headers.get('Authorization') || '';
+  if (!authorization.startsWith('Bearer ')) {
+    return null;
+  }
+
+  const token = authorization.slice('Bearer '.length).trim();
+  if (!token || !env.SUPABASE_URL || !getSupabaseApiKey(env)) {
+    return null;
+  }
+
+  const response = await fetch(`${env.SUPABASE_URL.replace(/\/$/, '')}/auth/v1/user`, {
     headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      apikey: getSupabaseApiKey(env),
+      Authorization: `Bearer ${token}`,
     },
   });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return response.json();
 }
 
 export async function handlePermitPulseAutomationRequest(request, env) {
@@ -57,6 +90,11 @@ export async function handlePermitPulseAutomationRequest(request, env) {
         hasDefaultAttachment: attachment.loaded,
         defaultAttachmentName: attachment.filename || null,
       });
+    }
+
+    const authenticatedUser = await authenticateRequest(request, env);
+    if (!authenticatedUser) {
+      return json({ error: 'Unauthorized' }, 401);
     }
 
     if (url.pathname === '/api/v2/run' && request.method === 'POST') {

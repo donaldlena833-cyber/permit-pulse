@@ -33,6 +33,7 @@ import {
   ContactabilityBadge,
   LeadScoreBadge,
   PriorityBadge,
+  QualityTierBadge,
   StatusBadge,
 } from "@/features/permit-pulse/components/badges"
 import { EmptyState } from "@/features/permit-pulse/components/empty-state"
@@ -445,6 +446,7 @@ export function LeadDetailPanel({
           >
             <div className="flex flex-wrap gap-2">
               <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+              <QualityTierBadge tier={lead.qualityTier} />
               <ContactabilityBadge contactability={lead.contactability} />
               <PriorityBadge label={lead.priorityLabel} />
               <StatusBadge status={lead.workflow.status} />
@@ -465,6 +467,12 @@ export function LeadDetailPanel({
                 label="Outreach readiness"
                 value={lead.outreachReadiness.score}
               />
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-3">
+              <CompactField label="Permit relevance" value={`${Math.round(lead.relevanceScore * 100)}%`} />
+              <CompactField label="Matched wording" value={lead.relevanceKeyword || "General renovation"} />
+              <CompactField label="Likely glass scope" value={lead.serviceAngle || "Custom glass scope"} />
             </div>
           </SectionCard>
 

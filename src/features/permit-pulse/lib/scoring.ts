@@ -20,6 +20,7 @@ import {
   type PropertyProfile,
   type PriorityLabel,
   type ProjectTag,
+  type QualityTier,
   type ScoreBreakdown,
   type TenantProfile,
 } from "@/types/permit-pulse"
@@ -50,6 +51,95 @@ function uniq<T>(values: T[]): T[] {
 
 function hashValue(value: string): number {
   return Array.from(value).reduce((total, character) => total + character.charCodeAt(0), 0)
+}
+
+const PERMIT_RELEVANCE_RULES = [
+  { keyword: "bathroom renovation", score: 1, angle: "shower enclosures and mirrors" },
+  { keyword: "bathroom alteration", score: 1, angle: "shower enclosures and mirrors" },
+  { keyword: "shower", score: 1, angle: "shower enclosures" },
+  { keyword: "glass partition", score: 1, angle: "glass partitions" },
+  { keyword: "glass door", score: 1, angle: "glass doors and partitions" },
+  { keyword: "glass railing", score: 0.9, angle: "glass railings" },
+  { keyword: "storefront", score: 0.9, angle: "storefront and entry glass" },
+  { keyword: "commercial fit-out", score: 0.85, angle: "commercial glass partitions and mirrors" },
+  { keyword: "commercial fit out", score: 0.85, angle: "commercial glass partitions and mirrors" },
+  { keyword: "retail renovation", score: 0.85, angle: "storefront and retail glazing" },
+  { keyword: "office renovation", score: 0.8, angle: "office partitions and interior glass" },
+  { keyword: "mirror", score: 0.95, angle: "custom mirrors" },
+  { keyword: "kitchen renovation", score: 0.7, angle: "backsplash mirrors or glass accents" },
+  { keyword: "general renovation", score: 0.6, angle: "custom glass scope" },
+  { keyword: "interior alteration", score: 0.6, angle: "custom glass scope" },
+  { keyword: "apartment renovation", score: 0.6, angle: "shower glass or mirrors" },
+  { keyword: "condo renovation", score: 0.6, angle: "shower glass or mirrors" },
+  { keyword: "commercial alteration", score: 0.5, angle: "commercial glazing scope" },
+  { keyword: "lobby renovation", score: 0.5, angle: "lobby mirrors or feature glass" },
+  { keyword: "fitness center", score: 0.4, angle: "mirror walls or partitions" },
+  { keyword: "spa", score: 0.4, angle: "shower glass or mirrors" },
+  { keyword: "structural alteration", score: 0.2, angle: "custom glass scope" },
+  { keyword: "electrical", score: 0.1, angle: "custom glass scope" },
+  { keyword: "plumbing", score: 0.15, angle: "custom glass scope" },
+  { keyword: "hvac", score: 0.05, angle: "custom glass scope" },
+  { keyword: "roofing", score: 0.05, angle: "custom glass scope" },
+  { keyword: "sidewalk shed", score: 0, angle: "custom glass scope" },
+  { keyword: "scaffold", score: 0, angle: "custom glass scope" },
+]
+
+function sanitizeOutreachCopy(value: string): string {
+  return value
+    .replace(/[—–]/g, ", ")
+    .replace(/\s-\s/g, ", ")
+    .replace(/build-outs/gi, "buildouts")
+    .replace(/fit-outs/gi, "fit outs")
+    .replace(/(?<=\w)-(?=\w)/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+}
+
+function getPermitRelevance(permit: PermitRecord): { score: number; keyword: string; angle: string } {
+  const searchable = normalize([permit.job_description, permit.work_type, permit.filing_reason].join(" "))
+  const match = [...PERMIT_RELEVANCE_RULES]
+    .filter((rule) => searchable.includes(normalize(rule.keyword)))
+    .sort((left, right) => right.score - left.score)[0]
+
+  if (!match) {
+    return {
+      score: 0.3,
+      keyword: "general renovation",
+      angle: "custom glass scope",
+    }
+  }
+
+  return {
+    score: match.score,
+    keyword: match.keyword,
+    angle: match.angle,
+  }
+}
+
+function getQualityTierFromLead(
+  permit: PermitRecord,
+  relevanceScore: number,
+  contactability: ContactabilityBreakdown,
+  hasCompanyConfidence = false,
+): QualityTier {
+  const ageDays = getLeadAgeDays(permit.issued_date)
+  const isExpired = permit.expired_date ? new Date(permit.expired_date).getTime() < Date.now() : false
+  const hasApplicant = getApplicantDisplay(permit) !== "—"
+  const hasContact = contactability.directEmailFound > 0 || contactability.phoneFound > 0 || contactability.genericEmailFound > 0
+
+  if (isExpired || relevanceScore < 0.2 || ageDays > 90) {
+    return "dead"
+  }
+
+  if (relevanceScore >= 0.8 && hasApplicant && hasContact && ageDays <= 30 && hasCompanyConfidence) {
+    return "hot"
+  }
+
+  if (relevanceScore >= 0.5 && (hasContact || contactability.total >= 40)) {
+    return "warm"
+  }
+
+  return "cold"
 }
 
 function includesAny(text: string, entries: string[]): string[] {
@@ -235,6 +325,7 @@ export function scorePermitForTenant(permit: PermitRecord, tenant: TenantProfile
       getFilingRepDisplay(permit),
     ].join(" "),
   )
+  const relevance = getPermitRelevance(permit)
 
   const reasons: string[] = []
   const disqualifiers: string[] = []
@@ -260,6 +351,9 @@ export function scorePermitForTenant(permit: PermitRecord, tenant: TenantProfile
       reasons: ["Permit is outside the MetroGlassPro scope profile."],
       disqualifiers,
       summary: "Excluded by MetroGlassPro scoring rules.",
+      relevanceScore: relevance.score,
+      relevanceKeyword: relevance.keyword,
+      serviceAngle: relevance.angle,
     }
   }
 
@@ -289,6 +383,14 @@ export function scorePermitForTenant(permit: PermitRecord, tenant: TenantProfile
   } else if (inferredHits.length === 1) {
     inferredNeed = 12
     reasons.push(`Inferred need from permit scope: ${inferredHits[0]}`)
+  }
+
+  if (relevance.score >= 0.85 && inferredNeed < 15) {
+    inferredNeed = 15
+    reasons.push(`Permit wording lines up strongly with ${relevance.keyword}.`)
+  } else if (relevance.score >= 0.65 && inferredNeed < 10) {
+    inferredNeed = 10
+    reasons.push(`Permit wording still points toward ${relevance.angle}.`)
   }
 
   const cost = parseCost(permit.estimated_job_costs)
@@ -347,6 +449,15 @@ export function scorePermitForTenant(permit: PermitRecord, tenant: TenantProfile
     reasons.push(`Outside the current borough focus in ${permit.borough}`)
   }
 
+  if (relevance.score < 0.2 && directHits.length === 0 && inferredHits.length === 0 && commercialHits.length === 0) {
+    negativeSignals += 16
+    disqualifiers.push(`Weak permit relevance for MetroGlassPro: ${relevance.keyword}`)
+    reasons.push("Permit type looks too far from the core glass scope.")
+  } else if (relevance.score < 0.4) {
+    negativeSignals += 8
+    reasons.push("Permit relevance is still weak, so this needs extra care before outreach.")
+  }
+
   const positiveTotal =
     directKeyword +
     inferredNeed +
@@ -366,6 +477,8 @@ export function scorePermitForTenant(permit: PermitRecord, tenant: TenantProfile
     summaryParts.push("Renovation scope points to likely glass work")
   } else if (commercialSignal > 0) {
     summaryParts.push("Commercial fit is better than the wording alone suggests")
+  } else if (relevance.score >= 0.65) {
+    summaryParts.push(`${relevance.angle} looks plausible from the permit wording`)
   }
 
   if (negativeSignals >= 10) {
@@ -387,6 +500,9 @@ export function scorePermitForTenant(permit: PermitRecord, tenant: TenantProfile
     reasons,
     disqualifiers,
     summary: summaryParts.length > 0 ? summaryParts.join(", ") : "Moderate fit with room for manual qualification.",
+    relevanceScore: relevance.score,
+    relevanceKeyword: relevance.keyword,
+    serviceAngle: relevance.angle,
   }
 }
 
@@ -752,8 +868,15 @@ function buildHumanSummary(
 
 export function refreshDerivedLead(lead: PermitLead, tenant: TenantProfile): PermitLead {
   const scoreBreakdown = scorePermitForTenant(lead, tenant)
-  const leadTier = getLeadTier(scoreBreakdown.total)
   const contactability = getContactabilityBreakdown(lead, lead.enrichment)
+  const relevanceScore = scoreBreakdown.relevanceScore ?? 0.3
+  const qualityTier = getQualityTierFromLead(
+    lead,
+    relevanceScore,
+    contactability,
+    lead.companyProfile.matchStrength !== "weak" || lead.companyProfile.confidence >= 60,
+  )
+  const leadTier: LeadTier = relevanceScore >= 0.8 ? "hot" : relevanceScore >= 0.5 ? "warm" : "cold"
   const { priorityLabel, priorityScore } = getPriorityLabel(lead, scoreBreakdown, contactability, tenant)
   const nextAction = buildNextAction(
     lead,
@@ -802,6 +925,10 @@ export function refreshDerivedLead(lead: PermitLead, tenant: TenantProfile): Per
     ...lead,
     score: scoreBreakdown.total,
     scoreBreakdown,
+    relevanceScore: scoreBreakdown.relevanceScore ?? 0.3,
+    relevanceKeyword: scoreBreakdown.relevanceKeyword ?? "general renovation",
+    serviceAngle: scoreBreakdown.serviceAngle ?? "custom glass scope",
+    qualityTier,
     leadTier,
     contactability,
     priorityLabel,
@@ -816,9 +943,12 @@ export function refreshDerivedLead(lead: PermitLead, tenant: TenantProfile): Per
       companyMatchStrength: lead.companyProfile.matchStrength,
       enrichmentConfidence: Math.round(((lead.companyProfile.confidence || 0) * 0.45) + ((lead.propertyProfile.confidence || 0) * 0.25) + (outreachReadiness.score * 0.3)),
       autoSendEligible: channelDecision.autoSendEligible,
-      autoSendReason: channelDecision.autoSendEligible
-        ? "Lead passes local automation heuristics."
-        : "Lead still needs stronger contactability or company confidence.",
+      autoSendReason:
+        qualityTier === "dead"
+          ? "Permit relevance is too weak for active outreach."
+          : channelDecision.autoSendEligible
+            ? "Lead passes local automation heuristics."
+            : "Lead still needs stronger contactability or company confidence.",
     },
   }
 }
@@ -854,7 +984,14 @@ export function buildLeadFromPermit(
       reasons: [],
       disqualifiers: [],
       summary: "",
+      relevanceScore: 0.3,
+      relevanceKeyword: "general renovation",
+      serviceAngle: "custom glass scope",
     },
+    relevanceScore: 0.3,
+    relevanceKeyword: "general renovation",
+    serviceAngle: "custom glass scope",
+    qualityTier: "cold",
     leadTier: "cold",
     contactability: getContactabilityBreakdown(permit, enrichment),
     nextAction: {
@@ -919,29 +1056,100 @@ function getPrimaryProjectPhrase(projectTags: ProjectTag[]): string {
   return "glass scope"
 }
 
+function getDraftRecipientName(lead: PermitLead): string {
+  return (
+    lead.enrichment.contactPersonName ||
+    lead.contacts.find((contact) => contact.isPrimary)?.name ||
+    lead.contacts.find((contact) => contact.name)?.name ||
+    lead.companyProfile.name ||
+    lead.owner_business_name ||
+    getApplicantDisplay(lead)
+  )
+}
+
+function getDraftRole(lead: PermitLead): string {
+  const primaryRole = lead.contacts.find((contact) => contact.isPrimary)?.role || lead.companyProfile.role || ""
+  const applicant = getApplicantDisplay(lead)
+  const filingRep = getFilingRepDisplay(lead)
+
+  if (primaryRole) {
+    return normalize(primaryRole)
+  }
+
+  if (applicant !== "—") {
+    return "gc"
+  }
+
+  if (filingRep !== "—") {
+    return "filing rep"
+  }
+
+  return "owner"
+}
+
+function chooseDraftCta(lead: PermitLead, role: string): string {
+  if (lead.relevanceScore >= 0.85 && role.includes("gc")) {
+    return `Happy to do a free glass takeoff for ${getPermitAddress(lead)} if plans are already moving.`
+  }
+
+  if (lead.relevanceScore >= 0.8) {
+    return `I can put together a quick estimate for the glass scope at ${getPermitAddress(lead)} if that would help.`
+  }
+
+  if (role.includes("owner")) {
+    return "Would it be useful if I sent over a few practical options and a quick budget range?"
+  }
+
+  return "Would 10 minutes this week be useful to compare the glass options for this project?"
+}
+
+function buildDraftIntro(lead: PermitLead): string {
+  const permitReference = lead.job_filing_number ? ` on permit ${lead.job_filing_number}` : ""
+
+  if (lead.relevanceKeyword) {
+    return `I came across the DOB filing for ${getPermitAddress(lead)}${permitReference}. The scope reads like a possible fit for ${lead.serviceAngle}, especially with ${lead.relevanceKeyword} in the permit wording.`
+  }
+
+  return `I came across the DOB filing for ${getPermitAddress(lead)}${permitReference}. The scope looks like a possible fit for ${lead.serviceAngle}.`
+}
+
 export function generateDraftFromLead(lead: PermitLead): OutreachDraft {
-  const address = `${lead.house_no} ${lead.street_name}`.trim()
-  const projectPhrase = getPrimaryProjectPhrase(lead.projectTags)
-  const target = lead.enrichment.contactPersonName || lead.owner_business_name || getApplicantDisplay(lead)
+  const address = getPermitAddress(lead)
+  const projectPhrase = lead.serviceAngle || getPrimaryProjectPhrase(lead.projectTags)
+  const target = getDraftRecipientName(lead)
   const introTarget = target === "—" ? "your team" : target
+  const role = getDraftRole(lead)
   const pluginLine = OUTREACH_PLUGIN_LINES[hashValue(lead.id) % OUTREACH_PLUGIN_LINES.length]
-  const subject = `${address}, glass scope`
-  const introLine = `I saw the DOB permit at ${address}, and the scope looks like a possible fit for ${projectPhrase}.`
+  const subject = sanitizeOutreachCopy(`${address}, ${projectPhrase}`)
+  const introLine = sanitizeOutreachCopy(buildDraftIntro(lead))
+  const valueLine =
+    role.includes("gc")
+      ? `MetroGlass Pro handles ${projectPhrase} for active contractors across NYC, with a straightforward estimating and install process.`
+      : role.includes("filing")
+        ? `MetroGlass Pro handles ${projectPhrase} across NYC, and I wanted to reach the right team if glass scope is still open.`
+        : `MetroGlass Pro handles ${projectPhrase} across NYC, especially for renovation work where clean execution and quick coordination matter.`
+  const cta = sanitizeOutreachCopy(chooseDraftCta(lead, role))
   const shortEmail = [
     `Hi ${introTarget},`,
     "",
-    `I came across the permit at ${address}. The scope reads like a real fit for ${projectPhrase}. MetroGlassPro handles shower glass, mirrors, storefronts, and interior glazing work across Manhattan, Brooklyn, and Queens.`,
+    introLine,
     "",
-    pluginLine,
+    sanitizeOutreachCopy(valueLine),
     "",
-    "If the glass package is still open, would it be useful if I sent over pricing or a quick takeoff?",
+    sanitizeOutreachCopy(pluginLine),
+    "",
+    cta,
     "",
     "Donald",
     "MetroGlass Pro",
     "332 999 3846",
   ].join("\n")
-  const callOpener = `This is Donald from MetroGlass Pro. I saw the permit at ${address}, and wanted to ask who is handling the ${projectPhrase} on that job.`
-  const followUpNote = `Following up on the permit at ${address}. If the ${projectPhrase} is still open, I can send over a quick number.`
+  const callOpener = sanitizeOutreachCopy(
+    `Hi, this is Donald from MetroGlass Pro. I saw the permit for ${address} and wanted to check who is handling the ${projectPhrase} on that job.`,
+  )
+  const followUpNote = sanitizeOutreachCopy(
+    `Following up on the permit for ${address}. If the ${projectPhrase} is still open, I can send over a quick number.`,
+  )
 
   return {
     subject,

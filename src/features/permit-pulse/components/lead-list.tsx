@@ -4,6 +4,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { EmptyState } from "@/features/permit-pulse/components/empty-state"
 import {
   LeadScoreBadge,
+  QualityTierBadge,
   StatusBadge,
 } from "@/features/permit-pulse/components/badges"
 import { formatCurrency, formatRelativeDate, getPermitAddress } from "@/features/permit-pulse/lib/format"
@@ -133,6 +134,7 @@ export function LeadList({
 
                     <div className="mt-2 flex flex-wrap gap-2">
                       <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                      <QualityTierBadge tier={lead.qualityTier} />
                       <StatusBadge status={lead.workflow.status} />
                     </div>
                   </div>

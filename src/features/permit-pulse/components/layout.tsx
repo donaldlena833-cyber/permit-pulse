@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import {
   LayoutDashboard,
   Layers3,
+  LogOut,
   MoonStar,
   SearchCheck,
   Settings2,
@@ -38,6 +39,8 @@ interface AppShellProps {
   theme: AppTheme
   onToggleTheme: () => void
   lastScanAt: string | null
+  userEmail: string
+  onLogout: () => Promise<void>
 }
 
 export function AppShell({
@@ -51,6 +54,8 @@ export function AppShell({
   theme,
   onToggleTheme,
   lastScanAt,
+  userEmail,
+  onLogout,
 }: AppShellProps) {
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -60,12 +65,12 @@ export function AppShell({
           <div className="rounded-[30px] border border-orange-100 bg-white/70 p-5 shadow-sm dark:border-orange-900/20 dark:bg-dark-bg/30">
             <div className="flex items-center gap-4">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-500 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(184,138,82,0.35)]">
-                PP
+                MG
               </div>
               <div>
-                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">PermitPulse</div>
+                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">MetroGlass Leads</div>
                 <div className="text-xs uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                  MetroGlassPro ops
+                  Internal operator tool
                 </div>
               </div>
             </div>
@@ -114,27 +119,76 @@ export function AppShell({
 
           <div className="mt-auto rounded-[28px] border border-navy-200/70 bg-white/60 p-5 dark:border-dark-border/70 dark:bg-dark-card/70">
             <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
-              Positioning
+              Signed in
             </div>
-            <p className="mt-3 text-sm leading-6 text-navy-500 dark:text-dark-muted">
-              MetroGlassPro first. Manhattan first. Keep review fast, research clean, and the machine easy to trust.
-            </p>
+            <p className="mt-3 break-all text-sm leading-6 text-navy-500 dark:text-dark-muted">{userEmail}</p>
+            <div className="mt-4 flex gap-2">
+              <Button className="h-10 flex-1 rounded-full" onClick={onToggleTheme} type="button" variant="outline">
+                {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
+                Theme
+              </Button>
+              <Button className="h-10 rounded-full px-4" onClick={() => void onLogout()} type="button" variant="outline">
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-30 border-b border-navy-200/70 bg-cream-50/85 px-4 py-4 backdrop-blur-xl sm:px-6 lg:px-8 dark:border-dark-border/70 dark:bg-dark-bg/85">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div className="flex items-center gap-3">
-                <Badge className="rounded-full border-orange-200 bg-orange-50 px-3 py-1 text-[11px] font-semibold text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/20 dark:text-orange-200">
-                  MetroGlassPro
-                </Badge>
-                <span className="text-xs text-navy-500 dark:text-dark-muted">
-                  {lastScanAt ? `Last scan ${formatDate(lastScanAt)}` : "No scan yet"}
-                </span>
+        <div className="flex min-w-0 flex-1 flex-col pb-20 lg:pb-0">
+          <header className="sticky top-0 z-30 border-b border-navy-200/70 bg-cream-50/85 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8 dark:border-dark-border/70 dark:bg-dark-bg/85">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-orange-500 text-xs font-semibold text-white shadow-[0_14px_30px_rgba(184,138,82,0.3)] lg:hidden">
+                    MG
+                  </div>
+                  <div className="min-w-0 lg:hidden">
+                    <div className="truncate text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                      MetroGlass Leads
+                    </div>
+                    <div className="text-[11px] text-navy-500 dark:text-dark-muted">
+                      {lastScanAt ? `Last scan ${formatDate(lastScanAt)}` : "No scan yet"}
+                    </div>
+                  </div>
+                  <div className="hidden items-center gap-3 lg:flex">
+                    <Badge className="rounded-full border-orange-200 bg-orange-50 px-3 py-1 text-[11px] font-semibold text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/20 dark:text-orange-200">
+                      MetroGlassPro
+                    </Badge>
+                    <span className="text-xs text-navy-500 dark:text-dark-muted">
+                      {lastScanAt ? `Last scan ${formatDate(lastScanAt)}` : "No scan yet"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <Button
+                    className="h-10 rounded-full bg-orange-500 px-4 text-white shadow-[0_16px_30px_rgba(184,138,82,0.3)] hover:bg-orange-600 sm:px-5"
+                    disabled={scanning}
+                    onClick={onScan}
+                  >
+                    {scanning ? "Scanning..." : "Scan"}
+                  </Button>
+                  <Button
+                    className="h-10 rounded-full border-navy-200 bg-white/90 px-3 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-card"
+                    onClick={onToggleTheme}
+                    type="button"
+                    variant="outline"
+                  >
+                    {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
+                  </Button>
+                  <Button
+                    className="hidden h-10 rounded-full border-navy-200 bg-white/90 px-3 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-card lg:inline-flex"
+                    onClick={() => void onLogout()}
+                    type="button"
+                    variant="outline"
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="relative min-w-[240px] max-w-xl flex-1">
+
+              {section === "opportunities" ? (
+                <div className="relative">
                   <Input
                     className="h-11 rounded-full border-navy-200 bg-white/90 pl-4 text-sm shadow-sm dark:border-dark-border dark:bg-dark-card"
                     onChange={(event) => onSearchChange(event.target.value)}
@@ -142,52 +196,39 @@ export function AppShell({
                     value={searchValue}
                   />
                 </div>
-                <Button
-                  className="h-11 rounded-full bg-orange-500 px-5 text-white shadow-[0_16px_30px_rgba(184,138,82,0.3)] hover:bg-orange-600"
-                  disabled={scanning}
-                  onClick={onScan}
-                >
-                  {scanning ? "Scanning..." : "Scan permits"}
-                </Button>
-                <Button
-                  className="h-11 rounded-full border-navy-200 bg-white/90 px-4 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-card"
-                  onClick={onToggleTheme}
-                  type="button"
-                  variant="outline"
-                >
-                  {theme === "dark" ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
-                </Button>
-              </div>
-            </div>
-
-            <div className="mt-4 flex gap-2 overflow-x-auto pb-1 lg:hidden">
-              {NAV_ITEMS.map((item) => {
-                const Icon = item.icon
-                const isActive = section === item.id
-
-                return (
-                  <button
-                    key={item.id}
-                    className={cn(
-                      "flex items-center gap-2 rounded-full border px-4 py-2 text-sm whitespace-nowrap transition-colors",
-                      isActive
-                        ? "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/20 dark:text-orange-200"
-                        : "border-navy-200 bg-white/80 text-navy-600 dark:border-dark-border dark:bg-dark-card dark:text-dark-text",
-                    )}
-                    onClick={() => onSectionChange(item.id)}
-                    type="button"
-                  >
-                    <Icon className="h-4 w-4" />
-                    {item.label}
-                  </button>
-                )
-              })}
+              ) : null}
             </div>
           </header>
 
-          <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">{children}</main>
+          <main className="flex-1 px-4 py-4 sm:px-6 lg:px-8 lg:py-6">{children}</main>
         </div>
       </div>
+
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-navy-200/80 bg-white/94 px-3 py-2 backdrop-blur-xl lg:hidden dark:border-dark-border/80 dark:bg-dark-card/94">
+        <div className="grid grid-cols-4 gap-2">
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon
+            const isActive = section === item.id
+
+            return (
+              <button
+                key={item.id}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-[18px] px-3 py-2 text-[11px] font-medium transition-colors",
+                  isActive
+                    ? "bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-200"
+                    : "text-navy-500 dark:text-dark-muted",
+                )}
+                onClick={() => onSectionChange(item.id)}
+                type="button"
+              >
+                <Icon className="h-4 w-4" />
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+      </nav>
     </div>
   )
 }

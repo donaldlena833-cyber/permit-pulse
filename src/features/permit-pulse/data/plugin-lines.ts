@@ -7,6 +7,6 @@ export const OUTREACH_PLUGIN_LINES = [
   "If this scope is still open, we can help keep it clean on the install side.",
   "We work well with GCs, designers, and ownership teams that need fast answers.",
   "If the project needs custom glass or mirrors, we can step in without a heavy handoff.",
-  "We are set up for both residential renovation work and higher touch commercial build-outs.",
+  "We are set up for both residential renovation work and higher touch commercial buildouts.",
   "We focus on clear pricing, clean installs, and straightforward coordination.",
 ]

@@ -1,13 +1,16 @@
 import { Component, type ReactNode, useMemo, useState } from "react"
-import { Target } from "lucide-react"
+import { LoaderCircle, Target } from "lucide-react"
 import { Toaster } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { Drawer, DrawerContent } from "@/components/ui/drawer"
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
+import { LoginScreen } from "@/features/auth/components/login-screen"
+import { useMetroglassAuth } from "@/features/auth/hooks/use-metroglass-auth"
 import { DashboardView } from "@/features/permit-pulse/components/dashboard-view"
 import { EmptyState } from "@/features/permit-pulse/components/empty-state"
 import { AppShell } from "@/features/permit-pulse/components/layout"
@@ -156,44 +159,114 @@ function WorkspacePane({
   emptyTitle: string
   emptyDescription: string
 }) {
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const mobileDrawerOpen = mobileOpen && Boolean(selectedLead)
+
+  const handleSelectLead = (leadId: string) => {
+    onSelectLead(leadId)
+    setMobileOpen(true)
+  }
+
   return (
-    <ResizablePanelGroup className="h-[calc(100vh-12.5rem)] min-h-[760px] rounded-[32px]" direction="horizontal">
-      <ResizablePanel defaultSize={28} minSize={20}>
-        <LeadList
-          description={description}
-          emptyDescription={emptyDescription}
-          emptyTitle={emptyTitle}
-          leads={leads}
-          onBulkSetStatus={onBulkSetStatus}
-          onSelectLead={onSelectLead}
-          onToggleAll={onToggleAll}
-          onToggleLead={onToggleLead}
-          selectedIds={selectedIds}
-          selectedLeadId={selectedLead?.id ?? null}
-          title={title}
-        />
-      </ResizablePanel>
-      <ResizableHandle withHandle />
-      <ResizablePanel defaultSize={72} minSize={52}>
-        <LeadDetailPanel
-          automationHealth={automationHealth}
-          isEnriching={selectedLead ? enrichingLeadId === selectedLead.id : false}
-          isSending={selectedLead ? sendingLeadId === selectedLead.id : false}
-          lead={selectedLead}
-          onDraftChange={onDraftChange}
-          onEnrichmentChange={onEnrichmentChange}
-          onFollowUpDateChange={onFollowUpDateChange}
-          onGenerateDraft={onGenerateDraft}
-          onRunEnrichment={onRunEnrichment}
-          onSendNow={onSendNow}
-          onStatusChange={onStatusChange}
-          onToggleIgnored={onToggleIgnored}
-          onAcceptCandidate={onAcceptCandidate}
-          onRejectCandidate={onRejectCandidate}
-          onSetPrimaryContact={onSetPrimaryContact}
-        />
-      </ResizablePanel>
-    </ResizablePanelGroup>
+    <>
+      <div className="md:hidden">
+        <div className="space-y-3">
+          <LeadList
+            description={description}
+            emptyDescription={emptyDescription}
+            emptyTitle={emptyTitle}
+            leads={leads}
+            onBulkSetStatus={onBulkSetStatus}
+            onSelectLead={handleSelectLead}
+            onToggleAll={onToggleAll}
+            onToggleLead={onToggleLead}
+            selectedIds={selectedIds}
+            selectedLeadId={selectedLead?.id ?? null}
+            title={title}
+          />
+
+          {selectedLead ? (
+            <div className="sticky bottom-20 z-20 rounded-[24px] border border-orange-200 bg-white/92 p-3 shadow-[0_16px_40px_rgba(70,55,37,0.12)] backdrop-blur-xl dark:border-orange-800/40 dark:bg-dark-card/92">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
+                    Selected lead
+                  </div>
+                  <div className="truncate text-sm font-medium text-navy-900 dark:text-dark-text">{selectedLead.address}</div>
+                </div>
+                <Button className="rounded-full bg-orange-500 px-4 text-white hover:bg-orange-600" onClick={() => setMobileOpen(true)} type="button">
+                  Open workspace
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <Drawer open={mobileDrawerOpen} onOpenChange={setMobileOpen}>
+          <DrawerContent className="max-h-[94vh] rounded-t-[30px] border-none bg-background px-0 pb-0">
+            <div className="max-h-[92vh] overflow-hidden px-3 pb-4">
+              <LeadDetailPanel
+                automationHealth={automationHealth}
+                isEnriching={selectedLead ? enrichingLeadId === selectedLead.id : false}
+                isSending={selectedLead ? sendingLeadId === selectedLead.id : false}
+                lead={selectedLead}
+                onDraftChange={onDraftChange}
+                onEnrichmentChange={onEnrichmentChange}
+                onFollowUpDateChange={onFollowUpDateChange}
+                onGenerateDraft={onGenerateDraft}
+                onRunEnrichment={onRunEnrichment}
+                onSendNow={onSendNow}
+                onStatusChange={onStatusChange}
+                onToggleIgnored={onToggleIgnored}
+                onAcceptCandidate={onAcceptCandidate}
+                onRejectCandidate={onRejectCandidate}
+                onSetPrimaryContact={onSetPrimaryContact}
+              />
+            </div>
+          </DrawerContent>
+        </Drawer>
+      </div>
+
+      <div className="hidden md:block">
+        <ResizablePanelGroup className="h-[calc(100vh-11.5rem)] min-h-[760px] rounded-[32px]" direction="horizontal">
+          <ResizablePanel defaultSize={24} minSize={18}>
+            <LeadList
+              description={description}
+              emptyDescription={emptyDescription}
+              emptyTitle={emptyTitle}
+              leads={leads}
+              onBulkSetStatus={onBulkSetStatus}
+              onSelectLead={onSelectLead}
+              onToggleAll={onToggleAll}
+              onToggleLead={onToggleLead}
+              selectedIds={selectedIds}
+              selectedLeadId={selectedLead?.id ?? null}
+              title={title}
+            />
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel defaultSize={76} minSize={50}>
+            <LeadDetailPanel
+              automationHealth={automationHealth}
+              isEnriching={selectedLead ? enrichingLeadId === selectedLead.id : false}
+              isSending={selectedLead ? sendingLeadId === selectedLead.id : false}
+              lead={selectedLead}
+              onDraftChange={onDraftChange}
+              onEnrichmentChange={onEnrichmentChange}
+              onFollowUpDateChange={onFollowUpDateChange}
+              onGenerateDraft={onGenerateDraft}
+              onRunEnrichment={onRunEnrichment}
+              onSendNow={onSendNow}
+              onStatusChange={onStatusChange}
+              onToggleIgnored={onToggleIgnored}
+              onAcceptCandidate={onAcceptCandidate}
+              onRejectCandidate={onRejectCandidate}
+              onSetPrimaryContact={onSetPrimaryContact}
+            />
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      </div>
+    </>
   )
 }
 
@@ -213,7 +286,13 @@ function getLaneForLead(lead: PermitLead | null): OpportunityLane {
   return "feed"
 }
 
-export default function App() {
+function MetroGlassLeadsWorkspace({
+  onLogout,
+  userEmail,
+}: {
+  onLogout: () => Promise<void>
+  userEmail: string
+}) {
   const {
     allLeads,
     activeEnrichmentQueueId,
@@ -448,6 +527,7 @@ export default function App() {
     <>
       <AppShell
         lastScanAt={lastScanAt}
+        onLogout={onLogout}
         onScan={scanLeads}
         onSearchChange={(value) => setFilters({ search: value })}
         onSectionChange={setSection}
@@ -456,6 +536,7 @@ export default function App() {
         searchValue={filters.search}
         section={section}
         theme={theme}
+        userEmail={userEmail}
       >
         <AppErrorBoundary
           onReset={() => {
@@ -468,4 +549,25 @@ export default function App() {
       <Toaster closeButton position="top-right" richColors />
     </>
   )
+}
+
+export default function App() {
+  const { error, login, logout, session, status } = useMetroglassAuth()
+
+  if (status === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+        <div className="flex items-center gap-3 rounded-full border border-navy-200 bg-white/90 px-5 py-3 text-sm font-medium text-navy-700 shadow-sm dark:border-dark-border dark:bg-dark-card dark:text-dark-text">
+          <LoaderCircle className="h-4 w-4 animate-spin" />
+          Restoring MetroGlass Leads
+        </div>
+      </div>
+    )
+  }
+
+  if (!session) {
+    return <LoginScreen error={error} loading={status === "loading"} onSubmit={login} />
+  }
+
+  return <MetroGlassLeadsWorkspace onLogout={logout} userEmail={session.user.email} />
 }
