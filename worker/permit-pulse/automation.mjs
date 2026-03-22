@@ -2516,17 +2516,22 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
   }
 
   const dedupedContacts = dedupeContacts(contacts);
-  const primaryEmailCandidate = pickPrimaryContact(dedupedContacts, company)?.email || '';
+  const primaryContact = pickPrimaryContact(dedupedContacts, company) || null;
+  dedupedContacts.forEach((contact) => {
+    contact.is_primary = Boolean(primaryContact && contact.id === primaryContact.id);
+  });
+
+  const primaryEmailCandidate = primaryContact?.email || '';
   const shouldVerify =
     Boolean(primaryEmailCandidate) &&
     (leadRow.score >= HIGH_VALUE_SCORE || options.force);
   const verification = await maybeVerifyEmail(env, primaryEmailCandidate, shouldVerify);
 
   if (verification.verified && primaryEmailCandidate) {
-    const primaryContact = dedupedContacts.find((contact) => contact.email === primaryEmailCandidate);
-    if (primaryContact) {
-      primaryContact.verified = true;
-      primaryContact.confidence = Math.max(primaryContact.confidence, verification.confidence);
+    const primaryEmailContact = dedupedContacts.find((contact) => contact.email === primaryEmailCandidate);
+    if (primaryEmailContact) {
+      primaryEmailContact.verified = true;
+      primaryEmailContact.confidence = Math.max(primaryEmailContact.confidence, verification.confidence);
     }
   }
 
