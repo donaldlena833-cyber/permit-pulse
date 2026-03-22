@@ -421,7 +421,12 @@ export function LeadDetailPanel({
   const selectedPeople = personCandidates.filter((candidate) => candidate.status === "selected").slice(0, 3)
   const rejectedPeople = personCandidates.filter((candidate) => candidate.status !== "selected").slice(0, 4)
   const blocker = getLeadBlocker(lead)
-  const canSendNow = Boolean(primaryEmail && lead.outreachDraft.subject && lead.outreachDraft.shortEmail)
+  const canSendNow = Boolean(
+    lead.channelDecision.primary === "email"
+    && primaryEmail
+    && lead.outreachDraft.subject
+    && lead.outreachDraft.shortEmail,
+  )
   const trustScore = getTrustScore(lead)
   const trustLabel = getTrustLabel(trustScore)
   const trustGaps = uniq([...readinessBlockers, ...contactabilityMissing]).slice(0, 4)

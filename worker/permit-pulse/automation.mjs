@@ -844,16 +844,29 @@ function scoreEmailContactForSelection(contact, companyProfile) {
 
   const officialDomain = normalizeText(companyProfile?.domain || rootDomain(companyProfile?.website || ''));
   const contactDomain = emailDomain(contact.email);
+  const websiteDomain = normalizeText(rootDomain(contact.website_url || ''));
   const genericMailbox = isGenericMailbox(contact.email);
   const freeMailbox = isFreeMailboxDomain(contactDomain);
   const officialDomainMatch = Boolean(
     officialDomain && (contactDomain === officialDomain || contactDomain.endsWith(`.${officialDomain}`)),
   );
+  const websiteDomainMatch = Boolean(
+    officialDomain && websiteDomain && (websiteDomain === officialDomain || websiteDomain.endsWith(`.${officialDomain}`)),
+  );
+
+  if (officialDomain && !officialDomainMatch && !websiteDomainMatch && !freeMailbox) {
+    return -100;
+  }
+
+  if (officialDomain && freeMailbox && !contact.verified && contact.source !== 'manual') {
+    return -28;
+  }
 
   let score = Math.round(contact.confidence || 0);
   score += contact.type === 'verified' ? 32 : contact.type === 'public' ? 12 : -10;
   score += contact.verified ? 10 : 0;
   score += officialDomainMatch ? 16 : freeMailbox ? -2 : -18;
+  score += websiteDomainMatch ? 10 : 0;
   score += genericMailbox ? -14 : 8;
   score += contact.source === 'firecrawl' ? 8 : contact.source === 'manual' ? 10 : 0;
   score += contact.source === 'pattern_guess' ? -16 : 0;
@@ -873,6 +886,10 @@ function buildRouteCandidates({ companyProfile, contacts }) {
 
     if (contact.email) {
       const emailSelectionScore = scoreEmailContactForSelection(contact, companyProfile);
+      if (emailSelectionScore <= 0) {
+        return;
+      }
+
       let score = 36 + rolePriority + Math.round(confidence * 0.18);
       score += emailSelectionScore - Math.round(confidence);
 
@@ -1280,7 +1297,12 @@ function pickPrimaryContact(contacts, companyProfile = {}) {
       return scoreEmailContactForSelection(right, companyProfile) - scoreEmailContactForSelection(left, companyProfile);
     });
 
-  return emailContacts[0] || contacts.find((contact) => contact.phone) || contacts.find((contact) => contact.contact_form_url) || null;
+  const trustedEmailContact = emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile) > 0) || null;
+
+  return trustedEmailContact
+    || contacts.find((contact) => contact.phone)
+    || contacts.find((contact) => contact.contact_form_url)
+    || null;
 }
 
 function buildDraft(lead, companyProfile, contacts) {
@@ -3931,6 +3953,9 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
       }
 
       const primaryContact = pickPrimaryContact(contacts, lead.companyProfile || {}) || null;
+      if (lead.channelDecision?.primary !== 'email') {
+        throw new Error('Best route is not email yet');
+      }
       if (!primaryContact?.email) {
         throw new Error('No email available');
       }
