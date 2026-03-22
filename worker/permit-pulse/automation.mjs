@@ -1325,6 +1325,69 @@ function buildLeadRow(permit, scoreBreakdown) {
   };
 }
 
+function getIssuedAtValue(leadRow) {
+  const value = leadRow.issued_date ? new Date(leadRow.issued_date).getTime() : 0;
+  return Number.isFinite(value) ? value : 0;
+}
+
+function getDescriptionStrength(leadRow) {
+  return (leadRow.description || '').trim().length;
+}
+
+function mergeRawPermit(existingPermit = {}, nextPermit = {}) {
+  return {
+    ...existingPermit,
+    ...Object.fromEntries(Object.entries(nextPermit).filter(([, value]) => value !== '' && value !== null && value !== undefined)),
+  };
+}
+
+function mergeLeadRows(existingRow, nextRow) {
+  const nextWins =
+    nextRow.score > existingRow.score
+      || (nextRow.score === existingRow.score && getIssuedAtValue(nextRow) > getIssuedAtValue(existingRow))
+      || (nextRow.score === existingRow.score && getIssuedAtValue(nextRow) === getIssuedAtValue(existingRow) && getDescriptionStrength(nextRow) > getDescriptionStrength(existingRow));
+
+  const preferred = nextWins ? nextRow : existingRow;
+  const secondary = nextWins ? existingRow : nextRow;
+
+  return {
+    ...secondary,
+    ...preferred,
+    raw_permit: mergeRawPermit(secondary.raw_permit, preferred.raw_permit),
+    project_tags: Array.from(new Set([...(secondary.project_tags || []), ...(preferred.project_tags || [])])),
+    owner_name: preferred.owner_name || secondary.owner_name || '',
+    owner_business_name: preferred.owner_business_name || secondary.owner_business_name || '',
+    applicant_name: preferred.applicant_name || secondary.applicant_name || '',
+    applicant_business_name: preferred.applicant_business_name || secondary.applicant_business_name || '',
+    filing_rep_name: preferred.filing_rep_name || secondary.filing_rep_name || '',
+    description: preferred.description || secondary.description || '',
+  };
+}
+
+function dedupeLeadRows(leadRows) {
+  const byPermitKey = new Map();
+  let droppedWithoutKey = 0;
+
+  leadRows.forEach((leadRow) => {
+    if (!leadRow.permit_key) {
+      droppedWithoutKey += 1;
+      return;
+    }
+
+    const existing = byPermitKey.get(leadRow.permit_key);
+    byPermitKey.set(
+      leadRow.permit_key,
+      existing ? mergeLeadRows(existing, leadRow) : leadRow,
+    );
+  });
+
+  return {
+    rows: Array.from(byPermitKey.values()),
+    duplicatesCollapsed: Math.max(leadRows.length - byPermitKey.size - droppedWithoutKey, 0),
+    droppedWithoutKey,
+  };
+}
+
 function buildProjectTags(permit) {
   const description = normalizeText(permit.job_description);
   const tags = [];
@@ -2839,17 +2902,21 @@ async function runPermitIngestInternal(env, gateway, options = {}) {
             : `Scanned ${result.scanned} permits, but none cleared the fit thresholds.`,
         detail:
           result.ingested > 0
-            ? 'Permit ingest completed and the lead queue was refreshed.'
+            ? result.duplicatesCollapsed > 0
+              ? `Permit ingest completed, the queue was refreshed, and ${result.duplicatesCollapsed} duplicate permit rows were collapsed before save.`
+              : 'Permit ingest completed and the lead queue was refreshed.'
             : 'Permit ingest completed, but nothing new matched the MetroGlassPro profile.',
         metadata: {
           scanned: result.scanned,
           ingested: result.ingested,
+          duplicatesCollapsed: result.duplicatesCollapsed || 0,
+          droppedWithoutKey: result.droppedWithoutKey || 0,
         },
       }),
     },
     async () => {
       const permits = await fetchDobPermits();
-      const leadRows = permits
+      const scoredRows = permits
         .map((permit) => ({
           permit,
           scoreBreakdown: buildLeadScore(permit),
@@ -2857,11 +2924,15 @@ async function runPermitIngestInternal(env, gateway, options = {}) {
         .filter((entry) => entry.scoreBreakdown.total > 0 && entry.scoreBreakdown.disqualifiers.length === 0)
         .map((entry) => buildLeadRow(entry.permit, entry.scoreBreakdown));
 
+      const { rows: leadRows, duplicatesCollapsed, droppedWithoutKey } = dedupeLeadRows(scoredRows);
+
       if (leadRows.length === 0) {
         return {
           scanned: permits.length,
           ingested: 0,
           leads: [],
+          duplicatesCollapsed,
+          droppedWithoutKey,
         };
       }
 
@@ -2870,6 +2941,8 @@ async function runPermitIngestInternal(env, gateway, options = {}) {
         scanned: permits.length,
         ingested: ingested.length,
         leads: ingested,
+        duplicatesCollapsed,
+        droppedWithoutKey,
       };
     },
     options,
