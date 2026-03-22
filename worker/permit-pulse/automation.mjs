@@ -2578,6 +2578,19 @@ function mapSnapshot(snapshot) {
     const property = propertyMap.get(lead.id) || {};
     const contacts = contactsMap.get(lead.id) || [];
     const manualEnrichment = lead.enrichment_summary?.manualEnrichment || {};
+    const scoreBreakdown = lead.score_breakdown && typeof lead.score_breakdown === 'object' ? lead.score_breakdown : {};
+    const contactability = lead.contactability_breakdown && typeof lead.contactability_breakdown === 'object'
+      ? lead.contactability_breakdown
+      : {};
+    const bestNextAction = lead.best_next_action && typeof lead.best_next_action === 'object'
+      ? lead.best_next_action
+      : {};
+    const readiness = lead.enrichment_summary?.readiness && typeof lead.enrichment_summary.readiness === 'object'
+      ? lead.enrichment_summary.readiness
+      : {};
+    const channelDecision = lead.enrichment_summary?.channelDecision && typeof lead.enrichment_summary.channelDecision === 'object'
+      ? lead.enrichment_summary.channelDecision
+      : {};
     const outreachHistory = (outreachMap.get(lead.id) || []).map((item) => ({
       id: item.id,
       channel: item.channel,
@@ -2601,20 +2614,52 @@ function mapSnapshot(snapshot) {
       ...permit,
       id: lead.permit_key,
       score: lead.score,
-      scoreBreakdown: lead.score_breakdown || {},
-      relevanceScore: Number(lead.score_breakdown?.relevanceScore || 0.3),
-      relevanceKeyword: lead.score_breakdown?.relevanceKeyword || '',
-      serviceAngle: lead.score_breakdown?.serviceAngle || 'custom glass scope',
+      scoreBreakdown: {
+        directKeyword: Number(scoreBreakdown.directKeyword || 0),
+        inferredNeed: Number(scoreBreakdown.inferredNeed || 0),
+        costSignal: Number(scoreBreakdown.costSignal || 0),
+        commercialSignal: Number(scoreBreakdown.commercialSignal || 0),
+        buildingTypeSignal: Number(scoreBreakdown.buildingTypeSignal || 0),
+        recencyBonus: Number(scoreBreakdown.recencyBonus || 0),
+        locationBonus: Number(scoreBreakdown.locationBonus || 0),
+        negativeSignals: Number(scoreBreakdown.negativeSignals || 0),
+        total: Number(scoreBreakdown.total || lead.score || 0),
+        reasons: Array.isArray(scoreBreakdown.reasons) ? scoreBreakdown.reasons : [],
+        disqualifiers: Array.isArray(scoreBreakdown.disqualifiers) ? scoreBreakdown.disqualifiers : [],
+        summary: scoreBreakdown.summary || '',
+        relevanceScore: Number(scoreBreakdown.relevanceScore || 0.3),
+        relevanceKeyword: scoreBreakdown.relevanceKeyword || '',
+        serviceAngle: scoreBreakdown.serviceAngle || 'custom glass scope',
+      },
+      relevanceScore: Number(scoreBreakdown.relevanceScore || 0.3),
+      relevanceKeyword: scoreBreakdown.relevanceKeyword || '',
+      serviceAngle: scoreBreakdown.serviceAngle || 'custom glass scope',
       qualityTier: lead.enrichment_summary?.qualityTier || lead.lead_tier || 'cold',
       leadTier: lead.lead_tier || getLeadTier(lead.score),
-      contactability: lead.contactability_breakdown || {
-        total: lead.contactability_score,
-        label: lead.contactability_label,
-        reasons: [],
-        missing: [],
-        explanation: '',
+      contactability: {
+        ownerPresent: Number(contactability.ownerPresent || 0),
+        ownerBusinessPresent: Number(contactability.ownerBusinessPresent || 0),
+        gcPresent: Number(contactability.gcPresent || 0),
+        filingRepPresent: Number(contactability.filingRepPresent || 0),
+        websiteFound: Number(contactability.websiteFound || 0),
+        directEmailFound: Number(contactability.directEmailFound || 0),
+        genericEmailFound: Number(contactability.genericEmailFound || 0),
+        phoneFound: Number(contactability.phoneFound || 0),
+        contactFormFound: Number(contactability.contactFormFound || 0),
+        linkedInFound: Number(contactability.linkedInFound || 0),
+        instagramFound: Number(contactability.instagramFound || 0),
+        total: Number(contactability.total || lead.contactability_score || 0),
+        label: contactability.label || lead.contactability_label || 'Weak',
+        reasons: Array.isArray(contactability.reasons) ? contactability.reasons : [],
+        missing: Array.isArray(contactability.missing) ? contactability.missing : [],
+        explanation: contactability.explanation || '',
       },
-      nextAction: lead.best_next_action || {
+      nextAction: Object.keys(bestNextAction).length > 0 ? {
+        label: bestNextAction.label || 'Research needed',
+        detail: bestNextAction.detail || lead.auto_send_reason || '',
+        queue: bestNextAction.queue || 'research',
+        urgency: bestNextAction.urgency || 'medium',
+      } : {
         label: 'Research needed',
         detail: lead.auto_send_reason || '',
         queue: 'research',
@@ -2778,18 +2823,18 @@ function mapSnapshot(snapshot) {
       outreachReadiness: {
         score: lead.outreach_readiness_score || 0,
         label: lead.outreach_readiness_label || 'Needs Review',
-        explanation: lead.enrichment_summary?.readiness?.explanation || '',
-        blockers: lead.enrichment_summary?.readiness?.blockers || [],
+        explanation: readiness.explanation || '',
+        blockers: Array.isArray(readiness.blockers) ? readiness.blockers : [],
       },
       channelDecision: {
         primary: lead.best_channel || 'email',
-        reason: lead.enrichment_summary?.channelDecision?.reason || '',
-        alternatives: lead.enrichment_summary?.channelDecision?.alternatives || [],
+        reason: channelDecision.reason || '',
+        alternatives: Array.isArray(channelDecision.alternatives) ? channelDecision.alternatives : [],
         autoSendEligible: Boolean(lead.auto_send_eligible),
-        routeConfidence: lead.enrichment_summary?.channelDecision?.routeConfidence || 0,
-        recipientType: lead.enrichment_summary?.channelDecision?.recipientType || '',
-        targetRole: lead.enrichment_summary?.channelDecision?.targetRole || '',
-        routeSource: lead.enrichment_summary?.channelDecision?.routeSource || '',
+        routeConfidence: Number(channelDecision.routeConfidence || 0),
+        recipientType: channelDecision.recipientType || '',
+        targetRole: channelDecision.targetRole || '',
+        routeSource: channelDecision.routeSource || '',
       },
       outreachHistory,
       automationSummary: {

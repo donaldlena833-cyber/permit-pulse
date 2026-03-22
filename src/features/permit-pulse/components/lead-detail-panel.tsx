@@ -381,27 +381,37 @@ export function LeadDetailPanel({
     )
   }
 
+  const contacts = Array.isArray(lead.contacts) ? lead.contacts : []
+  const resolutionCandidates = Array.isArray(lead.resolutionCandidates) ? lead.resolutionCandidates : []
+  const enrichmentFacts = Array.isArray(lead.enrichmentFacts) ? lead.enrichmentFacts : []
+  const activities = Array.isArray(lead.activities) ? lead.activities : []
+  const readinessBlockers = Array.isArray(lead.outreachReadiness?.blockers) ? lead.outreachReadiness.blockers : []
+  const contactabilityMissing = Array.isArray(lead.contactability?.missing) ? lead.contactability.missing : []
+  const enrichmentSourceTags = Array.isArray(lead.enrichment?.sourceTags) ? lead.enrichment.sourceTags : []
+  const propertySourceTags = Array.isArray(lead.propertyProfile?.sourceTags) ? lead.propertyProfile.sourceTags : []
+  const confidenceTags = Array.isArray(lead.enrichment?.confidenceTags) ? lead.enrichment.confidenceTags : []
+
   const website =
     lead.enrichment.companyWebsite ||
     lead.companyProfile.website ||
-    lead.contacts.find((contact) => contact.website)?.website ||
+    contacts.find((contact) => contact.website)?.website ||
     ""
   const primaryEmail =
     lead.enrichment.directEmail ||
     lead.enrichment.genericEmail ||
-    lead.contacts.find((contact) => contact.email)?.email ||
+    contacts.find((contact) => contact.email)?.email ||
     ""
-  const phone = lead.enrichment.phone || lead.contacts.find((contact) => contact.phone)?.phone || ""
+  const phone = lead.enrichment.phone || contacts.find((contact) => contact.phone)?.phone || ""
   const linkedIn =
     lead.enrichment.linkedInUrl ||
     lead.companyProfile.linkedInUrl ||
-    lead.contacts.find((contact) => contact.linkedInUrl)?.linkedInUrl ||
+    contacts.find((contact) => contact.linkedInUrl)?.linkedInUrl ||
     ""
 
-  const chosenContact = lead.contacts.find((contact) => contact.isPrimary) || lead.contacts[0] || null
-  const alternativeContacts = chosenContact ? lead.contacts.filter((contact) => contact.id !== chosenContact.id) : lead.contacts
-  const companyCandidates = lead.resolutionCandidates.filter((candidate) => candidate.type === "company")
-  const personCandidates = lead.resolutionCandidates.filter((candidate) => candidate.type === "person")
+  const chosenContact = contacts.find((contact) => contact.isPrimary) || contacts[0] || null
+  const alternativeContacts = chosenContact ? contacts.filter((contact) => contact.id !== chosenContact.id) : contacts
+  const companyCandidates = resolutionCandidates.filter((candidate) => candidate.type === "company")
+  const personCandidates = resolutionCandidates.filter((candidate) => candidate.type === "person")
   const selectedCompanyCandidate = companyCandidates.find((candidate) => candidate.status === "selected") || null
   const rejectedCompanyCandidates = companyCandidates.filter((candidate) => candidate.status !== "selected").slice(0, 4)
   const selectedPeople = personCandidates.filter((candidate) => candidate.status === "selected").slice(0, 3)
@@ -410,15 +420,15 @@ export function LeadDetailPanel({
   const canSendNow = Boolean(primaryEmail && lead.outreachDraft.subject && lead.outreachDraft.shortEmail)
   const trustScore = getTrustScore(lead)
   const trustLabel = getTrustLabel(trustScore)
-  const trustGaps = uniq([...lead.outreachReadiness.blockers, ...lead.contactability.missing]).slice(0, 4)
+  const trustGaps = uniq([...readinessBlockers, ...contactabilityMissing]).slice(0, 4)
   const chosenTarget = lead.channelDecision.targetRole || chosenContact?.role || lead.companyProfile.role || "company"
   const routeQuality = lead.channelDecision.recipientType || (chosenContact?.type ?? "unrated")
   const automationSources = uniq([
-    ...lead.enrichment.sourceTags,
-    ...lead.propertyProfile.sourceTags,
+    ...enrichmentSourceTags,
+    ...propertySourceTags,
     lead.companyProfile.searchQuery ? "brave" : "",
     lead.companyProfile.website ? "website" : "",
-    lead.contacts.some((contact) => contact.source === "firecrawl") ? "firecrawl" : "",
+    contacts.some((contact) => contact.source === "firecrawl") ? "firecrawl" : "",
   ])
 
   const automationMode = !automationHealth
@@ -829,12 +839,12 @@ export function LeadDetailPanel({
                       ) : null}
 
                       <div className="space-y-2">
-                        {lead.enrichmentFacts.length === 0 ? (
+                        {enrichmentFacts.length === 0 ? (
                           <p className="text-sm text-navy-500 dark:text-dark-muted">
                             No structured facts yet. Run enrichment to refresh company and contact clues.
                           </p>
                         ) : (
-                          lead.enrichmentFacts.slice(0, 8).map((fact) => (
+                          enrichmentFacts.slice(0, 8).map((fact) => (
                             <div
                               key={fact.id}
                               className="rounded-[18px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg"
@@ -1093,10 +1103,10 @@ export function LeadDetailPanel({
               <TabsContent className="space-y-4" value="timeline">
                 <InfoBlock title="Activity timeline" description="Lead memory that makes rescans and interruptions easy to recover from.">
                   <div className="space-y-2">
-                    {lead.activities.length === 0 ? (
+                    {activities.length === 0 ? (
                       <p className="text-sm text-navy-500 dark:text-dark-muted">No activity recorded yet.</p>
                     ) : (
-                      lead.activities.map((activity) => (
+                      activities.map((activity) => (
                         <div
                           key={activity.id}
                           className="flex items-start gap-3 rounded-[20px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg"
@@ -1169,8 +1179,8 @@ export function LeadDetailPanel({
                           Confidence tags
                         </div>
                         <div className="mt-2 flex flex-wrap gap-2">
-                          {lead.enrichment.confidenceTags.length > 0 ? (
-                            lead.enrichment.confidenceTags.map((item) => (
+                          {confidenceTags.length > 0 ? (
+                            confidenceTags.map((item) => (
                               <span
                                 key={item}
                                 className="rounded-full border border-navy-200 bg-white/80 px-3 py-1 text-xs text-navy-600 dark:border-dark-border dark:bg-dark-bg dark:text-dark-muted"
