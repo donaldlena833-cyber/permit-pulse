@@ -59,6 +59,31 @@ const DIRECTORY_DOMAIN_DENYLIST = [
   'chamberofcommerce.com',
   'nextdoor.com',
 ];
+const FREE_MAILBOX_DOMAINS = [
+  'gmail.com',
+  'yahoo.com',
+  'aol.com',
+  'icloud.com',
+  'me.com',
+  'outlook.com',
+  'hotmail.com',
+  'live.com',
+  'msn.com',
+];
+const PLACEHOLDER_EMAIL_LOCALS = [
+  'noreply',
+  'no-reply',
+  'donotreply',
+  'do-not-reply',
+  'example',
+  'sample',
+  'test',
+  'demo',
+  'invalid',
+  'yourname',
+  'email',
+  'mail',
+];
 
 function summarizeError(error) {
   return error instanceof Error ? error.message : String(error || 'Automation step failed');
@@ -230,6 +255,59 @@ function stripCompanySuffix(value) {
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function emailLocalPart(email = '') {
+  return normalizeText((email.split('@')[0] || '').trim());
+}
+
+function emailDomain(email = '') {
+  return normalizeText((email.split('@')[1] || '').trim());
+}
+
+function normalizeEmailAddress(email = '') {
+  return normalizeText(email);
+}
+
+function isFreeMailboxDomain(domain = '') {
+  return FREE_MAILBOX_DOMAINS.includes(normalizeText(domain));
+}
+
+function isPlaceholderMailbox(email = '') {
+  const local = emailLocalPart(email).replace(/\+/g, '');
+  const domain = emailDomain(email);
+
+  if (!local || !domain) {
+    return true;
+  }
+
+  if (domain === 'example.com' || domain.endsWith('.example.com') || domain.includes('example.')) {
+    return true;
+  }
+
+  return PLACEHOLDER_EMAIL_LOCALS.some((entry) =>
+    local === entry
+    || local.startsWith(`${entry}.`)
+    || local.endsWith(`.${entry}`)
+    || local.includes(`${entry}+`)
+  );
+}
+
+function getKnownPersonTokens(permit) {
+  return uniq([
+    ...tokenizeName(permit.owner_name || ''),
+    ...tokenizeName(getApplicantName(permit) || ''),
+    ...tokenizeName(getFilingRepName(permit) || ''),
+  ]);
+}
+
+function getKnownCompanyTokens(companyProfile, permit) {
+  return uniq([
+    ...tokenizeName(companyProfile?.company_name || ''),
+    ...tokenizeName(permit.owner_business_name || ''),
+    ...tokenizeName(permit.applicant_business_name || ''),
+    ...tokenizeName(permit.filing_representative_business_name || ''),
+  ]);
 }
 
 function tokenizeName(value) {
@@ -585,8 +663,12 @@ function buildContactability(permit, propertyProfile, companyProfile, contacts) 
   }
 
   const directEmail = contacts.find((contact) => contact.email && contact.type === 'verified');
-  const publicEmail = contacts.find((contact) => contact.email && contact.type === 'public');
-  const guessedEmail = contacts.find((contact) => contact.email && contact.type === 'guessed');
+  const publicEmail = contacts.find(
+    (contact) => contact.email && contact.type === 'public' && Number(contact.confidence || 0) >= 60,
+  );
+  const guessedEmail = contacts.find(
+    (contact) => contact.email && contact.type === 'guessed' && Number(contact.confidence || 0) >= 42,
+  );
   const phone = contacts.find((contact) => contact.phone);
   const form = contacts.find((contact) => contact.contact_form_url);
   const linkedIn = contacts.find((contact) => contact.linkedin_url);
@@ -681,10 +763,103 @@ function isGenericMailbox(email = '') {
   return ['info', 'sales', 'contact', 'hello', 'office', 'admin', 'support', 'estimating', 'billing'].includes(local);
 }
 
+function assessEmailCandidate(email, { companyProfile, permit, source = '' } = {}) {
+  const normalizedEmail = normalizeEmailAddress(email);
+  const domain = emailDomain(normalizedEmail);
+  const local = emailLocalPart(normalizedEmail);
+  const officialDomain = normalizeText(companyProfile?.domain || rootDomain(companyProfile?.website || ''));
+  const personTokens = getKnownPersonTokens(permit || {});
+  const companyTokens = getKnownCompanyTokens(companyProfile || {}, permit || {});
+  const localSearchable = local.replace(/[._+-]/g, ' ');
+  const personMatches = countTokenMatches(personTokens, localSearchable);
+  const companyMatches = countTokenMatches(companyTokens, localSearchable);
+  const matchesOfficialDomain = Boolean(
+    officialDomain && (domain === officialDomain || domain.endsWith(`.${officialDomain}`)),
+  );
+  const freeMailbox = isFreeMailboxDomain(domain);
+  const genericMailbox = isGenericMailbox(normalizedEmail);
+
+  if (!domain || isDirectoryDomain(domain) || isPlaceholderMailbox(normalizedEmail)) {
+    return { accept: false, confidence: 0, domain, reason: 'junk-email' };
+  }
+
+  if (!matchesOfficialDomain && !freeMailbox) {
+    return { accept: false, confidence: 0, domain, reason: 'unrelated-domain' };
+  }
+
+  if (freeMailbox && personMatches === 0 && companyMatches === 0) {
+    return { accept: false, confidence: 0, domain, reason: 'free-mailbox-without-match' };
+  }
+
+  let confidence = 0;
+
+  if (matchesOfficialDomain) {
+    confidence += 62;
+  } else if (freeMailbox) {
+    confidence += 34;
+  }
+
+  if (source === 'firecrawl') {
+    confidence += 12;
+  } else if (source === 'website_resolution') {
+    confidence += 8;
+  } else if (source === 'brave_search') {
+    confidence -= 16;
+  } else if (source === 'pattern_guess') {
+    confidence -= 10;
+  }
+
+  if (genericMailbox) {
+    confidence -= matchesOfficialDomain ? 10 : 16;
+  } else {
+    confidence += 8;
+  }
+
+  confidence += Math.min(12, personMatches * 6);
+  confidence += Math.min(10, companyMatches * 5);
+
+  return {
+    accept: confidence >= 28,
+    confidence: clamp(confidence, 0, 96),
+    domain,
+    genericMailbox,
+    freeMailbox,
+    matchesOfficialDomain,
+    personMatches,
+    companyMatches,
+    reason: confidence >= 28 ? 'accepted' : 'low-trust',
+  };
+}
+
 function isPremiumLinkedInTarget(companyProfile) {
   return METROGLASS_PROFILE.linkedinSignals.some((signal) =>
     normalizeText(companyProfile.normalized_name || companyProfile.company_name).includes(signal),
   );
+}
+
+function scoreEmailContactForSelection(contact, companyProfile) {
+  if (!contact?.email) {
+    return -100;
+  }
+
+  const officialDomain = normalizeText(companyProfile?.domain || rootDomain(companyProfile?.website || ''));
+  const contactDomain = emailDomain(contact.email);
+  const genericMailbox = isGenericMailbox(contact.email);
+  const freeMailbox = isFreeMailboxDomain(contactDomain);
+  const officialDomainMatch = Boolean(
+    officialDomain && (contactDomain === officialDomain || contactDomain.endsWith(`.${officialDomain}`)),
+  );
+
+  let score = Math.round(contact.confidence || 0);
+  score += contact.type === 'verified' ? 32 : contact.type === 'public' ? 12 : -10;
+  score += contact.verified ? 10 : 0;
+  score += officialDomainMatch ? 16 : freeMailbox ? -2 : -18;
+  score += genericMailbox ? -14 : 8;
+  score += contact.source === 'firecrawl' ? 8 : contact.source === 'manual' ? 10 : 0;
+  score += contact.source === 'pattern_guess' ? -16 : 0;
+  score += contact.source === 'brave_search' ? -10 : 0;
+
+  return score;
 }
 
 function buildRouteCandidates({ companyProfile, contacts }) {
@@ -697,11 +872,9 @@ function buildRouteCandidates({ companyProfile, contacts }) {
     const confidence = Math.round(contact.confidence || 0);
 
     if (contact.email) {
-      let score = 56 + rolePriority + Math.round(confidence * 0.22);
-      score += contact.type === 'verified' ? 18 : contact.type === 'public' ? 10 : 3;
-      score += isGenericMailbox(contact.email) ? -8 : 6;
-      score += contact.verified ? 6 : 0;
-      score += contact.type === 'guessed' ? -6 : 0;
+      const emailSelectionScore = scoreEmailContactForSelection(contact, companyProfile);
+      let score = 36 + rolePriority + Math.round(confidence * 0.18);
+      score += emailSelectionScore - Math.round(confidence);
 
       candidates.push({
         channel: 'email',
@@ -1100,19 +1273,18 @@ function getBusinessHourState(now = new Date()) {
   return { insideBusinessHours, isWeekend, hour, weekday };
 }
 
-function pickPrimaryContact(contacts) {
+function pickPrimaryContact(contacts, companyProfile = {}) {
   const emailContacts = [...contacts]
     .filter((contact) => contact.email)
     .sort((left, right) => {
-      const rank = { verified: 3, public: 2, guessed: 1 };
-      return (rank[right.type] || 0) - (rank[left.type] || 0) || (right.confidence || 0) - (left.confidence || 0);
+      return scoreEmailContactForSelection(right, companyProfile) - scoreEmailContactForSelection(left, companyProfile);
     });
 
   return emailContacts[0] || contacts.find((contact) => contact.phone) || contacts.find((contact) => contact.contact_form_url) || null;
 }
 
 function buildDraft(lead, companyProfile, contacts) {
-  const primaryContact = pickPrimaryContact(contacts);
+  const primaryContact = pickPrimaryContact(contacts, companyProfile);
   const address = sanitizeOutreachCopy(lead.address);
   const projectAngle = getProjectAngle(lead);
   const relevanceScore = Number(lead.score_breakdown?.relevanceScore || lead.scoreBreakdown?.relevanceScore || 0.3);
@@ -2017,17 +2189,21 @@ async function scrapeWebsiteSignals(env, leadScore, website, options = {}) {
 }
 
 function generateGuessedEmails(companyProfile, permit, contacts) {
-  const domain = companyProfile.domain;
-  if (!domain) {
+  const domain = normalizeText(companyProfile.domain || '');
+  if (!domain || isDirectoryDomain(domain) || isFreeMailboxDomain(domain)) {
     return [];
   }
 
-  const nameSeed = permit.owner_name || getApplicantName(permit) || '';
+  if ((companyProfile.match_strength || 'weak') !== 'strong') {
+    return [];
+  }
+
+  const nameSeed = getApplicantName(permit) || getFilingRepName(permit) || permit.owner_name || '';
   const parts = nameSeed
     .toLowerCase()
     .replace(/[^a-z\s]/g, ' ')
     .split(/\s+/)
-    .filter(Boolean);
+    .filter((part) => part.length >= 2);
 
   if (parts.length < 2) {
     return [];
@@ -2036,12 +2212,6 @@ function generateGuessedEmails(companyProfile, permit, contacts) {
   const [first, ...rest] = parts;
   const last = rest[rest.length - 1];
   const patterns = uniq([
-    'info',
-    'contact',
-    'office',
-    'sales',
-    'hello',
-    'estimating',
     parts.length >= 2 ? `${first}` : '',
     parts.length >= 2 ? `${first}.${last}` : '',
     parts.length >= 2 ? `${first[0]}${last}` : '',
@@ -2229,25 +2399,6 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     });
   });
 
-  searchSignals.emails.forEach((email, index) => {
-    contacts.push({
-      id: createId('contact'),
-      name: permit.owner_name || getApplicantName(permit) || '',
-      role: company.role || 'owner',
-      email,
-      phone: '',
-      website_url: company.website || searchSignals.website || '',
-      linkedin_url: socialLinks.linkedin_url || '',
-      instagram_url: socialLinks.instagram_url || '',
-      contact_form_url: socialLinks.contact_form_url || '',
-      type: 'public',
-      confidence: 66,
-      source: 'brave_search',
-      verified: false,
-      is_primary: index === 0,
-    });
-  });
-
   searchSignals.phones.forEach((phone, index) => {
     contacts.push({
       id: createId('contact'),
@@ -2263,23 +2414,33 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       confidence: 62,
       source: 'brave_search',
       verified: false,
-      is_primary: index === 0 && searchSignals.emails.length === 0,
+      is_primary: index === 0 && !contacts.some((contact) => contact.email),
     });
   });
 
   (websiteSignals?.emails || []).forEach((email, index) => {
+    const assessment = assessEmailCandidate(email, {
+      companyProfile: company,
+      permit,
+      source: 'firecrawl',
+    });
+
+    if (!assessment.accept) {
+      return;
+    }
+
     contacts.push({
       id: createId('contact'),
-      name: permit.owner_name || '',
+      name: permit.owner_name || getApplicantName(permit) || '',
       role: company.role || 'owner',
-      email,
+      email: normalizeEmailAddress(email),
       phone: '',
       website_url: company.website || searchSignals.website || '',
       linkedin_url: socialLinks.linkedin_url || '',
       instagram_url: socialLinks.instagram_url || '',
       contact_form_url: socialLinks.contact_form_url || '',
-      type: index === 0 ? 'public' : 'public',
-      confidence: 72,
+      type: 'public',
+      confidence: assessment.confidence,
       source: 'firecrawl',
       verified: false,
       is_primary: index === 0,
@@ -2307,18 +2468,28 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
 
   const guessedEmails = generateGuessedEmails(company, permit, contacts);
   guessedEmails.forEach((email, index) => {
+    const assessment = assessEmailCandidate(email, {
+      companyProfile: company,
+      permit,
+      source: 'pattern_guess',
+    });
+
+    if (!assessment.accept) {
+      return;
+    }
+
     contacts.push({
       id: createId('contact'),
-      name: permit.owner_name || '',
+      name: getApplicantName(permit) || getFilingRepName(permit) || permit.owner_name || '',
       role: company.role || 'owner',
-      email,
+      email: normalizeEmailAddress(email),
       phone: '',
       website_url: company.website || searchSignals.website || '',
       linkedin_url: socialLinks.linkedin_url || '',
       instagram_url: socialLinks.instagram_url || '',
       contact_form_url: socialLinks.contact_form_url || '',
       type: 'guessed',
-      confidence: 48,
+      confidence: assessment.confidence,
       source: 'pattern_guess',
       verified: false,
       is_primary: !contacts.some((contact) => contact.email) && index === 0,
@@ -2345,16 +2516,15 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
   }
 
   const dedupedContacts = dedupeContacts(contacts);
-  const primaryEmailCandidate = pickPrimaryContact(dedupedContacts)?.email || '';
+  const primaryEmailCandidate = pickPrimaryContact(dedupedContacts, company)?.email || '';
   const shouldVerify =
-    leadRow.score >= HIGH_VALUE_SCORE &&
-    Boolean(primaryEmailCandidate);
+    Boolean(primaryEmailCandidate) &&
+    (leadRow.score >= HIGH_VALUE_SCORE || options.force);
   const verification = await maybeVerifyEmail(env, primaryEmailCandidate, shouldVerify);
 
   if (verification.verified && primaryEmailCandidate) {
     const primaryContact = dedupedContacts.find((contact) => contact.email === primaryEmailCandidate);
     if (primaryContact) {
-      primaryContact.type = 'verified';
       primaryContact.verified = true;
       primaryContact.confidence = Math.max(primaryContact.confidence, verification.confidence);
     }
@@ -2479,7 +2649,7 @@ async function maybeAutoSend(env, gateway, enriched) {
     return { sent: false, reason: 'Throttle limit reached' };
   }
 
-  const primaryContact = pickPrimaryContact(contacts);
+  const primaryContact = pickPrimaryContact(contacts, lead.enrichment_summary?.company || {});
   if (!primaryContact?.email) {
     await gateway.patch('leads', [eq('id', lead.id)], {
       auto_send_reason: 'No email route available for auto-send.',
@@ -3755,7 +3925,7 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         throw new Error('No draft available to send');
       }
 
-      const primaryContact = contacts.find((contact) => contact.email) || null;
+      const primaryContact = pickPrimaryContact(contacts, lead.companyProfile || {}) || null;
       if (!primaryContact?.email) {
         throw new Error('No email available');
       }
