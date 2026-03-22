@@ -76,6 +76,7 @@ interface LeadDetailPanelProps {
   automationHealth: AutomationHealth | null
   isEnriching: boolean
   isSending: boolean
+  mobile?: boolean
   onStatusChange: (leadId: string, status: LeadStatus) => void
   onEnrichmentChange: (leadId: string, patch: Partial<EnrichmentData>) => void
   onDraftChange: (leadId: string, patch: Partial<OutreachDraft>) => void
@@ -302,6 +303,7 @@ export function LeadDetailPanel({
   automationHealth,
   isEnriching,
   isSending,
+  mobile = false,
   onStatusChange,
   onEnrichmentChange,
   onDraftChange,
@@ -443,6 +445,320 @@ export function LeadDetailPanel({
     : automationHealth.hasSupabase
       ? "The worker can match property context, resolve companies, scrape websites, and refresh contact routes for this lead."
       : "The worker is online, but Supabase is missing, so API-backed enrichment cannot persist."
+
+  if (mobile) {
+    return (
+      <div className="relative h-full rounded-[30px] border border-navy-200/70 bg-white/90 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
+        <ScrollArea className="h-full">
+          <div className="space-y-3 p-3 pb-32">
+            <SectionCard
+              className="rounded-[28px]"
+              contentClassName="space-y-3"
+              description={lead.humanSummary || "Review the lead, trust the best route, and move on."}
+              title={getPermitAddress(lead)}
+            >
+              <div className="flex flex-wrap gap-2">
+                <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                <StatusBadge status={lead.workflow.status} />
+                <BoroughBadge borough={lead.borough} />
+              </div>
+
+              <div className="rounded-[18px] border border-navy-200/70 bg-cream-50/80 p-3 dark:border-dark-border/70 dark:bg-dark-bg">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
+                  Best next step
+                </div>
+                <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                  {lead.nextAction.label}
+                </div>
+                <p className="mt-1 text-sm leading-6 text-navy-600 dark:text-dark-muted">{lead.nextAction.detail}</p>
+              </div>
+
+              <div className="grid gap-2">
+                <RouteRow
+                  actionLabel={primaryEmail ? "Copy" : undefined}
+                  icon={Mail}
+                  label="Best email"
+                  onAction={primaryEmail ? () => copyValue("Email", primaryEmail) : undefined}
+                  value={primaryEmail || "No email selected yet"}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <CompactField label="Company" value={selectedCompanyCandidate?.label || lead.companyProfile.name || "Still resolving"} />
+                  <CompactField label="Route" value={lead.channelDecision.primary} />
+                </div>
+              </div>
+            </SectionCard>
+
+            <InfoBlock title="Workflow">
+              <div className="grid gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Pipeline status</label>
+                  <Select onValueChange={(value) => onStatusChange(lead.id, value as LeadStatus)} value={lead.workflow.status}>
+                    <SelectTrigger className="h-11 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STATUS_OPTIONS.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          {status}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Follow-up date</label>
+                  <Input
+                    className="h-11 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                    onChange={(event) => onFollowUpDateChange(lead.id, event.target.value)}
+                    type="date"
+                    value={lead.enrichment.followUpDate}
+                  />
+                </div>
+
+                <Button
+                  className="h-11 justify-start rounded-2xl border-navy-200 bg-white/90 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+                  onClick={() => onToggleIgnored(lead.id)}
+                  type="button"
+                  variant="outline"
+                >
+                  <TimerReset className="h-4 w-4" />
+                  {lead.workflow.ignored ? "Restore lead" : "Archive lead"}
+                </Button>
+              </div>
+            </InfoBlock>
+
+            <InfoBlock title="Contact">
+              <div className="space-y-2">
+                <RouteRow
+                  actionLabel={primaryEmail ? "Copy" : undefined}
+                  icon={Mail}
+                  label="Email"
+                  onAction={primaryEmail ? () => copyValue("Email", primaryEmail) : undefined}
+                  value={primaryEmail}
+                />
+                <RouteRow
+                  actionLabel={phone ? "Copy" : undefined}
+                  icon={Phone}
+                  label="Phone"
+                  onAction={phone ? () => copyValue("Phone", phone) : undefined}
+                  value={phone}
+                />
+                <RouteRow
+                  actionLabel={website ? "Open" : undefined}
+                  icon={Globe}
+                  label="Website"
+                  onAction={website ? () => openExternal(website.startsWith("http") ? website : `https://${website}`) : undefined}
+                  value={website}
+                />
+                <RouteRow
+                  actionLabel={linkedIn ? "Open" : undefined}
+                  icon={Linkedin}
+                  label="LinkedIn"
+                  onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
+                  value={linkedIn}
+                />
+              </div>
+            </InfoBlock>
+
+            <InfoBlock title="Company">
+              <div className="grid gap-2">
+                <CompactField label="Chosen company" value={lead.companyProfile.name || "—"} />
+                <CompactField label="Target role" value={chosenTarget} />
+                <CompactField label="Match strength" value={lead.companyProfile.matchStrength || "weak"} />
+                <CompactField label="Resolver trust" value={`${trustLabel} • ${trustScore}`} />
+              </div>
+            </InfoBlock>
+
+            <InfoBlock title="Permit">
+              <div className="grid gap-2">
+                <CompactField label="GC / Applicant" value={getApplicantDisplay(lead)} />
+                <CompactField label="Filing rep" value={getFilingRepDisplay(lead)} />
+                <CompactField label="Estimated cost" value={formatCurrency(lead.estimated_job_costs)} />
+                <CompactField label="Work type" value={lead.work_type || "—"} />
+                <CompactField label="Issued" value={formatDate(lead.issued_date)} />
+                <CompactField label="Glass scope" value={lead.serviceAngle || "Custom glass scope"} />
+              </div>
+            </InfoBlock>
+
+            <InfoBlock title="Outreach">
+              <div className="space-y-3">
+                <ControlButton
+                  icon={Sparkles}
+                  label="Refresh draft"
+                  onClick={() => onGenerateDraft(lead.id)}
+                />
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Subject</label>
+                  <Input
+                    className="h-11 rounded-2xl border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                    onChange={(event) => onDraftChange(lead.id, { subject: event.target.value })}
+                    value={lead.outreachDraft.subject}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Email draft</label>
+                  <Textarea
+                    className="min-h-[180px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                    onChange={(event) => onDraftChange(lead.id, { shortEmail: event.target.value })}
+                    value={lead.outreachDraft.shortEmail}
+                  />
+                </div>
+              </div>
+            </InfoBlock>
+
+            <Collapsible className="rounded-[24px] border border-navy-200/70 bg-white/80 p-4 dark:border-dark-border/70 dark:bg-dark-card/80">
+              <CollapsibleTrigger asChild>
+                <button className="flex w-full items-center justify-between text-left" type="button">
+                  <div>
+                    <div className="text-sm font-semibold tracking-[-0.02em] text-navy-900 dark:text-dark-text">Research</div>
+                    <div className="mt-1 text-sm text-navy-500 dark:text-dark-muted">Alternatives, candidates, and enrichment facts.</div>
+                  </div>
+                  <ChevronDown className="h-4 w-4 text-navy-500 transition-transform group-data-[state=open]:rotate-180 dark:text-dark-muted" />
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-4 space-y-4">
+                {selectedCompanyCandidate ? (
+                  <CandidateCard
+                    candidate={selectedCompanyCandidate}
+                    onReject={() => onRejectCandidate(lead.id, selectedCompanyCandidate.id)}
+                  />
+                ) : null}
+
+                {selectedPeople.map((candidate) => (
+                  <CandidateCard
+                    key={candidate.id}
+                    candidate={candidate}
+                    onReject={() => onRejectCandidate(lead.id, candidate.id)}
+                  />
+                ))}
+
+                {alternativeContacts.slice(0, 3).map((contact) => (
+                  <div
+                    key={contact.id}
+                    className="rounded-[18px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg"
+                  >
+                    <div className="text-sm font-medium text-navy-800 dark:text-dark-text">
+                      {contact.name || lead.companyProfile.name || "Unknown contact"}
+                    </div>
+                    <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">
+                      {[contact.role, contact.source, `${contact.confidence}% confidence`].filter(Boolean).join(" • ")}
+                    </div>
+                    <div className="mt-2 text-sm text-navy-700 dark:text-dark-text">
+                      {contact.email || contact.phone || contact.linkedInUrl || "No direct route"}
+                    </div>
+                    {!contact.isPrimary ? (
+                      <div className="mt-3">
+                        <Button className="h-8 rounded-xl px-3 text-[11px]" onClick={() => onSetPrimaryContact(lead.id, contact.id)} type="button" variant="outline">
+                          Set primary route
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+
+                {enrichmentFacts.slice(0, 6).map((fact) => (
+                  <div
+                    key={fact.id}
+                    className="rounded-[18px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg"
+                  >
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                      {fact.field.replace(/_/g, " ")}
+                    </div>
+                    <div className="mt-1 text-sm leading-6 text-navy-700 dark:text-dark-text">{fact.value}</div>
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+
+            <Collapsible className="rounded-[24px] border border-navy-200/70 bg-white/80 p-4 dark:border-dark-border/70 dark:bg-dark-card/80">
+              <CollapsibleTrigger asChild>
+                <button className="flex w-full items-center justify-between text-left" type="button">
+                  <div>
+                    <div className="text-sm font-semibold tracking-[-0.02em] text-navy-900 dark:text-dark-text">Timeline</div>
+                    <div className="mt-1 text-sm text-navy-500 dark:text-dark-muted">Recent activity and saved lead memory.</div>
+                  </div>
+                  <ChevronDown className="h-4 w-4 text-navy-500 transition-transform group-data-[state=open]:rotate-180 dark:text-dark-muted" />
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-4 space-y-2">
+                {activities.length === 0 ? (
+                  <p className="text-sm text-navy-500 dark:text-dark-muted">No activity recorded yet.</p>
+                ) : (
+                  activities.slice(0, 8).map((activity) => (
+                    <div
+                      key={activity.id}
+                      className="rounded-[18px] border border-navy-200/70 bg-cream-50/70 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-bg"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-navy-800 dark:text-dark-text">{activity.title}</div>
+                        <div className="text-[10px] uppercase tracking-[0.16em] text-navy-400 dark:text-dark-muted">{formatDate(activity.createdAt)}</div>
+                      </div>
+                      <div className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">{activity.detail}</div>
+                    </div>
+                  ))
+                )}
+              </CollapsibleContent>
+            </Collapsible>
+
+            <Collapsible className="rounded-[24px] border border-navy-200/70 bg-white/80 p-4 dark:border-dark-border/70 dark:bg-dark-card/80">
+              <CollapsibleTrigger asChild>
+                <button className="flex w-full items-center justify-between text-left" type="button">
+                  <div>
+                    <div className="text-sm font-semibold tracking-[-0.02em] text-navy-900 dark:text-dark-text">Trace</div>
+                    <div className="mt-1 text-sm text-navy-500 dark:text-dark-muted">Debug only when you need to sanity check the machine.</div>
+                  </div>
+                  <ChevronDown className="h-4 w-4 text-navy-500 transition-transform group-data-[state=open]:rotate-180 dark:text-dark-muted" />
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-4 space-y-2">
+                <CompactField label="Automation mode" value={automationMode} />
+                <CompactField label="Current blocker" value={blocker} />
+                <CompactField label="Search query" value={lead.companyProfile.searchQuery || "No stored query"} />
+                <CompactField label="Worker note" value={automationNote} />
+                {confidenceTags.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {confidenceTags.map((item) => (
+                      <span
+                        key={item}
+                        className="rounded-full border border-navy-200 bg-white/80 px-3 py-1 text-xs text-navy-600 dark:border-dark-border dark:bg-dark-bg dark:text-dark-muted"
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </CollapsibleContent>
+            </Collapsible>
+          </div>
+        </ScrollArea>
+
+        <div className="sticky bottom-[4.75rem] z-20 border-t border-navy-200/70 bg-white/96 p-3 backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/96">
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <Button
+              className="h-12 rounded-2xl bg-orange-500 text-white hover:bg-orange-600"
+              disabled={!canSendNow || !automationHealth?.hasGmail || isSending}
+              onClick={() => onSendNow(lead.id)}
+              type="button"
+            >
+              <Send className="h-4 w-4" />
+              {isSending ? "Sending..." : "Send email"}
+            </Button>
+            <Button
+              className="h-12 rounded-2xl border-navy-200 bg-white/90 px-4 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+              disabled={isEnriching}
+              onClick={() => onRunEnrichment(lead.id)}
+              type="button"
+              variant="outline"
+            >
+              <Bot className="h-4 w-4" />
+              {isEnriching ? "Running..." : "Enrich"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="h-full rounded-[30px] border border-navy-200/70 bg-white/80 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">

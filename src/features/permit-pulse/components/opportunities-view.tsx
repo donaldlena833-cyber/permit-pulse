@@ -1,6 +1,21 @@
-import type { ReactNode } from "react"
-import { MailCheck, Radar, Rows3, SendHorizontal } from "lucide-react"
+import { type ReactNode, useMemo, useState } from "react"
+import { Filter, MailCheck, Radar, Rows3, SendHorizontal } from "lucide-react"
 
+import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { SavedViewTabs, SmartFilterBar } from "@/features/permit-pulse/components/filters"
 import { SentLogView } from "@/features/permit-pulse/components/sent-log-view"
 import type { LeadFilters, OpportunityLane, PermitLead, SavedView, SentLogEntry } from "@/types/permit-pulse"
@@ -99,6 +114,7 @@ export function OpportunitiesView({
   onOpenLead,
   workspace,
 }: OpportunitiesViewProps) {
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const laneMeta = LANE_META.find((item) => item.id === lane) ?? LANE_META[0]
   const visibleCount = lane === "feed" ? scannerCount : lane === "research" ? enrichmentCount : lane === "ready" ? outreachCount : sentCount
   const currentLens =
@@ -115,25 +131,65 @@ export function OpportunitiesView({
       : lane === "research"
         ? "Resolve route"
         : lane === "ready"
-          ? "Move to outreach"
+        ? "Move to outreach"
           : "Track delivery"
+  const activeViewOptions = useMemo(() => {
+    if (lane === "feed") return savedViews
+    if (lane === "research") return enrichmentViews
+    if (lane === "ready") return outreachViews
+    return []
+  }, [enrichmentViews, lane, outreachViews, savedViews])
+  const activeMobileViewId =
+    lane === "feed"
+      ? activeScannerViewId
+      : lane === "research"
+        ? activeEnrichmentViewId
+        : lane === "ready"
+          ? activeOutreachViewId
+          : ""
+  const handleMobileViewChange = (viewId: string) => {
+    if (lane === "feed") {
+      onScannerViewChange(viewId)
+      return
+    }
+
+    if (lane === "research") {
+      onEnrichmentViewChange(viewId)
+      return
+    }
+
+    if (lane === "ready") {
+      onOutreachViewChange(viewId)
+    }
+  }
+  const mobileFilterSummary = [filters.borough === "ALL" ? "All boroughs" : filters.borough, `Last ${filters.daysBack} days`, `$${Math.round(filters.minCost / 1000)}k+`].join(" • ")
 
   return (
     <div className="space-y-4">
-      <div className="rounded-[24px] border border-navy-200/70 bg-white/80 p-3 shadow-[0_20px_60px_rgba(70,55,37,0.08)] backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
-              Opportunities
+      <div className="space-y-4 md:hidden">
+        <div className="rounded-[24px] border border-navy-200/70 bg-white/85 p-3 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
+                Opportunities
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="rounded-full border border-navy-200/70 bg-cream-50/80 px-2.5 py-1 text-[11px] font-medium text-navy-700 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-text">
+                  {visibleCount} visible
+                </span>
+                <span className="text-sm font-medium text-navy-800 dark:text-dark-text">{currentLens}</span>
+              </div>
+              <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">{operatorFocus}</div>
             </div>
-            <div className="rounded-full border border-navy-200/70 bg-cream-50/80 px-3 py-1 text-[11px] font-medium text-navy-700 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-text">
-              {visibleCount} visible
-            </div>
-            <div className="text-sm font-medium text-navy-800 dark:text-dark-text">{currentLens}</div>
-            <div className="text-sm text-navy-500 dark:text-dark-muted">{operatorFocus}</div>
-            <div className="text-sm text-navy-500 dark:text-dark-muted">{laneMeta.description}</div>
+            {lane === "feed" ? (
+              <Button className="h-10 rounded-full px-4" onClick={() => setFiltersOpen(true)} type="button" variant="outline">
+                <Filter className="h-4 w-4" />
+                Search
+              </Button>
+            ) : null}
           </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
             {LANE_META.map((item) => (
               <LanePill
                 key={item.id}
@@ -153,31 +209,126 @@ export function OpportunitiesView({
               />
             ))}
           </div>
+
+          {lane !== "sent" ? (
+            <div className="mt-3 grid gap-3">
+              <Select onValueChange={handleMobileViewChange} value={activeMobileViewId}>
+                <SelectTrigger className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg">
+                  <SelectValue placeholder="Lens" />
+                </SelectTrigger>
+                <SelectContent>
+                  {activeViewOptions.map((view) => (
+                    <SelectItem key={view.id} value={view.id}>
+                      {view.name} ({view.count})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              {lane === "feed" ? (
+                <button
+                  className="flex items-center justify-between rounded-[18px] border border-navy-200/70 bg-cream-50/80 px-4 py-3 text-left dark:border-dark-border/70 dark:bg-dark-bg"
+                  onClick={() => setFiltersOpen(true)}
+                  type="button"
+                >
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                      Active filters
+                    </div>
+                    <div className="mt-1 text-sm text-navy-700 dark:text-dark-text">{mobileFilterSummary}</div>
+                  </div>
+                  <Filter className="h-4 w-4 text-navy-500 dark:text-dark-muted" />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
-        <div className="mt-3 space-y-3">
-          {lane === "feed" ? (
-            <>
-              <SavedViewTabs activeViewId={activeScannerViewId} onSelect={onScannerViewChange} views={savedViews} />
-              <SmartFilterBar filters={filters} onChange={onFiltersChange} onReset={onResetFilters} />
-            </>
-          ) : null}
+        {lane === "sent" ? (
+          <SentLogView entries={sentLog} leads={allLeads} onOpenLead={onOpenLead} showHeader={false} />
+        ) : (
+          workspace
+        )}
 
-          {lane === "research" ? (
-            <SavedViewTabs activeViewId={activeEnrichmentViewId} onSelect={onEnrichmentViewChange} views={enrichmentViews} />
-          ) : null}
-
-          {lane === "ready" ? (
-            <SavedViewTabs activeViewId={activeOutreachViewId} onSelect={onOutreachViewChange} views={outreachViews} />
-          ) : null}
-        </div>
+        <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+          <SheetContent className="rounded-t-[28px] border-none px-5 pb-8 pt-8" side="bottom">
+            <SheetHeader>
+              <SheetTitle>Filter opportunities</SheetTitle>
+              <SheetDescription>Keep the queue clean without leaving the lead list.</SheetDescription>
+            </SheetHeader>
+            <div className="mt-6">
+              <SmartFilterBar
+                filters={filters}
+                layout="mobile"
+                onChange={onFiltersChange}
+                onReset={onResetFilters}
+                showSearch
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
       </div>
 
-      {lane === "sent" ? (
-        <SentLogView entries={sentLog} leads={allLeads} onOpenLead={onOpenLead} showHeader={false} />
-      ) : (
-        workspace
-      )}
+      <div className="hidden space-y-4 md:block">
+        <div className="rounded-[24px] border border-navy-200/70 bg-white/80 p-3 shadow-[0_20px_60px_rgba(70,55,37,0.08)] backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
+                Opportunities
+              </div>
+              <div className="rounded-full border border-navy-200/70 bg-cream-50/80 px-3 py-1 text-[11px] font-medium text-navy-700 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-text">
+                {visibleCount} visible
+              </div>
+              <div className="text-sm font-medium text-navy-800 dark:text-dark-text">{currentLens}</div>
+              <div className="text-sm text-navy-500 dark:text-dark-muted">{operatorFocus}</div>
+              <div className="text-sm text-navy-500 dark:text-dark-muted">{laneMeta.description}</div>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {LANE_META.map((item) => (
+                <LanePill
+                  key={item.id}
+                  active={item.id === lane}
+                  count={
+                    item.id === "feed"
+                      ? scannerCount
+                      : item.id === "research"
+                        ? enrichmentCount
+                        : item.id === "ready"
+                          ? outreachCount
+                          : sentCount
+                  }
+                  icon={item.icon}
+                  label={item.shortLabel}
+                  onClick={() => onLaneChange(item.id)}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3 space-y-3">
+            {lane === "feed" ? (
+              <>
+                <SavedViewTabs activeViewId={activeScannerViewId} onSelect={onScannerViewChange} views={savedViews} />
+                <SmartFilterBar filters={filters} onChange={onFiltersChange} onReset={onResetFilters} />
+              </>
+            ) : null}
+
+            {lane === "research" ? (
+              <SavedViewTabs activeViewId={activeEnrichmentViewId} onSelect={onEnrichmentViewChange} views={enrichmentViews} />
+            ) : null}
+
+            {lane === "ready" ? (
+              <SavedViewTabs activeViewId={activeOutreachViewId} onSelect={onOutreachViewChange} views={outreachViews} />
+            ) : null}
+          </div>
+        </div>
+
+        {lane === "sent" ? (
+          <SentLogView entries={sentLog} leads={allLeads} onOpenLead={onOpenLead} showHeader={false} />
+        ) : (
+          workspace
+        )}
+      </div>
     </div>
   )
 }

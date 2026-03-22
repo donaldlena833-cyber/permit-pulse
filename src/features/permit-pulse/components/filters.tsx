@@ -59,18 +59,121 @@ interface SmartFilterBarProps {
   filters: LeadFilters
   onChange: (patch: Partial<LeadFilters>) => void
   onReset: () => void
+  showSearch?: boolean
+  layout?: "desktop" | "mobile"
 }
 
-export function SmartFilterBar({ filters, onChange, onReset }: SmartFilterBarProps) {
+export function SmartFilterBar({
+  filters,
+  onChange,
+  onReset,
+  showSearch = true,
+  layout = "desktop",
+}: SmartFilterBarProps) {
+  if (layout === "mobile") {
+    return (
+      <div className="space-y-3">
+        {showSearch ? (
+          <Input
+            className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg"
+            onChange={(event) => onChange({ search: event.target.value })}
+            placeholder="GC, owner, job description, notes..."
+            value={filters.search}
+          />
+        ) : null}
+
+        <Select onValueChange={(value) => onChange({ borough: value })} value={filters.borough}>
+          <SelectTrigger className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg">
+            <SelectValue placeholder="Borough" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All boroughs</SelectItem>
+            {BOROUGH_OPTIONS.map((borough) => (
+              <SelectItem key={borough} value={borough}>
+                {borough}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select onValueChange={(value) => onChange({ tier: value as LeadFilters["tier"] })} value={filters.tier}>
+          <SelectTrigger className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg">
+            <SelectValue placeholder="Tier" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All tiers</SelectItem>
+            <SelectItem value="hot">Hot</SelectItem>
+            <SelectItem value="warm">Warm</SelectItem>
+            <SelectItem value="cold">Cold</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select onValueChange={(value) => onChange({ status: value as LeadFilters["status"] })} value={filters.status}>
+          <SelectTrigger className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All statuses</SelectItem>
+            {STATUS_OPTIONS.map((status) => (
+              <SelectItem key={status} value={status}>
+                {status}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Select
+            onValueChange={(value) => onChange({ daysBack: Number.parseInt(value, 10) })}
+            value={String(filters.daysBack)}
+          >
+            <SelectTrigger className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg">
+              <SelectValue placeholder="Date range" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="3">Last 3 days</SelectItem>
+              <SelectItem value="7">Last 7 days</SelectItem>
+              <SelectItem value="14">Last 14 days</SelectItem>
+              <SelectItem value="30">Last 30 days</SelectItem>
+              <SelectItem value="60">Last 60 days</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select
+            onValueChange={(value) => onChange({ minCost: Number.parseInt(value, 10) })}
+            value={String(filters.minCost)}
+          >
+            <SelectTrigger className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg">
+              <SelectValue placeholder="Budget floor" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="10000">$10k+</SelectItem>
+              <SelectItem value="25000">$25k+</SelectItem>
+              <SelectItem value="50000">$50k+</SelectItem>
+              <SelectItem value="100000">$100k+</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <Button className="h-11 w-full rounded-full" onClick={onReset} type="button" variant="outline">
+          <RotateCcw className="h-4 w-4" />
+          Reset filters
+        </Button>
+      </div>
+    )
+  }
+
   return (
     <div className="rounded-[28px] border border-navy-200/70 bg-white/80 p-4 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
-      <div className="grid gap-3 xl:grid-cols-[1.6fr_repeat(5,minmax(0,1fr))_auto]">
-        <Input
-          className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg"
-          onChange={(event) => onChange({ search: event.target.value })}
-          placeholder="GC, owner, job description, notes..."
-          value={filters.search}
-        />
+      <div className={cn("grid gap-3 xl:grid-cols-[1.6fr_repeat(5,minmax(0,1fr))_auto]", !showSearch && "xl:grid-cols-[repeat(5,minmax(0,1fr))_auto]")}>
+        {showSearch ? (
+          <Input
+            className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg"
+            onChange={(event) => onChange({ search: event.target.value })}
+            placeholder="GC, owner, job description, notes..."
+            value={filters.search}
+          />
+        ) : null}
 
         <Select onValueChange={(value) => onChange({ borough: value })} value={filters.borough}>
           <SelectTrigger className="h-11 rounded-full border-navy-200 bg-cream-50 dark:border-dark-border dark:bg-dark-bg">

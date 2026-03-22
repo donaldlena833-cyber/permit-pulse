@@ -1,9 +1,8 @@
 import { Component, type ReactNode, useMemo, useState } from "react"
-import { LoaderCircle, Target } from "lucide-react"
+import { ArrowLeft, LoaderCircle, Target } from "lucide-react"
 import { Toaster } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Drawer, DrawerContent } from "@/components/ui/drawer"
 import {
   ResizableHandle,
   ResizablePanel,
@@ -130,6 +129,9 @@ function WorkspacePane({
   automationHealth,
   enrichingLeadId,
   sendingLeadId,
+  mobileDetailOpen,
+  onMobileDetailOpen,
+  onMobileDetailClose,
   emptyTitle,
   emptyDescription,
 }: {
@@ -156,60 +158,44 @@ function WorkspacePane({
   automationHealth: ReturnType<typeof usePermitPulse>["automationHealth"]
   enrichingLeadId: string | null
   sendingLeadId: string | null
+  mobileDetailOpen: boolean
+  onMobileDetailOpen: () => void
+  onMobileDetailClose: () => void
   emptyTitle: string
   emptyDescription: string
 }) {
-  const [mobileOpen, setMobileOpen] = useState(false)
-  const mobileDrawerOpen = mobileOpen && Boolean(selectedLead)
-
   const handleSelectLead = (leadId: string) => {
     onSelectLead(leadId)
-    setMobileOpen(true)
+    onMobileDetailOpen()
   }
+
+  const mobileSelectedLead =
+    mobileDetailOpen && selectedLead && leads.some((lead) => lead.id === selectedLead.id)
+      ? selectedLead
+      : null
+
 
   return (
     <>
       <div className="md:hidden">
-        <div className="space-y-3">
-          <LeadList
-            description={description}
-            emptyDescription={emptyDescription}
-            emptyTitle={emptyTitle}
-            leads={leads}
-            onBulkSetStatus={onBulkSetStatus}
-            onSelectLead={handleSelectLead}
-            onToggleAll={onToggleAll}
-            onToggleLead={onToggleLead}
-            selectedIds={selectedIds}
-            selectedLeadId={selectedLead?.id ?? null}
-            title={title}
-          />
-
-          {selectedLead ? (
-            <div className="sticky bottom-20 z-20 rounded-[24px] border border-orange-200 bg-white/92 p-3 shadow-[0_16px_40px_rgba(70,55,37,0.12)] backdrop-blur-xl dark:border-orange-800/40 dark:bg-dark-card/92">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
-                    Selected lead
-                  </div>
-                  <div className="truncate text-sm font-medium text-navy-900 dark:text-dark-text">{selectedLead.address}</div>
-                </div>
-                <Button className="rounded-full bg-orange-500 px-4 text-white hover:bg-orange-600" onClick={() => setMobileOpen(true)} type="button">
-                  Open workspace
-                </Button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <Drawer open={mobileDrawerOpen} onOpenChange={setMobileOpen}>
-          <DrawerContent className="max-h-[94vh] rounded-t-[30px] border-none bg-background px-0 pb-0">
-            <div className="max-h-[92vh] overflow-hidden px-3 pb-4">
+        {mobileSelectedLead ? (
+          <div className="space-y-3">
+            <Button
+              className="rounded-full border-navy-200 bg-white/90 px-4 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-card dark:text-dark-text"
+              onClick={onMobileDetailClose}
+              type="button"
+              variant="outline"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to leads
+            </Button>
+            <div className="min-h-[calc(100vh-14rem)]">
               <LeadDetailPanel
                 automationHealth={automationHealth}
-                isEnriching={selectedLead ? enrichingLeadId === selectedLead.id : false}
-                isSending={selectedLead ? sendingLeadId === selectedLead.id : false}
-                lead={selectedLead}
+                isEnriching={mobileSelectedLead ? enrichingLeadId === mobileSelectedLead.id : false}
+                isSending={mobileSelectedLead ? sendingLeadId === mobileSelectedLead.id : false}
+                lead={mobileSelectedLead}
+                mobile
                 onDraftChange={onDraftChange}
                 onEnrichmentChange={onEnrichmentChange}
                 onFollowUpDateChange={onFollowUpDateChange}
@@ -223,8 +209,23 @@ function WorkspacePane({
                 onSetPrimaryContact={onSetPrimaryContact}
               />
             </div>
-          </DrawerContent>
-        </Drawer>
+          </div>
+        ) : (
+          <LeadList
+            description={description}
+            emptyDescription={emptyDescription}
+            emptyTitle={emptyTitle}
+            leads={leads}
+            mobile
+            onBulkSetStatus={onBulkSetStatus}
+            onSelectLead={handleSelectLead}
+            onToggleAll={onToggleAll}
+            onToggleLead={onToggleLead}
+            selectedIds={selectedIds}
+            selectedLeadId={selectedLead?.id ?? null}
+            title={title}
+          />
+        )}
       </div>
 
       <div className="hidden md:block">
@@ -293,6 +294,7 @@ function MetroGlassLeadsWorkspace({
   onLogout: () => Promise<void>
   userEmail: string
 }) {
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
   const {
     allLeads,
     activeEnrichmentQueueId,
@@ -381,6 +383,7 @@ function MetroGlassLeadsWorkspace({
     setSelectedLeadId(leadId)
     setSection("opportunities")
     setOpportunityLane(lane ?? getLaneForLead(lead))
+    setMobileDetailOpen(true)
   }
 
   const sharedDetailProps = {
@@ -411,8 +414,11 @@ function MetroGlassLeadsWorkspace({
         onSelectLead={setSelectedLeadId}
         onToggleAll={scannerSelection.toggleAll}
         onToggleLead={scannerSelection.toggleLead}
+        onMobileDetailClose={() => setMobileDetailOpen(false)}
+        onMobileDetailOpen={() => setMobileDetailOpen(true)}
         selectedIds={scannerSelection.selectedIds}
         selectedLead={selectedLead}
+        mobileDetailOpen={mobileDetailOpen}
         title="Opportunity feed"
         {...sharedDetailProps}
       />
@@ -426,8 +432,11 @@ function MetroGlassLeadsWorkspace({
         onSelectLead={setSelectedLeadId}
         onToggleAll={enrichmentSelection.toggleAll}
         onToggleLead={enrichmentSelection.toggleLead}
+        onMobileDetailClose={() => setMobileDetailOpen(false)}
+        onMobileDetailOpen={() => setMobileDetailOpen(true)}
         selectedIds={enrichmentSelection.selectedIds}
         selectedLead={selectedLead}
+        mobileDetailOpen={mobileDetailOpen}
         title="Research queue"
         {...sharedDetailProps}
       />
@@ -441,8 +450,11 @@ function MetroGlassLeadsWorkspace({
         onSelectLead={setSelectedLeadId}
         onToggleAll={outreachSelection.toggleAll}
         onToggleLead={outreachSelection.toggleLead}
+        onMobileDetailClose={() => setMobileDetailOpen(false)}
+        onMobileDetailOpen={() => setMobileDetailOpen(true)}
         selectedIds={outreachSelection.selectedIds}
         selectedLead={selectedLead}
+        mobileDetailOpen={mobileDetailOpen}
         title="Ready to move"
         {...sharedDetailProps}
       />
@@ -458,6 +470,8 @@ function MetroGlassLeadsWorkspace({
         activities={dashboardActivities}
         attentionItems={attentionItems}
         lastScanAt={lastScanAt}
+        onScan={scanLeads}
+        scanning={loading}
         onOpenLead={openLeadInOpportunities}
         onOpenOpportunities={(lane) => {
           setSection("opportunities")
@@ -530,7 +544,10 @@ function MetroGlassLeadsWorkspace({
         onLogout={onLogout}
         onScan={scanLeads}
         onSearchChange={(value) => setFilters({ search: value })}
-        onSectionChange={setSection}
+        onSectionChange={(nextSection) => {
+          setMobileDetailOpen(false)
+          setSection(nextSection)
+        }}
         onToggleTheme={toggleTheme}
         scanning={loading}
         searchValue={filters.search}

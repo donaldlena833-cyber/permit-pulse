@@ -188,7 +188,7 @@ export function AppShell({
               </div>
 
               {section === "opportunities" ? (
-                <div className="relative">
+                <div className="relative hidden md:block">
                   <Input
                     className="h-11 rounded-full border-navy-200 bg-white/90 pl-4 text-sm shadow-sm dark:border-dark-border dark:bg-dark-card"
                     onChange={(event) => onSearchChange(event.target.value)}

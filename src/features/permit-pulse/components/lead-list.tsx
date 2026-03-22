@@ -23,6 +23,7 @@ interface LeadListProps {
   description: string
   emptyTitle: string
   emptyDescription: string
+  mobile?: boolean
 }
 
 export function LeadList({
@@ -37,6 +38,7 @@ export function LeadList({
   description,
   emptyTitle,
   emptyDescription,
+  mobile = false,
 }: LeadListProps) {
   const allSelected = leads.length > 0 && leads.every((lead) => selectedIds.includes(lead.id))
 
@@ -47,49 +49,62 @@ export function LeadList({
   return (
     <div className="flex h-full flex-col rounded-[30px] border border-navy-200/70 bg-white/80 shadow-sm backdrop-blur-xl dark:border-dark-border/70 dark:bg-dark-card/90">
       <div className="border-b border-navy-200/70 p-3 dark:border-dark-border/70">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">{title}</div>
-            <div className="mt-1 text-[11px] leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
-            <div className="mt-2 flex flex-wrap gap-3 text-[10px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-              <span>{leads.length} visible</span>
-              <span>{selectedIds.length} selected</span>
+        {mobile ? (
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
+                {title}
+              </div>
+              <div className="mt-1 text-sm font-medium text-navy-900 dark:text-dark-text">{leads.length} leads</div>
             </div>
           </div>
-          <button
-            className="rounded-full border border-navy-200 bg-cream-50 px-3 py-1.5 text-[11px] font-medium dark:border-dark-border dark:bg-dark-bg"
-            onClick={onToggleAll}
-            type="button"
-          >
-            {allSelected ? "Clear" : "Select"} all
-          </button>
-        </div>
+        ) : (
+          <>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">{title}</div>
+                <div className="mt-1 text-[11px] leading-5 text-navy-500 dark:text-dark-muted">{description}</div>
+                <div className="mt-2 flex flex-wrap gap-3 text-[10px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                  <span>{leads.length} visible</span>
+                  <span>{selectedIds.length} selected</span>
+                </div>
+              </div>
+              <button
+                className="rounded-full border border-navy-200 bg-cream-50 px-3 py-1.5 text-[11px] font-medium dark:border-dark-border dark:bg-dark-bg"
+                onClick={onToggleAll}
+                type="button"
+              >
+                {allSelected ? "Clear" : "Select"} all
+              </button>
+            </div>
 
-        {selectedIds.length > 0 ? (
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
-              onClick={() => onBulkSetStatus("reviewed")}
-              type="button"
-            >
-              Mark reviewed
-            </button>
-            <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
-              onClick={() => onBulkSetStatus("enriched")}
-              type="button"
-            >
-              Move to enriched
-            </button>
-            <button
-              className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
-              onClick={() => onBulkSetStatus("archived")}
-              type="button"
-            >
-              Archive
-            </button>
-          </div>
-      ) : null}
+            {selectedIds.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
+                  onClick={() => onBulkSetStatus("reviewed")}
+                  type="button"
+                >
+                  Mark reviewed
+                </button>
+                <button
+                  className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
+                  onClick={() => onBulkSetStatus("enriched")}
+                  type="button"
+                >
+                  Move to enriched
+                </button>
+                <button
+                  className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
+                  onClick={() => onBulkSetStatus("archived")}
+                  type="button"
+                >
+                  Archive
+                </button>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">
@@ -112,30 +127,54 @@ export function LeadList({
                 type="button"
               >
                 <div className="flex items-start gap-3">
-                  <Checkbox
-                    checked={isChecked}
-                    onCheckedChange={() => onToggleLead(lead.id)}
-                    onClick={(event) => event.stopPropagation()}
-                  />
+                  {mobile ? null : (
+                    <Checkbox
+                      checked={isChecked}
+                      onCheckedChange={() => onToggleLead(lead.id)}
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="min-w-0">
                       <div className="text-[15px] font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text sm:text-base">
                         {getPermitAddress(lead)}
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-navy-500 dark:text-dark-muted">
-                        <span>{lead.borough}</span>
-                        <span>{formatCurrency(lead.estimated_job_costs)}</span>
-                        <span className="inline-flex items-center gap-1">
-                          <Clock3 className="h-3.5 w-3.5" />
-                          {formatRelativeDate(lead.issued_date)}
-                        </span>
-                      </div>
-                    </div>
+                      {mobile ? (
+                        <>
+                          <div className="mt-1 truncate text-xs text-navy-500 dark:text-dark-muted">
+                            {lead.nextAction.label || lead.humanSummary || "Review lead"}
+                          </div>
+                          <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-navy-500 dark:text-dark-muted">
+                            <span>{lead.borough}</span>
+                            <span>{formatCurrency(lead.estimated_job_costs)}</span>
+                            <span className="inline-flex items-center gap-1">
+                              <Clock3 className="h-3.5 w-3.5" />
+                              {formatRelativeDate(lead.issued_date)}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                            <StatusBadge status={lead.workflow.status} />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-navy-500 dark:text-dark-muted">
+                            <span>{lead.borough}</span>
+                            <span>{formatCurrency(lead.estimated_job_costs)}</span>
+                            <span className="inline-flex items-center gap-1">
+                              <Clock3 className="h-3.5 w-3.5" />
+                              {formatRelativeDate(lead.issued_date)}
+                            </span>
+                          </div>
 
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
-                      <QualityTierBadge tier={lead.qualityTier} />
-                      <StatusBadge status={lead.workflow.status} />
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                            <QualityTierBadge tier={lead.qualityTier} />
+                            <StatusBadge status={lead.workflow.status} />
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

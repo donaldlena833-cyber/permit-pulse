@@ -35,6 +35,8 @@ interface DashboardViewProps {
   topLeads: PermitLead[]
   activities: DashboardActivity[]
   lastScanAt: string | null
+  onScan: () => void
+  scanning: boolean
   onOpenLead: (leadId: string) => void
   onOpenOpportunities: (lane?: AttentionItem["lane"]) => void
 }
@@ -93,6 +95,8 @@ export function DashboardView({
   topLeads,
   activities,
   lastScanAt,
+  onScan,
+  scanning,
   onOpenLead,
   onOpenOpportunities,
 }: DashboardViewProps) {
@@ -152,82 +156,99 @@ export function DashboardView({
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        action={
-          <Button className="rounded-full bg-orange-500 px-5 text-white hover:bg-orange-600" onClick={() => onOpenOpportunities("feed")}>
-            Review opportunities
-          </Button>
-        }
-        description="Start from what changed, what is blocked, and what is actually worth working next. The dashboard should answer that in one pass."
-        eyebrow="Dashboard"
-        title="A clean control tower for daily permit ops."
-      />
-
-      <div className="grid gap-4 xl:grid-cols-4">
-        {attentionItems.map((item) => (
-          <AttentionCard key={item.id} item={item} onClick={() => onOpenOpportunities(item.lane)} />
-        ))}
-      </div>
-
-      <StatsGrid items={statsWithIcons} />
-
-      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+      <div className="space-y-4 md:hidden">
         <SectionCard
-          description="These are the leads most likely to matter right now, based on fit, recency, contactability, and priority."
-          title="Top opportunities"
+          className="rounded-[28px]"
+          contentClassName="space-y-4"
+          description="Scan, review, send, and move on. Keep the phone flow brutally simple."
+          title="Today"
+        >
+          <div className="flex items-center justify-between gap-3 rounded-[22px] border border-navy-200/70 bg-cream-50/80 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
+                Latest intake
+              </div>
+              <div className="mt-1 text-sm font-medium text-navy-900 dark:text-dark-text">
+                {lastScanAt ? `Last scan ${formatRelativeDate(lastScanAt)}` : "No scan yet"}
+              </div>
+            </div>
+            <Button className="rounded-full bg-orange-500 px-4 text-white hover:bg-orange-600" disabled={scanning} onClick={onScan}>
+              {scanning ? "Scanning..." : "Scan"}
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              className="rounded-[22px] border border-navy-200/70 bg-white/85 p-4 text-left dark:border-dark-border/70 dark:bg-dark-card/80"
+              onClick={() => onOpenOpportunities("ready")}
+              type="button"
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">Ready to send</div>
+              <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">{stats.outreachReady}</div>
+            </button>
+            <button
+              className="rounded-[22px] border border-navy-200/70 bg-white/85 p-4 text-left dark:border-dark-border/70 dark:bg-dark-card/80"
+              onClick={() => onOpenOpportunities("research")}
+              type="button"
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">Needs review</div>
+              <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">{stats.needsEnrichment}</div>
+            </button>
+            <button
+              className="rounded-[22px] border border-navy-200/70 bg-white/85 p-4 text-left dark:border-dark-border/70 dark:bg-dark-card/80"
+              onClick={() => onOpenOpportunities("feed")}
+              type="button"
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">Fresh queue</div>
+              <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">{stats.totalScanned}</div>
+            </button>
+            <button
+              className="rounded-[22px] border border-navy-200/70 bg-white/85 p-4 text-left dark:border-dark-border/70 dark:bg-dark-card/80"
+              onClick={() => onOpenOpportunities("ready")}
+              type="button"
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">Follow-ups</div>
+              <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">{stats.followUpsDue}</div>
+            </button>
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          description="Open a lead, send the best email, and keep moving."
+          title="Next leads"
         >
           <div className="space-y-3">
-            {topLeads.slice(0, 5).map((lead) => (
+            {topLeads.slice(0, 4).map((lead) => (
               <button
                 key={lead.id}
-                className="w-full rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-sm dark:border-dark-border/70 dark:bg-dark-bg"
+                className="w-full rounded-[22px] border border-navy-200/70 bg-cream-50/80 p-4 text-left dark:border-dark-border/70 dark:bg-dark-bg"
                 onClick={() => onOpenLead(lead.id)}
                 type="button"
               >
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="min-w-0">
-                    <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
-                      {getPermitAddress(lead)}
-                    </div>
-                    <p className="mt-1.5 line-clamp-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">
-                      {lead.humanSummary}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
-                      <ContactabilityBadge contactability={lead.contactability} />
-                      <PriorityBadge label={lead.priorityLabel} />
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-left xl:text-right">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                      Estimated cost
-                    </div>
-                    <div className="mt-1 text-lg font-semibold tracking-[-0.03em] text-navy-800 dark:text-dark-text">
-                      {formatCurrency(lead.estimated_job_costs)}
-                    </div>
-                  </div>
+                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                  {getPermitAddress(lead)}
+                </div>
+                <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">{lead.nextAction.label}</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                  <PriorityBadge label={lead.priorityLabel} />
                 </div>
               </button>
             ))}
           </div>
         </SectionCard>
 
-        <div className="space-y-6">
-          <SectionCard
-            description="Only surface machine status here when it actually matters to the operator."
-            title="System watch"
-          >
+        {systemAlerts.filter((alert) => alert.tone !== "success").slice(0, 2).length > 0 ? (
+          <SectionCard description="Only show system issues here when they need attention." title="Watch">
             <div className="space-y-3">
-              {systemAlerts.map((alert) => (
+              {systemAlerts.filter((alert) => alert.tone !== "success").slice(0, 2).map((alert) => (
                 <div
                   key={alert.id}
                   className={cn(
-                    "rounded-[22px] border px-4 py-3",
+                    "rounded-[20px] border px-4 py-3",
                     alert.tone === "warning"
                       ? "border-orange-200 bg-orange-50/80 dark:border-orange-800/40 dark:bg-orange-900/15"
-                      : alert.tone === "success"
-                        ? "border-emerald-200/60 bg-emerald-50/80 dark:border-emerald-900/40 dark:bg-emerald-950/20"
-                        : "border-navy-200/70 bg-cream-50/80 dark:border-dark-border/70 dark:bg-dark-bg",
+                      : "border-navy-200/70 bg-cream-50/80 dark:border-dark-border/70 dark:bg-dark-bg",
                   )}
                 >
                   <div className="text-sm font-semibold text-navy-900 dark:text-dark-text">{alert.title}</div>
@@ -236,36 +257,125 @@ export function DashboardView({
               ))}
             </div>
           </SectionCard>
+        ) : null}
+      </div>
 
+      <div className="hidden space-y-6 md:block">
+        <PageHeader
+          action={
+            <Button className="rounded-full bg-orange-500 px-5 text-white hover:bg-orange-600" onClick={() => onOpenOpportunities("feed")}>
+              Review opportunities
+            </Button>
+          }
+          description="Start from what changed, what is blocked, and what is actually worth working next. The dashboard should answer that in one pass."
+          eyebrow="Dashboard"
+          title="A clean control tower for daily permit ops."
+        />
+
+        <div className="grid gap-4 xl:grid-cols-4">
+          {attentionItems.map((item) => (
+            <AttentionCard key={item.id} item={item} onClick={() => onOpenOpportunities(item.lane)} />
+          ))}
+        </div>
+
+        <StatsGrid items={statsWithIcons} />
+
+        <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
           <SectionCard
-            description="Recent movements so nothing disappears after a rescan."
-            title="Recent changes"
+            description="These are the leads most likely to matter right now, based on fit, recency, contactability, and priority."
+            title="Top opportunities"
           >
             <div className="space-y-3">
-              {activities.slice(0, 6).map((activity) => (
+              {topLeads.slice(0, 5).map((lead) => (
                 <button
-                  key={activity.id}
-                  className="flex w-full items-start gap-3 rounded-[22px] border border-navy-200/70 bg-cream-50/75 p-4 text-left dark:border-dark-border/70 dark:bg-dark-bg"
-                  onClick={() => onOpenLead(activity.leadId)}
+                  key={lead.id}
+                  className="w-full rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-sm dark:border-dark-border/70 dark:bg-dark-bg"
+                  onClick={() => onOpenLead(lead.id)}
                   type="button"
                 >
-                  <div className="mt-1 rounded-full bg-orange-500/15 p-1.5 text-orange-600 dark:text-orange-300">
-                    <Activity className="h-3.5 w-3.5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="font-medium text-navy-800 dark:text-dark-text">{activity.title}</div>
-                      <div className="text-[11px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                        {formatRelativeDate(activity.createdAt)}
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="min-w-0">
+                      <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                        {getPermitAddress(lead)}
+                      </div>
+                      <p className="mt-1.5 line-clamp-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">
+                        {lead.humanSummary}
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                        <ContactabilityBadge contactability={lead.contactability} />
+                        <PriorityBadge label={lead.priorityLabel} />
                       </div>
                     </div>
-                    <div className="mt-1 text-sm text-navy-600 dark:text-dark-muted">{activity.address}</div>
-                    <div className="mt-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">{activity.detail}</div>
+                    <div className="shrink-0 text-left xl:text-right">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                        Estimated cost
+                      </div>
+                      <div className="mt-1 text-lg font-semibold tracking-[-0.03em] text-navy-800 dark:text-dark-text">
+                        {formatCurrency(lead.estimated_job_costs)}
+                      </div>
+                    </div>
                   </div>
                 </button>
               ))}
             </div>
           </SectionCard>
+
+          <div className="space-y-6">
+            <SectionCard
+              description="Only surface machine status here when it actually matters to the operator."
+              title="System watch"
+            >
+              <div className="space-y-3">
+                {systemAlerts.map((alert) => (
+                  <div
+                    key={alert.id}
+                    className={cn(
+                      "rounded-[22px] border px-4 py-3",
+                      alert.tone === "warning"
+                        ? "border-orange-200 bg-orange-50/80 dark:border-orange-800/40 dark:bg-orange-900/15"
+                        : alert.tone === "success"
+                          ? "border-emerald-200/60 bg-emerald-50/80 dark:border-emerald-900/40 dark:bg-emerald-950/20"
+                          : "border-navy-200/70 bg-cream-50/80 dark:border-dark-border/70 dark:bg-dark-bg",
+                    )}
+                  >
+                    <div className="text-sm font-semibold text-navy-900 dark:text-dark-text">{alert.title}</div>
+                    <p className="mt-1 text-sm leading-6 text-navy-600 dark:text-dark-muted">{alert.description}</p>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              description="Recent movements so nothing disappears after a rescan."
+              title="Recent changes"
+            >
+              <div className="space-y-3">
+                {activities.slice(0, 6).map((activity) => (
+                  <button
+                    key={activity.id}
+                    className="flex w-full items-start gap-3 rounded-[22px] border border-navy-200/70 bg-cream-50/75 p-4 text-left dark:border-dark-border/70 dark:bg-dark-bg"
+                    onClick={() => onOpenLead(activity.leadId)}
+                    type="button"
+                  >
+                    <div className="mt-1 rounded-full bg-orange-500/15 p-1.5 text-orange-600 dark:text-orange-300">
+                      <Activity className="h-3.5 w-3.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="font-medium text-navy-800 dark:text-dark-text">{activity.title}</div>
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                          {formatRelativeDate(activity.createdAt)}
+                        </div>
+                      </div>
+                      <div className="mt-1 text-sm text-navy-600 dark:text-dark-muted">{activity.address}</div>
+                      <div className="mt-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">{activity.detail}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </SectionCard>
+          </div>
         </div>
       </div>
     </div>

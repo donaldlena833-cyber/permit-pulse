@@ -22,9 +22,9 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_left,rgba(184,138,82,0.18),transparent_30%),radial-gradient(circle_at_75%_5%,rgba(52,47,43,0.12),transparent_24%),linear-gradient(180deg,rgba(255,252,247,0.98),rgba(247,242,234,0.92))] dark:bg-[radial-gradient(circle_at_top_left,rgba(184,138,82,0.16),transparent_26%),radial-gradient(circle_at_75%_5%,rgba(255,252,247,0.04),transparent_20%),linear-gradient(180deg,rgba(22,20,18,0.98),rgba(28,24,20,0.96))]" />
-      <div className="relative mx-auto flex min-h-screen max-w-6xl items-center px-5 py-8 sm:px-8">
-        <div className="grid w-full gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="flex flex-col justify-between rounded-[36px] border border-navy-200/70 bg-white/75 p-6 shadow-[0_24px_90px_rgba(70,55,37,0.1)] backdrop-blur-xl sm:p-8 dark:border-dark-border/70 dark:bg-dark-card/80">
+      <div className="relative mx-auto flex min-h-screen max-w-6xl items-center px-4 py-4 sm:px-8 sm:py-6">
+        <div className="grid w-full gap-4 lg:grid-cols-[1.1fr_0.9fr] lg:gap-6">
+          <div className="hidden flex-col justify-between rounded-[32px] border border-navy-200/70 bg-white/75 p-5 shadow-[0_24px_90px_rgba(70,55,37,0.1)] backdrop-blur-xl sm:flex sm:p-8 dark:border-dark-border/70 dark:bg-dark-card/80">
             <div>
               <div className="inline-flex items-center gap-3 rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/20 dark:text-orange-200">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500 text-white">
@@ -32,15 +32,15 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
                 </div>
                 MetroGlass Leads
               </div>
-              <h1 className="mt-8 max-w-2xl text-4xl font-semibold tracking-[-0.05em] text-navy-900 sm:text-5xl dark:text-dark-text">
+              <h1 className="mt-6 max-w-2xl text-[2rem] font-semibold tracking-[-0.05em] text-navy-900 sm:text-5xl dark:text-dark-text">
                 Private lead ops for real permit-driven outreach.
               </h1>
-              <p className="mt-4 max-w-xl text-base leading-7 text-navy-600 dark:text-dark-muted">
+              <p className="mt-3 max-w-xl text-sm leading-6 text-navy-600 sm:text-base sm:leading-7 dark:text-dark-muted">
                 Scan DOB permits, resolve the real company, pick the best recipient, and send through Gmail from one controlled workspace.
               </p>
             </div>
 
-            <div className="mt-8 grid gap-3 sm:grid-cols-3">
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <div className="rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
                 <ScanSearch className="h-5 w-5 text-orange-600 dark:text-orange-300" />
                 <div className="mt-3 text-sm font-semibold text-navy-900 dark:text-dark-text">Scan and enrich</div>
@@ -59,18 +59,29 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
             </div>
           </div>
 
-          <div className="rounded-[36px] border border-navy-200/70 bg-white/88 p-6 shadow-[0_24px_90px_rgba(70,55,37,0.12)] backdrop-blur-xl sm:p-8 dark:border-dark-border/70 dark:bg-dark-card/92">
+          <div className="rounded-[28px] border border-navy-200/70 bg-white/88 p-5 shadow-[0_24px_90px_rgba(70,55,37,0.12)] backdrop-blur-xl sm:rounded-[32px] sm:p-8 dark:border-dark-border/70 dark:bg-dark-card/92">
+            <div className="mb-5 flex items-center gap-3 rounded-full border border-orange-200 bg-orange-50/80 px-3.5 py-2 sm:hidden dark:border-orange-800/50 dark:bg-orange-900/20">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-500 text-xs font-semibold text-white">
+                MG
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">MetroGlass Leads</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-orange-700 dark:text-orange-200">
+                  Internal access
+                </div>
+              </div>
+            </div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-orange-600 dark:text-orange-300">
               Internal access
             </div>
-            <h2 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-navy-900 dark:text-dark-text">
+            <h2 className="mt-2 text-[1.75rem] font-semibold tracking-[-0.04em] text-navy-900 sm:mt-3 sm:text-3xl dark:text-dark-text">
               Sign in to MetroGlass Leads
             </h2>
-            <p className="mt-3 text-sm leading-7 text-navy-600 dark:text-dark-muted">
-              This workspace is for MetroGlass Pro operations only.
+            <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">
+              Private MetroGlass Pro workspace for scanning, enrichment, and Gmail outreach.
             </p>
 
-            <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
+            <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.18em] text-navy-500 dark:text-dark-muted">
                   Email
