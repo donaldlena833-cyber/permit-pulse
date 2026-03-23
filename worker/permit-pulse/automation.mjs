@@ -55,9 +55,15 @@ const DIRECTORY_DOMAIN_DENYLIST = [
   'buzzfile.com',
   'bizapedia.com',
   'buildzoom.com',
+  'bldup.com',
   'opencorporates.com',
   'chamberofcommerce.com',
   'nextdoor.com',
+  'zoominfo.com',
+  'crunchbase.com',
+  'constructionjournal.com',
+  'thebluebook.com',
+  'alignable.com',
 ];
 const FREE_MAILBOX_DOMAINS = [
   'gmail.com',
@@ -1888,6 +1894,7 @@ function scoreWebsiteCandidate(result, seed, permit) {
   const seedTokens = tokenizeName(seed.name);
   const title = stripCompanySuffix(result.title || '');
   const description = stripCompanySuffix(result.description || '');
+  const normalizedDomain = stripCompanySuffix(domain.replace(/[.-]/g, ' '));
   const searchable = `${title} ${description} ${domain}`;
   const permitContext = stripCompanySuffix([
     permit.borough,
@@ -1898,7 +1905,9 @@ function scoreWebsiteCandidate(result, seed, permit) {
 
   let score = 15;
   const tokenMatches = countTokenMatches(seedTokens, searchable);
+  const domainTokenMatches = countTokenMatches(seedTokens, normalizedDomain);
   score += tokenMatches * 12;
+  score += domainTokenMatches * 14;
 
   if (normalizedSeed && searchable.includes(normalizedSeed)) {
     score += 26;
@@ -1906,6 +1915,12 @@ function scoreWebsiteCandidate(result, seed, permit) {
 
   if (title.includes(normalizedSeed)) {
     score += 20;
+  }
+
+  if (domainTokenMatches === 0) {
+    score -= 24;
+  } else {
+    score += 10;
   }
 
   if (result.url?.includes('/contact') || result.url?.includes('/about') || result.url?.includes('/team')) {
