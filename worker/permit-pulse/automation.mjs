@@ -476,7 +476,7 @@ function chooseDraftCta(lead, role, projectAngle, relevanceScore) {
   }
 
   if (relevanceScore >= 0.85) {
-    return `If helpful, I can send over a quick number for the ${projectAngle} at ${lead.address}.`;
+    return 'If helpful, I can send over a quick number or take a fast look at the plans this week.';
   }
 
   if (
@@ -485,37 +485,39 @@ function chooseDraftCta(lead, role, projectAngle, relevanceScore) {
     || projectAngle.includes('shower')
     || projectAngle.includes('mirror')
   ) {
-    return `We recently handled a similar ${projectAngle} scope nearby, and I can send a practical price range if useful.`;
+    return `If that ${projectAngle} scope is still open, I can send a practical price range and next steps.`;
   }
 
-  return 'Would 10 minutes this week be useful to compare the glass scope and timing?';
+  return 'If the glass scope is still open, I would be happy to send pricing or talk through it briefly this week.';
 }
 
 function getDraftValueLine(role, projectAngle) {
   if (role.includes('applicant') || role.includes('gc') || role.includes('contractor')) {
-    return `MetroGlass Pro handles ${projectAngle}, mirrors, storefronts, and partitions, and we keep pricing and field coordination straightforward.`;
+    return `We handle ${projectAngle}, mirrors, storefront work, and interior glass across the city, and we keep pricing and field coordination straightforward.`;
   }
 
   if (role.includes('filing') || role.includes('architect') || role.includes('design')) {
-    return `MetroGlass Pro handles ${projectAngle} directly, and we can price or coordinate quickly if the team still needs a glass installer.`;
+    return `We handle ${projectAngle} and related interior glass work, and we can price or coordinate quickly if the team still needs a glass installer.`;
   }
 
-  return `MetroGlass Pro handles ${projectAngle}, mirrors, storefronts, and partitions, from pricing through install across the city.`;
+  return `We handle ${projectAngle}, mirrors, storefront work, and interior glass from pricing through install across the city.`;
 }
 
 function buildDraftIntro(lead, projectAngle, relevanceKeyword) {
-  const permitReference = getPermitReference(lead);
   const projectDescription = sanitizeOutreachCopy(lead.description || lead.raw_permit?.job_description || '');
-  const referenceLabel = permitReference ? `permit ${permitReference}` : 'the permit';
-  const projectLine = projectDescription
-    ? `${referenceLabel} at ${lead.address} mentions ${projectDescription.slice(0, 120).toLowerCase()}.`
-    : `${referenceLabel} at ${lead.address} reads like a real fit for ${projectAngle}.`;
+  const trimmedDescription = projectDescription
+    ? projectDescription.charAt(0).toLowerCase() + projectDescription.slice(1, 140)
+    : '';
 
-  if (relevanceKeyword) {
-    return sanitizeOutreachCopy(`${projectLine} The wording lines up with ${relevanceKeyword}.`);
+  if (trimmedDescription) {
+    return sanitizeOutreachCopy(
+      `I came across the permit for ${lead.address}, it looks like ${trimmedDescription}, and wanted to reach out in case your team still needs a glass contractor on the job.`,
+    );
   }
 
-  return sanitizeOutreachCopy(projectLine);
+  return sanitizeOutreachCopy(
+    `I came across the permit for ${lead.address} and wanted to reach out in case your team still needs a glass contractor on the job.`,
+  );
 }
 
 function buildLeadScore(permit) {
