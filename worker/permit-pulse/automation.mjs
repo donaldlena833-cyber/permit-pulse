@@ -39,6 +39,8 @@ const ENRICHMENT_BATCH_LIMIT = 4;
 const SEND_BATCH_LIMIT = 4;
 const AUTO_SEND_ENABLED = true;
 const ZEROBOUNCE_ENABLED = false;
+const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 70;
+const AUTO_SEND_EMAIL_CONTACT_LIMIT = 3;
 const DIRECTORY_DOMAIN_DENYLIST = [
   'yelp.com',
   'angi.com',
@@ -1055,9 +1057,8 @@ function buildChannelDecision({ score, contactability, companyProfile, contacts,
     AUTO_SEND_ENABLED &&
     selected.channel === 'email' &&
     selected.recipientType !== 'guessed' &&
-    score >= 70 &&
-    contactability.total >= 70 &&
-    companyProfile.match_strength === 'strong';
+    selected.score >= 60 &&
+    contactability.total >= 55;
 
   return {
     primary: selected.channel,
@@ -1353,6 +1354,35 @@ function pickBestEmailContact(contacts, companyProfile = {}) {
   return emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile) > 0) || null;
 }
 
+function getAutoSendEmailContacts(contacts, companyProfile = {}) {
+  const seen = new Set();
+
+  return [...contacts]
+    .filter((contact) => contact.email && contact.type !== 'guessed')
+    .map((contact) => ({
+      ...contact,
+      autoSendScore: scoreEmailContactForSelection(contact, companyProfile),
+    }))
+    .filter((contact) => contact.autoSendScore >= AUTO_SEND_EMAIL_SCORE_THRESHOLD)
+    .sort((left, right) => {
+      if (right.autoSendScore !== left.autoSendScore) {
+        return right.autoSendScore - left.autoSendScore;
+      }
+
+      return Math.round(right.confidence || 0) - Math.round(left.confidence || 0);
+    })
+    .filter((contact) => {
+      const email = normalizeEmailAddress(contact.email);
+      if (!email || seen.has(email)) {
+        return false;
+      }
+
+      seen.add(email);
+      return true;
+    })
+    .slice(0, AUTO_SEND_EMAIL_CONTACT_LIMIT);
+}
+
 function buildDraft(lead, companyProfile, contacts) {
   const primaryContact = pickPrimaryContact(contacts, companyProfile);
   const address = sanitizeOutreachCopy(lead.address);
@@ -1484,12 +1514,12 @@ function buildDerivedLeadState({
     readiness,
     status,
   });
+  const autoSendContacts = getAutoSendEmailContacts(contacts, companyProfile);
   const autoSendEligible =
     AUTO_SEND_ENABLED &&
-    channelDecision.autoSendEligible &&
-    readiness.label === 'Ready' &&
-    companyProfile.match_strength === 'strong' &&
-    channelDecision.recipientType !== 'guessed';
+    autoSendContacts.length > 0 &&
+    readiness.label !== 'Blocked' &&
+    qualityTier !== 'dead';
 
   return {
     contactability,
@@ -1509,8 +1539,8 @@ function buildDerivedLeadState({
       ? 'Permit relevance is too weak for active outreach.'
       : AUTO_SEND_ENABLED
       ? autoSendEligible
-        ? 'Lead clears route quality, confidence, and schedule checks.'
-        : 'Lead still needs operator review before automatic sending.'
+        ? `${autoSendContacts.length} strong email route${autoSendContacts.length > 1 ? 's are' : ' is'} ready for automatic sending.`
+        : 'No strong email route has cleared the automatic send threshold yet.'
       : 'Auto-send is disabled until resolver trust is stronger.',
   };
 }
@@ -2733,62 +2763,124 @@ async function maybeAutoSend(env, gateway, enriched) {
     return { sent: false, reason: 'Throttle limit reached' };
   }
 
-  const primaryContact = pickPrimaryContact(contacts, lead.enrichment_summary?.company || {});
-  if (!primaryContact?.email) {
+  const emailContacts = getAutoSendEmailContacts(contacts, lead.enrichment_summary?.company || {});
+  if (emailContacts.length === 0) {
     await gateway.patch('leads', [eq('id', lead.id)], {
-      auto_send_reason: 'No email route available for auto-send.',
+      auto_send_reason: 'No strong email route is available for auto-send.',
       status: 'needs review',
     });
     return { sent: false, reason: 'No email contact' };
   }
 
   const duplicateSince = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000)).toISOString();
-  const isDuplicate = await gateway.hasDuplicateOutreach(primaryContact.email, duplicateSince);
-  if (isDuplicate) {
-    await gateway.patch('leads', [eq('id', lead.id)], {
-      auto_send_reason: 'Duplicate detected inside 30-day window.',
-      status: 'needs review',
+  let sentCount = 0;
+  const sentRecipients = [];
+  const skippedRecipients = [];
+
+  for (const [index, contact] of emailContacts.entries()) {
+    if ((sentToday + sentCount) >= AUTO_SEND_LIMITS.perDay || (sentThisHour + sentCount) >= AUTO_SEND_LIMITS.perHour) {
+      skippedRecipients.push({
+        recipient: contact.email,
+        reason: 'Throttle limit reached',
+      });
+      break;
+    }
+
+    const isDuplicate = await gateway.hasDuplicateOutreach(contact.email, duplicateSince);
+    if (isDuplicate) {
+      skippedRecipients.push({
+        recipient: contact.email,
+        reason: 'Duplicate within 30 days',
+      });
+      continue;
+    }
+
+    const gmailResult = await sendAutomationEmail(env, {
+      recipient: contact.email,
+      subject: outreachDraft.subject,
+      body: outreachDraft.draft,
     });
-    return { sent: false, reason: 'Duplicate within 30 days' };
-  }
 
-  const gmailResult = await sendAutomationEmail(env, {
-    recipient: primaryContact.email,
-    subject: outreachDraft.subject,
-    body: outreachDraft.draft,
-  });
-
-  const sentAt = new Date().toISOString();
-  await Promise.all([
-    gateway.patch('outreach', [eq('id', outreachDraft.id)], {
+    const sentAt = new Date().toISOString();
+    const outreachPayload = {
       status: 'sent',
       sent_at: sentAt,
       gmail_message_id: gmailResult.id || '',
       gmail_thread_id: gmailResult.threadId || '',
-      recipient: primaryContact.email,
-      recipient_type: primaryContact.type,
-    }),
+      recipient: contact.email,
+      recipient_type: contact.type,
+    };
+
+    if (index === 0) {
+      await gateway.patch('outreach', [eq('id', outreachDraft.id)], outreachPayload);
+    } else {
+      await gateway.insert('outreach', {
+        id: createId('outreach'),
+        lead_id: lead.id,
+        channel: outreachDraft.channel || 'email',
+        recipient: contact.email,
+        recipient_type: contact.type,
+        subject: outreachDraft.subject || '',
+        draft: outreachDraft.draft || '',
+        plugin_line: outreachDraft.plugin_line || '',
+        call_opener: outreachDraft.call_opener || '',
+        follow_up_note: outreachDraft.follow_up_note || '',
+        status: 'sent',
+        sent_at: sentAt,
+        gmail_message_id: gmailResult.id || '',
+        gmail_thread_id: gmailResult.threadId || '',
+        metadata: {
+          ...(outreachDraft.metadata || {}),
+          autoSend: true,
+          autoRecipientRank: index + 1,
+        },
+      });
+    }
+
+    sentCount += 1;
+    sentRecipients.push(contact.email);
+  }
+
+  if (sentCount === 0) {
+    await gateway.patch('leads', [eq('id', lead.id)], {
+      auto_send_reason: skippedRecipients[0]?.reason || 'No automatic send was completed.',
+      status: 'needs review',
+    });
+    return { sent: false, reason: skippedRecipients[0]?.reason || 'No automatic send was completed.' };
+  }
+
+  const sentAt = new Date().toISOString();
+  await Promise.all([
     gateway.patch('leads', [eq('id', lead.id)], {
       status: 'contacted',
       last_contacted_at: sentAt,
       last_sent_at: sentAt,
       duplicate_guard_until: new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
-      auto_send_reason: 'Email sent automatically inside NYC business hours.',
+      auto_send_reason: sentRecipients.length > 1
+        ? `Automatically emailed ${sentRecipients.length} strong contacts inside NYC business hours.`
+        : 'Email sent automatically inside NYC business hours.',
     }),
     gateway.insert('activity_log', {
       id: createId('activity'),
       lead_id: lead.id,
       event_type: 'email_sent',
-      summary: 'Email sent automatically',
-      detail: `Sent to ${primaryContact.email}`,
+      summary: sentRecipients.length > 1 ? 'Emails sent automatically' : 'Email sent automatically',
+      detail: `Sent to ${sentRecipients.join(', ')}`,
       metadata: {
         outreachId: outreachDraft.id,
-        gmailMessageId: gmailResult.id || '',
+        recipients: sentRecipients,
+        skippedRecipients,
       },
     }),
   ]);
 
-  return { sent: true, recipient: primaryContact.email, outreachId: outreachDraft.id };
+  return {
+    sent: true,
+    count: sentRecipients.length,
+    recipient: sentRecipients[0] || '',
+    recipients: sentRecipients,
+    outreachId: outreachDraft.id,
+  };
 }
 
 function mapSnapshot(snapshot) {
@@ -3320,7 +3412,7 @@ async function runEnrichmentBatchInternal(env, gateway, candidateLeads = [], opt
           enriched.push(enrichedLead);
           const sendResult = await maybeAutoSend(env, gateway, enrichedLead);
           if (sendResult.sent) {
-            sent += 1;
+            sent += Number(sendResult.count || 1);
           }
         } catch (error) {
           failures.push({
