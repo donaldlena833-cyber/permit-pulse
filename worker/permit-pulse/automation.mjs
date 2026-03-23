@@ -39,8 +39,8 @@ const ENRICHMENT_BATCH_LIMIT = 4;
 const SEND_BATCH_LIMIT = 4;
 const AUTO_SEND_ENABLED = true;
 const ZEROBOUNCE_ENABLED = false;
-const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 1;
-const AUTO_SEND_EMAIL_CONTACT_LIMIT = 10;
+const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 70;
+const AUTO_SEND_EMAIL_CONTACT_LIMIT = 3;
 const DIRECTORY_DOMAIN_DENYLIST = [
   'yelp.com',
   'angi.com',
@@ -338,6 +338,30 @@ function getKnownCompanyTokens(companyProfile, permit) {
   ]);
 }
 
+function contactMatchesKnownPerson(contact, permit = {}) {
+  const haystack = normalizeText([
+    contact?.name,
+    contact?.role,
+    contact?.email,
+    contact?.linkedin_url,
+  ].filter(Boolean).join(' '));
+  const tokens = getKnownPersonTokens(permit);
+  return tokens.length > 0 && countTokenMatches(tokens, haystack) > 0;
+}
+
+function contactMatchesKnownCompany(contact, companyProfile = {}, permit = {}) {
+  const haystack = normalizeText([
+    contact?.name,
+    contact?.role,
+    contact?.email,
+    contact?.website_url,
+    contact?.contact_form_url,
+    companyProfile?.company_name,
+  ].filter(Boolean).join(' '));
+  const tokens = getKnownCompanyTokens(companyProfile, permit);
+  return tokens.length > 0 && countTokenMatches(tokens, haystack) > 0;
+}
+
 function tokenizeName(value) {
   return stripCompanySuffix(value)
     .split(' ')
@@ -472,9 +496,17 @@ function getPermitReference(lead) {
   return lead.permit_key || lead.job_filing_number || '';
 }
 
-function chooseDraftCta(lead, role, projectAngle, relevanceScore) {
-  if ((role.includes('applicant') || role.includes('gc') || role.includes('contractor')) && lead.score >= 65) {
+function chooseDraftCta(lead, role, projectAngle, relevanceScore, strategy = 'estimate') {
+  if (strategy === 'takeoff' || ((role.includes('applicant') || role.includes('gc') || role.includes('contractor')) && lead.score >= 65)) {
     return 'If drawings are available, I can turn around a quick glass takeoff and budget this week.';
+  }
+
+  if (strategy === 'quick-call') {
+    return 'If useful, I can make time for a quick call this week and see if the glass scope is a fit for us.';
+  }
+
+  if (strategy === 'redirect') {
+    return 'If someone else on the project is handling the glass package, feel free to point me in the right direction and I will keep it simple.';
   }
 
   if (relevanceScore >= 0.85) {
@@ -495,30 +527,72 @@ function chooseDraftCta(lead, role, projectAngle, relevanceScore) {
 
 function getDraftValueLine(role, projectAngle) {
   if (role.includes('applicant') || role.includes('gc') || role.includes('contractor')) {
-    return `We handle ${projectAngle}, mirrors, storefront work, and interior glass across the city, and we keep pricing and field coordination straightforward.`;
+    return `We handle ${projectAngle}, mirrors, storefront work, and interior glass across the city, and we keep pricing and field coordination straightforward for active jobs.`;
   }
 
   if (role.includes('filing') || role.includes('architect') || role.includes('design')) {
-    return `We handle ${projectAngle} and related interior glass work, and we can price or coordinate quickly if the team still needs a glass installer.`;
+    return `We handle ${projectAngle} and related interior glass work, and we can support pricing or coordination if the team still needs a glass partner.`;
   }
 
   return `We handle ${projectAngle}, mirrors, storefront work, and interior glass from pricing through install across the city.`;
 }
 
-function buildDraftIntro(lead, projectAngle, relevanceKeyword) {
+function chooseDraftStrategy(lead, role, projectAngle, companyProfile, primaryContact) {
+  const routeType = normalizeText(primaryContact?.type || '');
+  const routeRole = normalizeText(primaryContact?.role || role || '');
+  const relevanceScore = Number(lead.score_breakdown?.relevanceScore || lead.scoreBreakdown?.relevanceScore || 0.3);
+  const companySignal = normalizeText(companyProfile.description || '');
+
+  if (routeRole.includes('filing') || routeRole.includes('architect') || routeRole.includes('design')) {
+    return 'redirect';
+  }
+
+  if (routeRole.includes('applicant') || routeRole.includes('gc') || routeRole.includes('contractor')) {
+    if (lead.score >= 65 || projectAngle.includes('storefront') || projectAngle.includes('partition')) {
+      return 'takeoff';
+    }
+  }
+
+  if (routeType === 'guessed') {
+    return 'quick-call';
+  }
+
+  if (relevanceScore >= 0.82 || companySignal.includes('commercial') || companySignal.includes('contractor')) {
+    return 'estimate';
+  }
+
+  return 'quick-call';
+}
+
+function buildDraftIntro(lead, projectAngle, relevanceKeyword, role, strategy = 'estimate') {
   const projectDescription = sanitizeOutreachCopy(lead.description || lead.raw_permit?.job_description || '');
   const trimmedDescription = projectDescription
     ? projectDescription.charAt(0).toLowerCase() + projectDescription.slice(1, 140)
     : '';
+  const address = sanitizeOutreachCopy(lead.address);
+
+  if (strategy === 'redirect') {
+    return sanitizeOutreachCopy(
+      `I came across the permit at ${address} and wanted to reach out in case you are the right person to point me toward whoever is handling the ${projectAngle}.`,
+    );
+  }
+
+  if (role.includes('applicant') || role.includes('gc') || role.includes('contractor')) {
+    return sanitizeOutreachCopy(
+      trimmedDescription
+        ? `I came across the permit at ${address}. It looks like ${trimmedDescription}, and I wanted to reach out in case your team still needs a glass contractor on the job.`
+        : `I came across the permit at ${address} and wanted to reach out in case your team still needs a glass contractor on the job.`,
+    );
+  }
 
   if (trimmedDescription) {
     return sanitizeOutreachCopy(
-      `I came across the permit for ${lead.address}, it looks like ${trimmedDescription}, and wanted to reach out in case your team still needs a glass contractor on the job.`,
+      `I came across the permit at ${address}. It looks like ${trimmedDescription}, and I wanted to reach out in case the glass scope is still open.`,
     );
   }
 
   return sanitizeOutreachCopy(
-    `I came across the permit for ${lead.address} and wanted to reach out in case your team still needs a glass contractor on the job.`,
+    `I came across the permit at ${address} and wanted to reach out in case the glass scope is still open.`,
   );
 }
 
@@ -869,55 +943,151 @@ function assessEmailCandidate(email, { companyProfile, permit, source = '' } = {
   };
 }
 
+function buildEmailTrust(contact, companyProfile = {}, permit = {}) {
+  if (!contact?.email) {
+    return {
+      score: 0,
+      aligned: false,
+      reason: 'No email route exists.',
+      assessment: null,
+    };
+  }
+
+  const assessment = assessEmailCandidate(contact.email, {
+    companyProfile,
+    permit,
+    source: contact.source || '',
+  });
+  if (!assessment.accept) {
+    return {
+      score: 0,
+      aligned: false,
+      reason: 'This email is not trustworthy enough to use.',
+      assessment,
+    };
+  }
+
+  const personAligned = contactMatchesKnownPerson(contact, permit);
+  const companyAligned = contactMatchesKnownCompany(contact, companyProfile, permit);
+  const entityAligned =
+    assessment.matchesOfficialDomain ||
+    companyAligned ||
+    personAligned ||
+    contact.source === 'manual';
+
+  let score = Math.round(assessment.confidence || 0);
+  score += contact.verified ? 12 : 0;
+  score += contact.type === 'verified' ? 16 : contact.type === 'public' ? 8 : -10;
+  score += assessment.matchesOfficialDomain ? 16 : 0;
+  score += personAligned ? 12 : 0;
+  score += companyAligned ? 8 : 0;
+  score += contact.source === 'google_maps' ? 10 : 0;
+  score += contact.source === 'firecrawl' ? 8 : 0;
+  score += contact.source === 'manual' ? 12 : 0;
+  score += assessment.genericMailbox ? -12 : 6;
+  score += contact.type === 'guessed' ? -18 : 0;
+
+  if (!entityAligned && !assessment.freeMailbox) {
+    score -= 24;
+  }
+
+  const normalizedScore = clamp(score, 0, 100);
+  let reason = 'The route exists, but the supporting evidence is still thin.';
+  if (assessment.matchesOfficialDomain && personAligned) {
+    reason = 'Named contact on the chosen company domain.';
+  } else if (assessment.matchesOfficialDomain) {
+    reason = 'Same domain as the chosen company.';
+  } else if (assessment.freeMailbox && personAligned) {
+    reason = 'Free mailbox, but the name matches the permit contact.';
+  } else if (companyAligned) {
+    reason = 'Contact details still tie back to the chosen company.';
+  }
+
+  return {
+    score: normalizedScore,
+    aligned: entityAligned || assessment.freeMailbox,
+    reason,
+    assessment,
+    personAligned,
+    companyAligned,
+  };
+}
+
+function buildPhoneTrust(contact, companyProfile = {}, permit = {}) {
+  if (!contact?.phone) {
+    return { score: 0, aligned: false, reason: 'No phone route exists.' };
+  }
+
+  const rolePriority = getRolePriority(contact.role || companyProfile.role || '');
+  const personAligned = contactMatchesKnownPerson(contact, permit);
+  const companyAligned = contactMatchesKnownCompany(contact, companyProfile, permit);
+  let score = Math.round(contact.confidence || 0);
+  score += 18;
+  score += rolePriority;
+  score += contact.source === 'google_maps' ? 14 : 0;
+  score += personAligned ? 8 : 0;
+  score += companyAligned ? 8 : 0;
+
+  return {
+    score: clamp(score, 0, 100),
+    aligned: personAligned || companyAligned || contact.source === 'google_maps',
+    reason:
+      contact.source === 'google_maps'
+        ? 'Phone came from the company Google Maps profile.'
+        : personAligned
+          ? 'Phone aligns with the named permit contact.'
+          : 'Phone route looks tied to the chosen company.',
+  };
+}
+
+function buildFormTrust(contact, companyProfile = {}) {
+  const formDomain = rootDomain(contact?.contact_form_url || '');
+  const officialDomain = normalizeText(companyProfile?.domain || rootDomain(companyProfile?.website || ''));
+  const aligned = Boolean(formDomain && officialDomain && (formDomain === officialDomain || formDomain.endsWith(`.${officialDomain}`)));
+  let score = Math.round(contact?.confidence || 0);
+  score += 26;
+  score += aligned ? 18 : -10;
+
+  return {
+    score: clamp(score, 0, 100),
+    aligned,
+    reason: aligned
+      ? 'Contact form is on the chosen company website.'
+      : 'Contact form exists, but it is not clearly tied to the chosen company site.',
+  };
+}
+
+function buildLinkedInTrust(contact, companyProfile = {}, permit = {}) {
+  const premiumFirm = isPremiumLinkedInTarget(companyProfile);
+  const personAligned = contactMatchesKnownPerson(contact, permit);
+  const companyAligned = contactMatchesKnownCompany(contact, companyProfile, permit);
+  let score = Math.round(contact?.confidence || 0);
+  score += premiumFirm ? 18 : 4;
+  score += personAligned ? 12 : 0;
+  score += companyAligned ? 8 : 0;
+
+  return {
+    score: clamp(score, 0, 100),
+    aligned: premiumFirm || personAligned || companyAligned,
+    reason: personAligned
+      ? 'LinkedIn route points to the named permit contact.'
+      : companyAligned
+        ? 'LinkedIn route points to the chosen company.'
+        : 'LinkedIn is only a light research path for this lead.',
+  };
+}
+
 function isPremiumLinkedInTarget(companyProfile) {
   return METROGLASS_PROFILE.linkedinSignals.some((signal) =>
     normalizeText(companyProfile.normalized_name || companyProfile.company_name).includes(signal),
   );
 }
 
-function scoreEmailContactForSelection(contact, companyProfile) {
-  if (!contact?.email) {
-    return -100;
-  }
-
-  const officialDomain = normalizeText(companyProfile?.domain || rootDomain(companyProfile?.website || ''));
-  const contactDomain = emailDomain(contact.email);
-  const websiteDomain = normalizeText(rootDomain(contact.website_url || ''));
-  const genericMailbox = isGenericMailbox(contact.email);
-  const freeMailbox = isFreeMailboxDomain(contactDomain);
-  const officialDomainMatch = Boolean(
-    officialDomain && (contactDomain === officialDomain || contactDomain.endsWith(`.${officialDomain}`)),
-  );
-  const websiteDomainMatch = Boolean(
-    officialDomain && websiteDomain && (websiteDomain === officialDomain || websiteDomain.endsWith(`.${officialDomain}`)),
-  );
-
-  if (!contactDomain || isBlockedEmailDomain(contactDomain)) {
-    return -100;
-  }
-
-  if (officialDomain && !officialDomainMatch && !websiteDomainMatch && !freeMailbox) {
-    return -100;
-  }
-
-  if (officialDomain && freeMailbox && !contact.verified && contact.source !== 'manual') {
-    return -28;
-  }
-
-  let score = Math.round(contact.confidence || 0);
-  score += contact.type === 'verified' ? 32 : contact.type === 'public' ? 12 : -10;
-  score += contact.verified ? 10 : 0;
-  score += officialDomainMatch ? 16 : freeMailbox ? -2 : -18;
-  score += websiteDomainMatch ? 10 : 0;
-  score += genericMailbox ? -14 : 8;
-  score += contact.source === 'firecrawl' ? 8 : contact.source === 'manual' ? 10 : 0;
-  score += contact.source === 'pattern_guess' ? -16 : 0;
-  score += contact.source === 'brave_search' ? -10 : 0;
-
-  return score;
+function scoreEmailContactForSelection(contact, companyProfile = {}, permit = {}) {
+  return buildEmailTrust(contact, companyProfile, permit).score;
 }
 
-function buildRouteCandidates({ companyProfile, contacts }) {
+function buildRouteCandidates({ companyProfile, contacts, permit }) {
   const premiumFirm = isPremiumLinkedInTarget(companyProfile);
   const candidates = [];
 
@@ -927,13 +1097,13 @@ function buildRouteCandidates({ companyProfile, contacts }) {
     const confidence = Math.round(contact.confidence || 0);
 
     if (contact.email) {
-      const emailSelectionScore = scoreEmailContactForSelection(contact, companyProfile);
-      if (emailSelectionScore <= 0) {
+      const emailTrust = buildEmailTrust(contact, companyProfile, permit);
+      if (emailTrust.score <= 0 || !emailTrust.aligned) {
         return;
       }
 
-      let score = 36 + rolePriority + Math.round(confidence * 0.18);
-      score += emailSelectionScore - Math.round(confidence);
+      let score = 34 + Math.round(rolePriority * 0.7) + Math.round(emailTrust.score * 0.58);
+      score += contact.verified ? 8 : 0;
 
       candidates.push({
         channel: 'email',
@@ -942,11 +1112,14 @@ function buildRouteCandidates({ companyProfile, contacts }) {
         targetRole: role || 'company',
         recipientType: contact.type || 'public',
         routeSource: contact.source || '',
+        routeTrustReason: emailTrust.reason,
+        routeTrustScore: emailTrust.score,
       });
     }
 
     if (contact.phone) {
-      const score = 50 + rolePriority + Math.round(confidence * 0.18);
+      const phoneTrust = buildPhoneTrust(contact, companyProfile, permit);
+      const score = 18 + Math.round(rolePriority * 0.45) + Math.round(phoneTrust.score * 0.46);
       candidates.push({
         channel: 'phone',
         score: clamp(score, 0, 100),
@@ -954,11 +1127,14 @@ function buildRouteCandidates({ companyProfile, contacts }) {
         targetRole: role || 'company',
         recipientType: 'public',
         routeSource: contact.source || '',
+        routeTrustReason: phoneTrust.reason,
+        routeTrustScore: phoneTrust.score,
       });
     }
 
     if (contact.contact_form_url) {
-      const score = 42 + Math.round(confidence * 0.12) + Math.round((companyProfile.confidence || 0) * 0.18);
+      const formTrust = buildFormTrust(contact, companyProfile);
+      const score = 16 + Math.round(formTrust.score * 0.48) + Math.round((companyProfile.confidence || 0) * 0.08);
       candidates.push({
         channel: 'form',
         score: clamp(score, 0, 100),
@@ -966,11 +1142,14 @@ function buildRouteCandidates({ companyProfile, contacts }) {
         targetRole: role || 'company',
         recipientType: 'public',
         routeSource: contact.source || '',
+        routeTrustReason: formTrust.reason,
+        routeTrustScore: formTrust.score,
       });
     }
 
     if (contact.linkedin_url) {
-      const score = (premiumFirm ? 42 : 22) + Math.round(confidence * 0.1) + Math.round(rolePriority * 0.35);
+      const linkedinTrust = buildLinkedInTrust(contact, companyProfile, permit);
+      const score = (premiumFirm ? 28 : 10) + Math.round(rolePriority * 0.3) + Math.round(linkedinTrust.score * 0.24);
       candidates.push({
         channel: 'linkedin',
         score: clamp(score, 0, 100),
@@ -978,6 +1157,8 @@ function buildRouteCandidates({ companyProfile, contacts }) {
         targetRole: role || 'company',
         recipientType: 'public',
         routeSource: contact.source || '',
+        routeTrustReason: linkedinTrust.reason,
+        routeTrustScore: linkedinTrust.score,
       });
     }
   });
@@ -996,6 +1177,10 @@ function buildRouteCandidates({ companyProfile, contacts }) {
       targetRole: companyProfile.role || (premiumFirm ? 'design firm' : 'company'),
       recipientType: 'public',
       routeSource: 'company_profile',
+      routeTrustReason: premiumFirm
+        ? 'Premium architect or design profile with no clean email route yet.'
+        : 'LinkedIn exists, but this is still a research fallback.',
+      routeTrustScore: premiumFirm ? 56 : 32,
     });
   }
 
@@ -1009,23 +1194,15 @@ function buildChannelReason(candidate, companyProfile, permit) {
       : companyProfile.company_name || permit.owner_business_name || getApplicantName(permit) || 'team';
 
   if (candidate.channel === 'email') {
-    if (candidate.recipientType === 'verified') {
-      return `A verified ${routeLabel} email is available, which is the cleanest first route.`;
-    }
-
-    if (candidate.recipientType === 'guessed') {
-      return `A guessed ${routeLabel} email exists. Review it quickly, then use email if the match still looks right.`;
-    }
-
-    return `A public ${routeLabel} email is available, which is still cleaner than a cold phone-first approach.`;
+    return candidate.routeTrustReason || `A clean ${routeLabel} email route is available.`;
   }
 
   if (candidate.channel === 'phone') {
-    return `A phone route exists for the ${routeLabel}, which is stronger than guessing another contact path.`;
+    return candidate.routeTrustReason || `A phone route exists for the ${routeLabel}, which is stronger than guessing another contact path.`;
   }
 
   if (candidate.channel === 'form') {
-    return 'The official site has a contact route, so the form is cleaner than guessing another path.';
+    return candidate.routeTrustReason || 'The official site has a contact route, so the form is cleaner than guessing another path.';
   }
 
   if (isPremiumLinkedInTarget(companyProfile)) {
@@ -1036,7 +1213,7 @@ function buildChannelReason(candidate, companyProfile, permit) {
 }
 
 function buildChannelDecision({ score, contactability, companyProfile, contacts, permit }) {
-  const routeCandidates = buildRouteCandidates({ companyProfile, contacts });
+  const routeCandidates = buildRouteCandidates({ companyProfile, contacts, permit });
   const selected = routeCandidates[0];
   const alternatives = uniq(routeCandidates.slice(1).map((candidate) => candidate.channel)).filter(Boolean);
 
@@ -1050,14 +1227,28 @@ function buildChannelDecision({ score, contactability, companyProfile, contacts,
       recipientType: '',
       targetRole: '',
       routeSource: '',
+      trustReason: 'No direct route is trustworthy yet.',
+      suggestedCc: '',
+      sendTrust: 0,
     };
   }
 
+  const emailCandidates = routeCandidates.filter((candidate) => candidate.channel === 'email');
+  const suggestedCc = selected.channel === 'email'
+    ? normalizeEmailAddress(
+      emailCandidates
+        .find((candidate, index) =>
+          index > 0 &&
+          (candidate.routeTrustScore || 0) >= AUTO_SEND_EMAIL_SCORE_THRESHOLD &&
+          emailDomain(candidate.contact?.email || '') === emailDomain(selected.contact?.email || ''),
+        )?.contact?.email || '',
+    )
+    : '';
   const manualAutoSendEligible =
     AUTO_SEND_ENABLED &&
     selected.channel === 'email' &&
     selected.recipientType !== 'guessed' &&
-    selected.score >= 60 &&
+    (selected.routeTrustScore || selected.score) >= AUTO_SEND_EMAIL_SCORE_THRESHOLD &&
     contactability.total >= 55;
 
   return {
@@ -1069,6 +1260,9 @@ function buildChannelDecision({ score, contactability, companyProfile, contacts,
     recipientType: selected.recipientType,
     targetRole: selected.targetRole,
     routeSource: selected.routeSource,
+    trustReason: selected.routeTrustReason || '',
+    suggestedCc,
+    sendTrust: selected.routeTrustScore || selected.score,
   };
 }
 
@@ -1098,6 +1292,11 @@ function buildOutreachReadiness(score, contactability, companyProfile, contacts,
   if (channelDecision.primary === 'email' && channelDecision.recipientType === 'guessed') {
     blockers.push('Primary email is still guessed');
     readiness -= 8;
+  }
+
+  if (channelDecision.primary === 'email' && (channelDecision.sendTrust || 0) < AUTO_SEND_EMAIL_SCORE_THRESHOLD) {
+    blockers.push('Primary email trust is still below the send threshold');
+    readiness -= 10;
   }
 
   const scoreValue = clamp(readiness);
@@ -1263,8 +1462,11 @@ function buildNextActionDecision({
 
   if (channelDecision.primary === 'email') {
     return {
-      label: channelDecision.recipientType === 'guessed' ? 'Review guessed email' : 'Email first',
-      detail: channelDecision.reason,
+      label:
+        channelDecision.recipientType === 'guessed' || (channelDecision.sendTrust || 0) < AUTO_SEND_EMAIL_SCORE_THRESHOLD
+          ? 'Review email first'
+          : 'Email first',
+      detail: channelDecision.trustReason || channelDecision.reason,
       queue: 'email',
       urgency: readiness.label === 'Ready' ? 'high' : 'medium',
     };
@@ -1335,33 +1537,37 @@ function getBusinessHourState(now = new Date()) {
   return { insideBusinessHours, isWeekend, hour, weekday };
 }
 
-function pickPrimaryContact(contacts, companyProfile = {}) {
-  const trustedEmailContact = pickBestEmailContact(contacts, companyProfile);
+function pickPrimaryContact(contacts, companyProfile = {}, permit = {}) {
+  const trustedEmailContact = pickBestEmailContact(contacts, companyProfile, permit);
 
   return trustedEmailContact
-    || contacts.find((contact) => contact.phone)
-    || contacts.find((contact) => contact.contact_form_url)
+    || [...contacts]
+      .filter((contact) => contact.phone)
+      .sort((left, right) => buildPhoneTrust(right, companyProfile, permit).score - buildPhoneTrust(left, companyProfile, permit).score)[0]
+    || [...contacts]
+      .filter((contact) => contact.contact_form_url)
+      .sort((left, right) => buildFormTrust(right, companyProfile).score - buildFormTrust(left, companyProfile).score)[0]
     || null;
 }
 
-function pickBestEmailContact(contacts, companyProfile = {}) {
+function pickBestEmailContact(contacts, companyProfile = {}, permit = {}) {
   const emailContacts = [...contacts]
     .filter((contact) => contact.email)
     .sort((left, right) => {
-      return scoreEmailContactForSelection(right, companyProfile) - scoreEmailContactForSelection(left, companyProfile);
+      return scoreEmailContactForSelection(right, companyProfile, permit) - scoreEmailContactForSelection(left, companyProfile, permit);
     });
 
-  return emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile) > 0) || null;
+  return emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile, permit) > 0) || null;
 }
 
-function getAutoSendEmailContacts(contacts, companyProfile = {}) {
+function getAutoSendEmailContacts(contacts, companyProfile = {}, permit = {}) {
   const seen = new Set();
 
   return [...contacts]
     .filter((contact) => contact.email && contact.type !== 'guessed')
     .map((contact) => ({
       ...contact,
-      autoSendScore: scoreEmailContactForSelection(contact, companyProfile),
+      autoSendScore: scoreEmailContactForSelection(contact, companyProfile, permit),
     }))
     .filter((contact) => contact.autoSendScore >= AUTO_SEND_EMAIL_SCORE_THRESHOLD)
     .sort((left, right) => {
@@ -1383,8 +1589,38 @@ function getAutoSendEmailContacts(contacts, companyProfile = {}) {
     .slice(0, AUTO_SEND_EMAIL_CONTACT_LIMIT);
 }
 
+function getManualSendEmailContacts(contacts, companyProfile = {}, permit = {}) {
+  const seen = new Set();
+
+  return [...contacts]
+    .filter((contact) => contact.email)
+    .map((contact) => ({
+      ...contact,
+      manualSendScore: scoreEmailContactForSelection(contact, companyProfile, permit),
+    }))
+    .filter((contact) => contact.manualSendScore >= 40)
+    .sort((left, right) => {
+      if (right.manualSendScore !== left.manualSendScore) {
+        return right.manualSendScore - left.manualSendScore;
+      }
+
+      return Math.round(right.confidence || 0) - Math.round(left.confidence || 0);
+    })
+    .filter((contact) => {
+      const email = normalizeEmailAddress(contact.email);
+      if (!email || seen.has(email)) {
+        return false;
+      }
+
+      seen.add(email);
+      return true;
+    })
+    .slice(0, AUTO_SEND_EMAIL_CONTACT_LIMIT);
+}
+
 function buildDraft(lead, companyProfile, contacts) {
-  const primaryContact = pickPrimaryContact(contacts, companyProfile);
+  const permit = lead.raw_permit || lead;
+  const primaryContact = pickPrimaryContact(contacts, companyProfile, permit);
   const address = sanitizeOutreachCopy(lead.address);
   const projectAngle = getProjectAngle(lead);
   const relevanceScore = Number(lead.score_breakdown?.relevanceScore || lead.scoreBreakdown?.relevanceScore || 0.3);
@@ -1393,18 +1629,24 @@ function buildDraft(lead, companyProfile, contacts) {
   const role = getDraftRole(lead, companyProfile, primaryContact);
   const contactName = getDraftRecipientName(primaryContact, companyProfile, lead);
   const companyName = sanitizeOutreachCopy(companyProfile.company_name || lead.owner_business_name || lead.applicant_business_name || 'your team');
-  const introLine = sanitizeOutreachCopy(buildDraftIntro(lead, projectAngle, relevanceKeyword));
+  const strategy = chooseDraftStrategy(lead, role, projectAngle, companyProfile, primaryContact);
+  const introLine = sanitizeOutreachCopy(buildDraftIntro(lead, projectAngle, relevanceKeyword, role, strategy));
   const valueLine = sanitizeOutreachCopy(getDraftValueLine(role, projectAngle));
-  const cta = sanitizeOutreachCopy(chooseDraftCta(lead, role, projectAngle, relevanceScore));
+  const cta = sanitizeOutreachCopy(chooseDraftCta(lead, role, projectAngle, relevanceScore, strategy));
+  const evidenceLine = sanitizeOutreachCopy(
+    role.includes('filing') || role.includes('architect') || role.includes('design')
+      ? `${companyName} looked like a possible fit for this permit, so I wanted to reach out without overcomplicating it.`
+      : `This looked relevant for ${companyName}.`,
+  );
   const subject = sanitizeOutreachCopy(
-    `${address} permit, ${projectAngle.includes('custom glass') ? 'glass scope' : projectAngle}`,
+    `${address}, ${projectAngle.includes('custom glass') ? 'glass scope' : projectAngle}`,
   );
   const body = [
     `Hi ${contactName},`,
     '',
     introLine,
     '',
-    `${valueLine} This looks relevant for ${companyName}.`,
+    `${valueLine} ${evidenceLine}`,
     '',
     pluginLine,
     '',
@@ -1478,6 +1720,61 @@ async function upsertDraftRecord(gateway, leadId, patch, existingDraft = null) {
   return inserted[0] || null;
 }
 
+function buildTrustScores({
+  leadRow,
+  companyProfile,
+  propertyProfile,
+  contacts,
+  channelDecision,
+}) {
+  const permit = leadRow.raw_permit || {};
+  const primaryContact = pickPrimaryContact(contacts, companyProfile, permit);
+  const bestEmail = pickBestEmailContact(contacts, companyProfile, permit);
+  const emailTrust = bestEmail ? buildEmailTrust(bestEmail, companyProfile, permit) : { score: 0, reason: 'No trusted email route yet.' };
+  const mapsReviewCount = Number(companyProfile?.social_links?.google_reviews_count || 0);
+  const mapsRating = Number(companyProfile?.social_links?.google_rating || 0);
+  const personAligned = primaryContact ? contactMatchesKnownPerson(primaryContact, permit) : false;
+  const companyTrustBase = Math.round(companyProfile.confidence || 0)
+    + (companyProfile.website ? 10 : 0)
+    + (companyProfile.domain ? 6 : 0)
+    + (mapsRating >= 4 ? 6 : 0)
+    + (mapsReviewCount >= 10 ? 6 : 0)
+    + (companyProfile.match_strength === 'strong' ? 12 : companyProfile.match_strength === 'medium' ? 4 : -10);
+  const propertyTrust = clamp(Math.round(propertyProfile.confidence || 0), 0, 100);
+  const companyTrust = clamp(companyTrustBase, 0, 100);
+  const personTrust = clamp(
+    (primaryContact ? Math.round(primaryContact.confidence || 0) : 0)
+      + (personAligned ? 18 : 0)
+      + (primaryContact?.linkedin_url ? 8 : 0)
+      + (primaryContact?.name ? 4 : 0),
+    0,
+    100,
+  );
+  const channelTrust = clamp(Math.round(channelDecision.sendTrust || channelDecision.routeConfidence || 0), 0, 100);
+  const sendTrust = clamp(
+    Math.round((companyTrust * 0.28) + (propertyTrust * 0.12) + (personTrust * 0.2) + (emailTrust.score * 0.22) + (channelTrust * 0.18)),
+    0,
+    100,
+  );
+
+  const needsWork = [];
+  if (companyTrust < 65) needsWork.push('Company match still needs stronger evidence.');
+  if (personTrust < 55) needsWork.push('Decision maker match is still light.');
+  if (emailTrust.score < AUTO_SEND_EMAIL_SCORE_THRESHOLD) needsWork.push('Email trust is still below the send threshold.');
+  if (channelDecision.primary !== 'email') needsWork.push('Best route is not email yet.');
+
+  return {
+    company: companyTrust,
+    property: propertyTrust,
+    person: personTrust,
+    email: emailTrust.score,
+    channel: channelTrust,
+    send: sendTrust,
+    primaryEmailReason: emailTrust.reason,
+    needsWork,
+  };
+}
+
 function buildDerivedLeadState({
   leadRow,
   companyProfile,
@@ -1514,12 +1811,21 @@ function buildDerivedLeadState({
     readiness,
     status,
   });
-  const autoSendContacts = getAutoSendEmailContacts(contacts, companyProfile);
+  const trustScores = buildTrustScores({
+    leadRow,
+    companyProfile,
+    propertyProfile,
+    contacts,
+    channelDecision,
+  });
+  const autoSendContacts = getAutoSendEmailContacts(contacts, companyProfile, permit);
   const autoSendEligible =
     AUTO_SEND_ENABLED &&
     autoSendContacts.length > 0 &&
     readiness.label !== 'Blocked' &&
-    qualityTier !== 'dead';
+    qualityTier !== 'dead' &&
+    channelDecision.primary === 'email' &&
+    trustScores.send >= AUTO_SEND_EMAIL_SCORE_THRESHOLD;
 
   return {
     contactability,
@@ -1533,14 +1839,15 @@ function buildDerivedLeadState({
     priorityScore,
     status,
     nextAction,
-    enrichmentConfidence: Math.round(((companyProfile.confidence || 0) * 0.45) + ((propertyProfile.confidence || 0) * 0.3) + (readiness.score * 0.25)),
+    enrichmentConfidence: Math.round(((companyProfile.confidence || 0) * 0.35) + ((propertyProfile.confidence || 0) * 0.2) + (readiness.score * 0.2) + (trustScores.send * 0.25)),
+    trustScores,
     autoSendEligible,
     autoSendReason: qualityTier === 'dead'
       ? 'Permit relevance is too weak for active outreach.'
       : AUTO_SEND_ENABLED
       ? autoSendEligible
         ? `${autoSendContacts.length} strong email route${autoSendContacts.length > 1 ? 's are' : ' is'} ready for automatic sending.`
-        : 'No strong email route has cleared the automatic send threshold yet.'
+        : trustScores.needsWork[0] || 'No strong email route has cleared the automatic send threshold yet.'
       : 'Auto-send is disabled until resolver trust is stronger.',
   };
 }
@@ -2969,7 +3276,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
   }
 
   const dedupedContacts = dedupeContacts(contacts);
-  const primaryContact = pickPrimaryContact(dedupedContacts, company) || null;
+  const primaryContact = pickPrimaryContact(dedupedContacts, company, permit) || null;
   dedupedContacts.forEach((contact) => {
     contact.is_primary = Boolean(primaryContact && contact.id === primaryContact.id);
   });
@@ -3019,6 +3326,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       draft,
       verification,
       qualityTier: derivedState.qualityTier,
+      trustScores: derivedState.trustScores,
     },
     company_match_strength: company.match_strength,
     company_domain: company.domain,
@@ -3047,6 +3355,8 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
         companyConfidence: company.confidence,
         propertyConfidence: propertyProfile.confidence,
         readiness: derivedState.readiness.label,
+        trustScores: derivedState.trustScores,
+        routeTrustReason: derivedState.channelDecision.trustReason || '',
       },
     }),
   ]);
@@ -3061,12 +3371,14 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     callOpener: draft.callOpener,
     followUpNote: draft.followUpNote,
     status: enrichedLead.auto_send_eligible ? 'queued' : 'draft',
-    metadata: {
-      introLine: draft.introLine,
-      companyWebsite: company.website,
-      alternatives: derivedState.channelDecision.alternatives,
-    },
-  });
+      metadata: {
+        introLine: draft.introLine,
+        companyWebsite: company.website,
+        alternatives: derivedState.channelDecision.alternatives,
+        trustReason: derivedState.channelDecision.trustReason || '',
+        sendTrust: derivedState.trustScores.send,
+      },
+    });
 
   return {
     lead: enrichedLead,
@@ -3100,7 +3412,7 @@ async function maybeAutoSend(env, gateway, enriched) {
     return { sent: false, reason: 'Throttle limit reached' };
   }
 
-  const emailContacts = getAutoSendEmailContacts(contacts, lead.enrichment_summary?.company || {});
+  const emailContacts = getAutoSendEmailContacts(contacts, lead.enrichment_summary?.company || {}, lead.raw_permit || lead);
   if (emailContacts.length === 0) {
     await gateway.patch('leads', [eq('id', lead.id)], {
       auto_send_reason: 'No strong email route is available for auto-send.',
@@ -4442,7 +4754,7 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         throw new Error('No draft available to send');
       }
 
-      const emailContacts = getAutoSendEmailContacts(contacts, lead.companyProfile || {});
+      const emailContacts = getManualSendEmailContacts(contacts, lead.companyProfile || {}, lead.raw_permit || lead);
       if (emailContacts.length === 0) {
         throw new Error('No email available');
       }
@@ -4482,7 +4794,7 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         } else {
           await gateway.insert('outreach', {
             id: createId('outreach'),
-            lead_id: leadRow.id,
+            lead_id: lead.id,
             channel: latestOutreach.channel || 'email',
             recipient: contact.email,
             recipient_type: contact.type,
