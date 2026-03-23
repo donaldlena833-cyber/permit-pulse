@@ -39,8 +39,8 @@ const ENRICHMENT_BATCH_LIMIT = 4;
 const SEND_BATCH_LIMIT = 4;
 const AUTO_SEND_ENABLED = true;
 const ZEROBOUNCE_ENABLED = false;
-const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 70;
-const AUTO_SEND_EMAIL_CONTACT_LIMIT = 3;
+const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 1;
+const AUTO_SEND_EMAIL_CONTACT_LIMIT = 10;
 const DIRECTORY_DOMAIN_DENYLIST = [
   'yelp.com',
   'angi.com',
@@ -4105,35 +4105,84 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         throw new Error('No draft available to send');
       }
 
-      const emailContact = pickBestEmailContact(contacts, lead.companyProfile || {}) || null;
-      if (!emailContact?.email) {
+      const emailContacts = getAutoSendEmailContacts(contacts, lead.companyProfile || {});
+      if (emailContacts.length === 0) {
         throw new Error('No email available');
       }
 
-      const gmailResult = await sendAutomationEmail(env, {
-        recipient: emailContact.email,
-        subject: latestOutreach.subject,
-        body: latestOutreach.body,
-      });
+      const duplicateSince = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000)).toISOString();
+      const sentRecipients = [];
+      const skippedRecipients = [];
 
-      const sentAt = new Date().toISOString();
-      await Promise.all([
-        gateway.patch('outreach', [eq('id', latestOutreach.id)], {
+      for (const [index, contact] of emailContacts.entries()) {
+        const isDuplicate = await gateway.hasDuplicateOutreach(contact.email, duplicateSince);
+        if (isDuplicate) {
+          skippedRecipients.push({
+            recipient: contact.email,
+            reason: 'Duplicate within 30 days',
+          });
+          continue;
+        }
+
+        const gmailResult = await sendAutomationEmail(env, {
+          recipient: contact.email,
+          subject: latestOutreach.subject,
+          body: latestOutreach.body,
+        });
+
+        const sentAt = new Date().toISOString();
+        const outreachPayload = {
           status: 'sent',
           sent_at: sentAt,
           gmail_message_id: gmailResult.id || '',
           gmail_thread_id: gmailResult.threadId || '',
-          recipient: emailContact.email,
-          recipient_type: emailContact.type,
-        }),
-        gateway.patch('leads', [eq('permit_key', lead.id)], {
-          status: 'contacted',
-          last_contacted_at: sentAt,
-          last_sent_at: sentAt,
-          duplicate_guard_until: new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
-          auto_send_reason: 'Email sent manually by operator.',
-        }),
-      ]);
+          recipient: contact.email,
+          recipient_type: contact.type,
+        };
+
+        if (index === 0) {
+          await gateway.patch('outreach', [eq('id', latestOutreach.id)], outreachPayload);
+        } else {
+          await gateway.insert('outreach', {
+            id: createId('outreach'),
+            lead_id: leadRow.id,
+            channel: latestOutreach.channel || 'email',
+            recipient: contact.email,
+            recipient_type: contact.type,
+            subject: latestOutreach.subject || '',
+            draft: latestOutreach.body || '',
+            plugin_line: latestOutreach.pluginLine || '',
+            call_opener: latestOutreach.callOpener || '',
+            follow_up_note: latestOutreach.followUpNote || '',
+            status: 'sent',
+            sent_at: sentAt,
+            gmail_message_id: gmailResult.id || '',
+            gmail_thread_id: gmailResult.threadId || '',
+            metadata: {
+              ...(latestOutreach.metadata || {}),
+              manualSend: true,
+              recipientRank: index + 1,
+            },
+          });
+        }
+
+        sentRecipients.push(contact.email);
+      }
+
+      if (sentRecipients.length === 0) {
+        throw new Error(skippedRecipients[0]?.reason || 'No email could be sent');
+      }
+
+      const sentAt = new Date().toISOString();
+      await gateway.patch('leads', [eq('permit_key', lead.id)], {
+        status: 'contacted',
+        last_contacted_at: sentAt,
+        last_sent_at: sentAt,
+        duplicate_guard_until: new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
+        auto_send_reason: sentRecipients.length > 1
+          ? `Operator sent email to ${sentRecipients.length} contacts.`
+          : 'Email sent manually by operator.',
+      });
 
       const latestLead = (await gateway.getLeadById(leadRow.id)) || leadRow;
       if (latestLead) {
@@ -4142,7 +4191,12 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         });
       }
 
-      return { success: true, recipient: emailContact.email, sentAt };
+      return {
+        success: true,
+        recipient: sentRecipients[0],
+        recipients: sentRecipients,
+        sentAt,
+      };
     },
     options,
   );

@@ -95,17 +95,13 @@ function shouldAutoSendLead(lead: PermitLead | undefined): boolean {
     return false
   }
 
-  const primaryEmail = lead.contacts.find((contact) => contact.isPrimary && contact.email)?.email
-    || lead.enrichment.directEmail
-    || lead.enrichment.genericEmail
-    || ""
+  const availableEmails = lead.contacts
+    .map((contact) => contact.email)
+    .filter((email): email is string => Boolean(email) && !isBlockedAutoSendDomain(email))
 
   return Boolean(
-    primaryEmail
-    && !isBlockedAutoSendDomain(primaryEmail)
-    && lead.channelDecision.primary === "email"
-    && lead.channelDecision.autoSendEligible
-    && lead.outreachReadiness.label === "Ready"
+    availableEmails.length > 0
+    && lead.outreachReadiness.label !== "Blocked"
     && lead.outreachDraft.subject
     && lead.outreachDraft.shortEmail,
   )
