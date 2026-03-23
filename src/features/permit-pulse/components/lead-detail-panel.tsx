@@ -422,8 +422,7 @@ export function LeadDetailPanel({
   const rejectedPeople = personCandidates.filter((candidate) => candidate.status !== "selected").slice(0, 4)
   const blocker = getLeadBlocker(lead)
   const canSendNow = Boolean(
-    lead.channelDecision.primary === "email"
-    && primaryEmail
+    primaryEmail
     && lead.outreachDraft.subject
     && lead.outreachDraft.shortEmail,
   )

@@ -38,6 +38,7 @@ function createId() {
 const ENRICHMENT_BATCH_LIMIT = 4;
 const SEND_BATCH_LIMIT = 4;
 const AUTO_SEND_ENABLED = true;
+const ZEROBOUNCE_ENABLED = false;
 const DIRECTORY_DOMAIN_DENYLIST = [
   'yelp.com',
   'angi.com',
@@ -1201,6 +1202,10 @@ function resolveLeadStatus({ currentStatus, followUpDate, hasDraft, readinessLab
   return 'researching';
 }
 
+function isAutomationTerminalStatus(status = '') {
+  return ['contacted', 'replied', 'qualified', 'quoted', 'won', 'lost', 'archived'].includes(status);
+}
+
 function buildNextActionDecision({
   channelDecision,
   companyProfile,
@@ -1328,18 +1333,22 @@ function getBusinessHourState(now = new Date()) {
 }
 
 function pickPrimaryContact(contacts, companyProfile = {}) {
+  const trustedEmailContact = pickBestEmailContact(contacts, companyProfile);
+
+  return trustedEmailContact
+    || contacts.find((contact) => contact.phone)
+    || contacts.find((contact) => contact.contact_form_url)
+    || null;
+}
+
+function pickBestEmailContact(contacts, companyProfile = {}) {
   const emailContacts = [...contacts]
     .filter((contact) => contact.email)
     .sort((left, right) => {
       return scoreEmailContactForSelection(right, companyProfile) - scoreEmailContactForSelection(left, companyProfile);
     });
 
-  const trustedEmailContact = emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile) > 0) || null;
-
-  return trustedEmailContact
-    || contacts.find((contact) => contact.phone)
-    || contacts.find((contact) => contact.contact_form_url)
-    || null;
+  return emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile) > 0) || null;
 }
 
 function buildDraft(lead, companyProfile, contacts) {
@@ -2292,7 +2301,7 @@ function generateGuessedEmails(companyProfile, permit, contacts) {
 }
 
 async function maybeVerifyEmail(env, email, shouldVerify) {
-  if (!env.ZEROBOUNCE_API_KEY || !email || !shouldVerify) {
+  if (!ZEROBOUNCE_ENABLED || !env.ZEROBOUNCE_API_KEY || !email || !shouldVerify) {
     return { verified: false, confidence: shouldVerify ? 68 : 52, status: 'skipped' };
   }
 
@@ -3167,6 +3176,10 @@ export async function runPermitAutomationCycle(env) {
 }
 
 function needsAutomationPass(lead) {
+  if (isAutomationTerminalStatus(lead.status)) {
+    return false;
+  }
+
   return (
     ['new', 'reviewed', 'researching'].includes(lead.status) ||
     (lead.contactability_score || 0) < 60 ||
@@ -3998,16 +4011,13 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         throw new Error('No draft available to send');
       }
 
-      const primaryContact = pickPrimaryContact(contacts, lead.companyProfile || {}) || null;
-      if (lead.channelDecision?.primary !== 'email') {
-        throw new Error('Best route is not email yet');
-      }
-      if (!primaryContact?.email) {
+      const emailContact = pickBestEmailContact(contacts, lead.companyProfile || {}) || null;
+      if (!emailContact?.email) {
         throw new Error('No email available');
       }
 
       const gmailResult = await sendAutomationEmail(env, {
-        recipient: primaryContact.email,
+        recipient: emailContact.email,
         subject: latestOutreach.subject,
         body: latestOutreach.body,
       });
@@ -4019,13 +4029,15 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
           sent_at: sentAt,
           gmail_message_id: gmailResult.id || '',
           gmail_thread_id: gmailResult.threadId || '',
-          recipient: primaryContact.email,
-          recipient_type: primaryContact.type,
+          recipient: emailContact.email,
+          recipient_type: emailContact.type,
         }),
         gateway.patch('leads', [eq('permit_key', lead.id)], {
           status: 'contacted',
           last_contacted_at: sentAt,
           last_sent_at: sentAt,
+          duplicate_guard_until: new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
+          auto_send_reason: 'Email sent manually by operator.',
         }),
       ]);
 
@@ -4036,7 +4048,7 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         });
       }
 
-      return { success: true, recipient: primaryContact.email, sentAt };
+      return { success: true, recipient: emailContact.email, sentAt };
     },
     options,
   );
