@@ -2740,14 +2740,6 @@ async function maybeAutoSend(env, gateway, enriched) {
     return { sent: false, reason: lead.auto_send_reason || 'Auto-send disabled' };
   }
 
-  const business = getBusinessHourState();
-  if (!business.insideBusinessHours) {
-    await gateway.patch('leads', [eq('id', lead.id)], {
-      auto_send_reason: 'Queued, but outside NYC business hours.',
-    });
-    return { sent: false, reason: 'Outside business hours' };
-  }
-
   const now = new Date();
   const last24Hours = new Date(now.getTime() - (24 * 60 * 60 * 1000)).toISOString();
   const lastHour = new Date(now.getTime() - (60 * 60 * 1000)).toISOString();
@@ -3257,7 +3249,7 @@ export async function runPermitAutomationCycle(env) {
   const gateway = createSupabaseGateway(env);
   const ingestResult = await runPermitIngestInternal(env, gateway);
   const enrichmentResult = await runEnrichmentBatchInternal(env, gateway, ingestResult.leads, {
-    limit: ENRICHMENT_BATCH_LIMIT,
+    limit: Math.max(ENRICHMENT_BATCH_LIMIT, Math.min(ingestResult.leads?.length || ENRICHMENT_BATCH_LIMIT, 12)),
   });
 
   return {
