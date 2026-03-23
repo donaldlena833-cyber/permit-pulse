@@ -2030,6 +2030,286 @@ function scoreWebsiteCandidate(result, seed, permit) {
   return score;
 }
 
+function buildGoogleMapsPlaceUrl(placeId, fallbackQuery = '') {
+  if (placeId) {
+    return `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}`;
+  }
+
+  if (fallbackQuery) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fallbackQuery)}`;
+  }
+
+  return '';
+}
+
+function scoreGoogleBusinessCandidate(result, companyName, permit, role = 'owner') {
+  const seed = stripCompanySuffix(companyName);
+  const companyTokens = tokenizeName(companyName);
+  const businessName = stripCompanySuffix(result.name || '');
+  const address = normalizeText(result.formatted_address || '');
+  const typesBlob = normalizeText((result.types || []).join(' '));
+  const streetTokens = tokenizeName(permit.street_name || '');
+  const borough = normalizeText(permit.borough || '');
+  const zipCode = normalizeText(permit.zip_code || '');
+
+  let score = 18;
+  const tokenMatches = countTokenMatches(companyTokens, businessName);
+  score += tokenMatches * 16;
+
+  if (seed && businessName.includes(seed)) {
+    score += 30;
+  }
+
+  if (tokenMatches === 0) {
+    score -= 26;
+  }
+
+  score += countTokenMatches(streetTokens, address) * 6;
+  if (borough && address.includes(borough)) {
+    score += 8;
+  }
+  if (zipCode && address.includes(zipCode)) {
+    score += 8;
+  }
+
+  if (normalizeText(result.business_status || '') === 'operational') {
+    score += 6;
+  }
+
+  const rating = Number(result.rating || 0);
+  const reviewCount = Number(result.user_ratings_total || 0);
+  if (rating >= 4.5) {
+    score += 6;
+  } else if (rating >= 4.0) {
+    score += 3;
+  }
+  if (reviewCount >= 25) {
+    score += 6;
+  } else if (reviewCount >= 8) {
+    score += 3;
+  }
+
+  if (role.includes('architect') || role.includes('design')) {
+    if (typesBlob.includes('architect') || typesBlob.includes('interior_designer')) {
+      score += 12;
+    }
+  } else if (typesBlob.includes('general_contractor') || typesBlob.includes('construction_company')) {
+    score += 12;
+  }
+
+  return score;
+}
+
+function summarizeGoogleReviewSignals(reviews = [], permit = {}) {
+  if (!Array.isArray(reviews) || reviews.length === 0) {
+    return {
+      summary: '',
+      highlights: [],
+      matchedKeywords: [],
+    };
+  }
+
+  const keywords = uniq([
+    ...buildProjectTags(permit),
+    'glass',
+    'mirror',
+    'shower',
+    'partition',
+    'storefront',
+    'office',
+    'bathroom',
+    'renovation',
+    'architect',
+    'contractor',
+  ]);
+  const reviewBlob = normalizeText(reviews.map((review) => review.text || '').join(' '));
+  const matchedKeywords = keywords.filter((keyword) => reviewBlob.includes(normalizeText(keyword))).slice(0, 4);
+  const highlights = reviews
+    .map((review) => sanitizeOutreachCopy((review.text || '').replace(/\s+/g, ' ').trim()))
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((text) => text.slice(0, 160));
+
+  const summary = matchedKeywords.length > 0
+    ? `Google reviews mention ${matchedKeywords.join(', ')}.`
+    : highlights[0] || '';
+
+  return {
+    summary,
+    highlights,
+    matchedKeywords,
+  };
+}
+
+async function fetchGooglePlaceDetails(env, placeId) {
+  if (!env.GOOGLE_MAPS_API_KEY || !placeId) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    place_id: placeId,
+    fields: 'place_id,name,website,url,formatted_phone_number,international_phone_number,rating,user_ratings_total,business_status,reviews,types,formatted_address',
+    key: env.GOOGLE_MAPS_API_KEY,
+  });
+  const payload = await fetchJson(`${API_ENDPOINTS.googlePlaceDetails}?${params.toString()}`);
+  return payload.result || null;
+}
+
+async function searchGoogleBusinessProfile(env, permit, companyProfile, options = {}) {
+  const companyName =
+    companyProfile.company_name ||
+    permit.applicant_business_name ||
+    permit.filing_representative_business_name ||
+    permit.owner_business_name ||
+    '';
+
+  if (!env.GOOGLE_MAPS_API_KEY || !companyName) {
+    return null;
+  }
+
+  const role = companyProfile.role || 'owner';
+  const queries = uniq([
+    `${companyName} ${getPermitAddress(permit)}`,
+    `${companyName} ${permit.borough || ''} NY`,
+    options.force ? `${companyName} NYC` : '',
+  ]).filter(Boolean);
+
+  try {
+    const resultSets = await Promise.all(
+      queries.map(async (query) => {
+        const params = new URLSearchParams({
+          query,
+          region: 'us',
+          key: env.GOOGLE_MAPS_API_KEY,
+        });
+        const payload = await fetchJson(`${API_ENDPOINTS.googlePlacesTextSearch}?${params.toString()}`);
+        return {
+          query,
+          results: payload.results || [],
+        };
+      }),
+    );
+
+    const candidateByPlaceId = new Map();
+    resultSets.forEach((resultSet) => {
+      resultSet.results.forEach((result) => {
+        const placeId = result.place_id || result.name || result.formatted_address || '';
+        if (!placeId) {
+          return;
+        }
+
+        const score = scoreGoogleBusinessCandidate(result, companyName, permit, role);
+        const existing = candidateByPlaceId.get(placeId);
+        if (!existing || score > existing.score) {
+          candidateByPlaceId.set(placeId, {
+            query: resultSet.query,
+            result,
+            score,
+          });
+        }
+      });
+    });
+
+    const rankedCandidates = [...candidateByPlaceId.values()]
+      .sort((left, right) => right.score - left.score)
+      .slice(0, options.force ? 5 : 3);
+
+    const winningCandidate = rankedCandidates[0] || null;
+    const strongEnough = Boolean(winningCandidate && winningCandidate.score >= 44);
+    const details = strongEnough
+      ? await fetchGooglePlaceDetails(env, winningCandidate.result.place_id)
+      : null;
+    const reviewSignals = summarizeGoogleReviewSignals(details?.reviews || [], permit);
+    const website = originFromUrl(details?.website || '');
+    const domain = rootDomain(website);
+    const confidence = strongEnough ? clamp((winningCandidate?.score || 0) + (reviewSignals.matchedKeywords.length * 3), 28, 97) : 0;
+    const selectedPlaceId = details?.place_id || (strongEnough ? winningCandidate?.result.place_id : '');
+
+    return {
+      selected: Boolean(selectedPlaceId),
+      companyName: details?.name || winningCandidate?.result.name || companyName,
+      role,
+      placeId: selectedPlaceId || '',
+      mapsUrl: details?.url || buildGoogleMapsPlaceUrl(selectedPlaceId || winningCandidate?.result.place_id, companyName),
+      website,
+      domain,
+      phone: details?.formatted_phone_number || details?.international_phone_number || '',
+      rating: Number(details?.rating || winningCandidate?.result.rating || 0),
+      reviewCount: Number(details?.user_ratings_total || winningCandidate?.result.user_ratings_total || 0),
+      businessStatus: normalizeText(details?.business_status || winningCandidate?.result.business_status || ''),
+      reviewSummary: reviewSignals.summary,
+      reviewHighlights: reviewSignals.highlights,
+      reviewKeywords: reviewSignals.matchedKeywords,
+      confidence,
+      candidates: rankedCandidates.map((candidate, index) =>
+        buildResolutionCandidate({
+          type: 'company',
+          role,
+          label: candidate.result.name || companyName,
+          url: buildGoogleMapsPlaceUrl(candidate.result.place_id, candidate.result.name || companyName),
+          domain: rootDomain(candidate.result.website || ''),
+          source: 'google_maps',
+          confidence: clamp(candidate.score, 18, 96),
+          status:
+            strongEnough && candidate.result.place_id === selectedPlaceId
+              ? 'selected'
+              : index === 0 && !strongEnough
+                ? 'candidate'
+                : 'rejected',
+          detail: [
+            candidate.result.formatted_address || '',
+            candidate.result.rating ? `${candidate.result.rating} stars` : '',
+            candidate.result.user_ratings_total ? `${candidate.result.user_ratings_total} reviews` : '',
+          ].filter(Boolean).join(' | '),
+          matchedQuery: candidate.query,
+        }),
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function mergeCompanyWithGoogleBusiness(companyProfile, googleBusinessProfile) {
+  if (!googleBusinessProfile?.selected) {
+    return companyProfile;
+  }
+
+  const currentDomain = normalizeText(companyProfile.domain || rootDomain(companyProfile.website || ''));
+  const mapsDomain = normalizeText(googleBusinessProfile.domain || '');
+  const currentConfidence = Number(companyProfile.confidence || 0);
+  const mapsConfidence = Number(googleBusinessProfile.confidence || 0);
+  const shouldUseMapsWebsite =
+    Boolean(mapsDomain) &&
+    (
+      !currentDomain ||
+      isDirectoryDomain(currentDomain) ||
+      mapsDomain === currentDomain ||
+      mapsConfidence >= currentConfidence + 4
+    );
+  const nextWebsite = shouldUseMapsWebsite ? googleBusinessProfile.website : companyProfile.website;
+  const nextDomain = shouldUseMapsWebsite ? mapsDomain : companyProfile.domain;
+  const nextConfidence = clamp(Math.max(currentConfidence, mapsConfidence), 0, 98);
+
+  return {
+    ...companyProfile,
+    company_name: googleBusinessProfile.companyName || companyProfile.company_name,
+    normalized_name: normalizeText(googleBusinessProfile.companyName || companyProfile.company_name),
+    website: nextWebsite || companyProfile.website || '',
+    domain: nextDomain || companyProfile.domain || '',
+    confidence: nextConfidence,
+    description: companyProfile.description || googleBusinessProfile.reviewSummary || '',
+    social_links: {
+      ...(companyProfile.social_links || {}),
+      google_maps_url: googleBusinessProfile.mapsUrl || '',
+      google_place_id: googleBusinessProfile.placeId || '',
+      google_rating: googleBusinessProfile.rating || 0,
+      google_reviews_count: googleBusinessProfile.reviewCount || 0,
+    },
+    match_strength: nextConfidence >= 76 ? 'strong' : nextConfidence >= 52 ? 'medium' : 'weak',
+  };
+}
+
 function extractEmails(text) {
   const matches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
   return uniq(matches.map((entry) => entry.toLowerCase()));
@@ -2379,7 +2659,9 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     fetchHpdSummary(permit),
     searchCompanyDomain(env, permit, leadRow.score, options),
   ]);
-  const { candidates: companyCandidates = [], ...company } = companySearch;
+  const { candidates: companyCandidates = [], ...resolvedCompany } = companySearch;
+  const googleBusinessProfile = await searchGoogleBusinessProfile(env, permit, resolvedCompany, options);
+  const company = mergeCompanyWithGoogleBusiness(resolvedCompany, googleBusinessProfile);
   const searchSignals = extractSearchSignals(company.search_results || []);
 
   const propertyProfile = {
@@ -2406,7 +2688,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     options,
   );
   const personSignals = await resolvePersonSignals(env, permit, company, options);
-  const resolutionCandidates = [...companyCandidates];
+  const resolutionCandidates = [...companyCandidates, ...(googleBusinessProfile?.candidates || [])];
   const contacts = [];
   const facts = [];
   const socialLinks = {
@@ -2417,6 +2699,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       searchSignals.contact_form_url ||
       websiteSignals?.socialLinks?.contact_form_url ||
       '',
+    google_maps_url: company.social_links?.google_maps_url || googleBusinessProfile?.mapsUrl || '',
   };
 
   if (company.website || searchSignals.website) {
@@ -2427,6 +2710,48 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       source: 'brave_search',
       confidence: company.confidence,
       metadata: {},
+    });
+  }
+
+  if (socialLinks.google_maps_url) {
+    facts.push({
+      id: createId('fact'),
+      field: 'google_maps_profile',
+      value: socialLinks.google_maps_url,
+      source: 'google_maps',
+      confidence: Math.max(company.confidence - 4, 58),
+      metadata: {
+        placeId: company.social_links?.google_place_id || googleBusinessProfile?.placeId || '',
+      },
+    });
+  }
+
+  if ((googleBusinessProfile?.rating || 0) > 0) {
+    facts.push({
+      id: createId('fact'),
+      field: 'google_maps_rating',
+      value: `${googleBusinessProfile.rating} stars from ${googleBusinessProfile.reviewCount || 0} reviews`,
+      source: 'google_maps',
+      confidence: Math.max(company.confidence - 6, 56),
+      metadata: {
+        rating: googleBusinessProfile.rating,
+        reviewCount: googleBusinessProfile.reviewCount || 0,
+        businessStatus: googleBusinessProfile.businessStatus || '',
+      },
+    });
+  }
+
+  if (googleBusinessProfile?.reviewSummary) {
+    facts.push({
+      id: createId('fact'),
+      field: 'google_review_signal',
+      value: googleBusinessProfile.reviewSummary,
+      source: 'google_maps',
+      confidence: Math.max(company.confidence - 8, 54),
+      metadata: {
+        highlights: googleBusinessProfile.reviewHighlights || [],
+        keywords: googleBusinessProfile.reviewKeywords || [],
+      },
     });
   }
 
@@ -2526,6 +2851,25 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       is_primary: index === 0 && !contacts.some((contact) => contact.email),
     });
   });
+
+  if (googleBusinessProfile?.phone) {
+    contacts.push({
+      id: createId('contact'),
+      name: company.company_name || permit.owner_name || getApplicantName(permit) || '',
+      role: company.role || 'owner',
+      email: '',
+      phone: googleBusinessProfile.phone,
+      website_url: company.website || searchSignals.website || '',
+      linkedin_url: socialLinks.linkedin_url || '',
+      instagram_url: socialLinks.instagram_url || '',
+      contact_form_url: socialLinks.contact_form_url || '',
+      type: 'public',
+      confidence: Math.max(84, Math.round(googleBusinessProfile.confidence || 0)),
+      source: 'google_maps',
+      verified: false,
+      is_primary: !contacts.some((contact) => contact.email),
+    });
+  }
 
   (websiteSignals?.emails || []).forEach((email, index) => {
     const assessment = assessEmailCandidate(email, {

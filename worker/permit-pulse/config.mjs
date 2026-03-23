@@ -11,6 +11,8 @@ export const API_ENDPOINTS = {
   braveSearch: 'https://api.search.brave.com/res/v1/web/search',
   firecrawlScrape: 'https://api.firecrawl.dev/v1/scrape',
   googleGeocode: 'https://maps.googleapis.com/maps/api/geocode/json',
+  googlePlacesTextSearch: 'https://maps.googleapis.com/maps/api/place/textsearch/json',
+  googlePlaceDetails: 'https://maps.googleapis.com/maps/api/place/details/json',
   zerobounceValidate: 'https://api.zerobounce.net/v2/validate',
 };
 
