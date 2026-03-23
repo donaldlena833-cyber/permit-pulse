@@ -12,10 +12,10 @@ import {
   refreshLeadDraft,
   retryAutomationJob,
   runLeadEnrichment,
+  runPermitIngestJob,
   sendLeadImmediately,
   selectResolverCandidate,
   setPrimaryLeadContact,
-  triggerAutomationRun,
 } from "@/features/permit-pulse/lib/remote"
 import { loadStore, saveStore } from "@/features/permit-pulse/lib/storage"
 import {
@@ -53,12 +53,62 @@ import type {
 } from "@/types/permit-pulse"
 
 const API_BASE = "https://data.cityofnewyork.us/resource/rbx6-tga4.json"
+const BLOCKED_AUTO_SEND_DOMAINS = [
+  "contactout.com",
+  "thebluebook.com",
+  "rocketreach.co",
+  "rocketreach.io",
+  "lusha.com",
+  "seamless.ai",
+  "hunter.io",
+  "skrapp.io",
+  "salesintel.io",
+  "adapt.io",
+  "apollo.io",
+  "webflow.io",
+  "wix.com",
+  "wixsite.com",
+  "squarespace.com",
+  "wordpress.com",
+  "weebly.com",
+  "godaddysites.com",
+]
 
 function mapById(leads: PermitLead[]): Record<string, PermitLead> {
   return leads.reduce<Record<string, PermitLead>>((result, lead) => {
     result[lead.id] = lead
     return result
   }, {})
+}
+
+function emailDomain(email: string): string {
+  return email.split("@")[1]?.trim().toLowerCase() ?? ""
+}
+
+function isBlockedAutoSendDomain(email: string): boolean {
+  const domain = emailDomain(email)
+  return BLOCKED_AUTO_SEND_DOMAINS.some((entry) => domain === entry || domain.endsWith(`.${entry}`))
+}
+
+function shouldAutoSendLead(lead: PermitLead | undefined): boolean {
+  if (!lead) {
+    return false
+  }
+
+  const primaryEmail = lead.contacts.find((contact) => contact.isPrimary && contact.email)?.email
+    || lead.enrichment.directEmail
+    || lead.enrichment.genericEmail
+    || ""
+
+  return Boolean(
+    primaryEmail
+    && !isBlockedAutoSendDomain(primaryEmail)
+    && lead.channelDecision.primary === "email"
+    && lead.channelDecision.autoSendEligible
+    && lead.outreachReadiness.label === "Ready"
+    && lead.outreachDraft.subject
+    && lead.outreachDraft.shortEmail,
+  )
 }
 
 function buildSodaUrl(profile: TenantProfile, filters: LeadFilters): string {
@@ -244,14 +294,65 @@ export function usePermitPulse() {
     try {
       const remoteSnapshot = await fetchAutomationSnapshot()
       if (remoteSnapshot) {
-        await triggerAutomationRun()
-        const refreshedSnapshot = await fetchAutomationSnapshot()
-        if (refreshedSnapshot) {
-          applyRemoteSnapshot(refreshedSnapshot)
+        const ingestResult = await runPermitIngestJob()
+        const ingestedLeadRefs = Array.from(
+          new Map(
+            (ingestResult.leads || [])
+              .map((lead) => {
+                const actionId = lead.permit_key || lead.id || ""
+                const snapshotId = lead.permit_key || actionId
+                return actionId ? [actionId, { actionId, snapshotId }] : null
+              })
+              .filter((entry): entry is [string, { actionId: string; snapshotId: string }] => Boolean(entry)),
+          ).values(),
+        )
+
+        let latestSnapshot = await fetchAutomationSnapshot()
+        if (latestSnapshot) {
+          applyRemoteSnapshot(latestSnapshot)
         }
 
-        toast.success("Automation cycle triggered", {
-          description: "Permit ingest ran and a small enrichment batch refreshed the top queue.",
+        let enrichedCount = 0
+        let sentCount = 0
+        let failedCount = 0
+
+        for (const leadRef of ingestedLeadRefs) {
+          try {
+            latestSnapshot = await runLeadEnrichment(leadRef.actionId)
+            enrichedCount += 1
+
+            const refreshedLead = latestSnapshot.leads.find((lead) => lead.id === leadRef.snapshotId)
+            if (shouldAutoSendLead(refreshedLead)) {
+              try {
+                await sendLeadImmediately(leadRef.actionId)
+                sentCount += 1
+                latestSnapshot = await fetchAutomationSnapshot()
+              } catch {
+                failedCount += 1
+              }
+            }
+
+            if (latestSnapshot) {
+              applyRemoteSnapshot(latestSnapshot)
+            }
+          } catch {
+            failedCount += 1
+          }
+        }
+
+        if (!latestSnapshot) {
+          latestSnapshot = await fetchAutomationSnapshot()
+        }
+
+        if (latestSnapshot) {
+          applyRemoteSnapshot(latestSnapshot)
+        }
+
+        toast.success("Scan complete", {
+          description:
+            ingestedLeadRefs.length > 0
+              ? `${ingestResult.ingested} leads added, ${enrichedCount} enriched, ${sentCount} emailed${failedCount > 0 ? `, ${failedCount} need review` : ""}.`
+              : `${ingestResult.scanned} permits scanned, but nothing new matched the queue.`,
         })
         return
       }

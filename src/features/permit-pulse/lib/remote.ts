@@ -14,6 +14,18 @@ interface AutomationSnapshot {
   jobs: AutomationJob[]
 }
 
+export interface PermitIngestResult {
+  scanned: number
+  ingested: number
+  duplicatesCollapsed?: number
+  droppedWithoutKey?: number
+  leads: Array<{
+    id?: string
+    permit_key?: string
+    address?: string
+  }>
+}
+
 function isAutomationSnapshot(value: unknown): value is AutomationSnapshot {
   if (!value || typeof value !== "object") {
     return false
@@ -85,6 +97,12 @@ export async function fetchAutomationHealth(): Promise<AutomationHealth | null> 
 
 export async function triggerAutomationRun(): Promise<void> {
   await requestJson("/api/v2/run", {
+    method: "POST",
+  })
+}
+
+export async function runPermitIngestJob(): Promise<PermitIngestResult> {
+  return requestJson<PermitIngestResult>("/api/v2/jobs/ingest", {
     method: "POST",
   })
 }

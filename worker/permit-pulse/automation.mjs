@@ -37,7 +37,7 @@ function createId() {
 
 const ENRICHMENT_BATCH_LIMIT = 4;
 const SEND_BATCH_LIMIT = 4;
-const AUTO_SEND_ENABLED = false;
+const AUTO_SEND_ENABLED = true;
 const DIRECTORY_DOMAIN_DENYLIST = [
   'yelp.com',
   'angi.com',
@@ -64,6 +64,25 @@ const DIRECTORY_DOMAIN_DENYLIST = [
   'constructionjournal.com',
   'thebluebook.com',
   'alignable.com',
+  'contactout.com',
+  'rocketreach.co',
+  'rocketreach.io',
+  'lusha.com',
+  'seamless.ai',
+  'hunter.io',
+  'skrapp.io',
+  'salesintel.io',
+  'adapt.io',
+  'apollo.io',
+];
+const EMAIL_PLATFORM_DOMAIN_DENYLIST = [
+  'webflow.io',
+  'wix.com',
+  'wixsite.com',
+  'squarespace.com',
+  'wordpress.com',
+  'weebly.com',
+  'godaddysites.com',
 ];
 const FREE_MAILBOX_DOMAINS = [
   'gmail.com',
@@ -328,6 +347,14 @@ function countTokenMatches(needles, haystack) {
 
 function isDirectoryDomain(domain) {
   return DIRECTORY_DOMAIN_DENYLIST.some((entry) => domain.includes(entry));
+}
+
+function isBlockedEmailDomain(domain = '') {
+  const normalized = normalizeText(domain);
+  return (
+    isDirectoryDomain(normalized) ||
+    EMAIL_PLATFORM_DOMAIN_DENYLIST.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`))
+  );
 }
 
 function buildSearchableText(permit) {
@@ -785,7 +812,7 @@ function assessEmailCandidate(email, { companyProfile, permit, source = '' } = {
   const freeMailbox = isFreeMailboxDomain(domain);
   const genericMailbox = isGenericMailbox(normalizedEmail);
 
-  if (!domain || isDirectoryDomain(domain) || isPlaceholderMailbox(normalizedEmail)) {
+  if (!domain || isBlockedEmailDomain(domain) || isPlaceholderMailbox(normalizedEmail)) {
     return { accept: false, confidence: 0, domain, reason: 'junk-email' };
   }
 
@@ -859,6 +886,10 @@ function scoreEmailContactForSelection(contact, companyProfile) {
   const websiteDomainMatch = Boolean(
     officialDomain && websiteDomain && (websiteDomain === officialDomain || websiteDomain.endsWith(`.${officialDomain}`)),
   );
+
+  if (!contactDomain || isBlockedEmailDomain(contactDomain)) {
+    return -100;
+  }
 
   if (officialDomain && !officialDomainMatch && !websiteDomainMatch && !freeMailbox) {
     return -100;
