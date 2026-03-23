@@ -1,8 +1,8 @@
 import {
   API_ENDPOINTS,
-  AUTO_SEND_LIMITS,
   DEFAULT_SCAN_LIMIT,
   DEFAULT_SCAN_WINDOW_DAYS,
+  getAutoSendLimits,
   HIGH_VALUE_SCORE,
   METROGLASS_PROFILE,
   MIN_RELEVANCE_THRESHOLD,
@@ -2741,6 +2741,7 @@ async function maybeAutoSend(env, gateway, enriched) {
   }
 
   const now = new Date();
+  const sendLimits = getAutoSendLimits(now);
   const last24Hours = new Date(now.getTime() - (24 * 60 * 60 * 1000)).toISOString();
   const lastHour = new Date(now.getTime() - (60 * 60 * 1000)).toISOString();
   const [sentToday, sentThisHour] = await Promise.all([
@@ -2748,9 +2749,9 @@ async function maybeAutoSend(env, gateway, enriched) {
     gateway.countSentSince(lastHour),
   ]);
 
-  if (sentToday >= AUTO_SEND_LIMITS.perDay || sentThisHour >= AUTO_SEND_LIMITS.perHour) {
+  if (sentToday >= sendLimits.perDay || sentThisHour >= sendLimits.perHour) {
     await gateway.patch('leads', [eq('id', lead.id)], {
-      auto_send_reason: 'Queued, but send throttle limit reached.',
+      auto_send_reason: `Queued, but send throttle limit reached for this warm-up window (${sendLimits.perDay}/day, ${sendLimits.perHour}/hour).`,
     });
     return { sent: false, reason: 'Throttle limit reached' };
   }
@@ -2770,7 +2771,7 @@ async function maybeAutoSend(env, gateway, enriched) {
   const skippedRecipients = [];
 
   for (const [index, contact] of emailContacts.entries()) {
-    if ((sentToday + sentCount) >= AUTO_SEND_LIMITS.perDay || (sentThisHour + sentCount) >= AUTO_SEND_LIMITS.perHour) {
+    if ((sentToday + sentCount) >= sendLimits.perDay || (sentThisHour + sentCount) >= sendLimits.perHour) {
       skippedRecipients.push({
         recipient: contact.email,
         reason: 'Throttle limit reached',

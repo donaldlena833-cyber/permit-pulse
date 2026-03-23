@@ -155,10 +155,34 @@ export const PERMIT_RELEVANCE_RULES = [
   { keyword: 'solar panel', score: 0.0, angle: 'custom glass scope' },
 ];
 
-export const AUTO_SEND_LIMITS = {
-  perDay: 50,
-  perHour: 10,
+export const AUTO_SEND_RAMP = {
+  startsAt: '2026-03-23T00:00:00-04:00',
+  startingPerDay: 10,
+  weeklyMultiplier: 2,
+  maxPerDay: 160,
+  minimumPerHour: 2,
 };
+
+export function getAutoSendLimits(now = new Date()) {
+  const rampStart = new Date(AUTO_SEND_RAMP.startsAt);
+  const elapsedMs = Math.max(0, now.getTime() - rampStart.getTime());
+  const weeksSinceStart = Math.floor(elapsedMs / (7 * 24 * 60 * 60 * 1000));
+  const perDay = Math.min(
+    AUTO_SEND_RAMP.maxPerDay,
+    AUTO_SEND_RAMP.startingPerDay * (AUTO_SEND_RAMP.weeklyMultiplier ** weeksSinceStart),
+  );
+  const perHour = Math.max(
+    AUTO_SEND_RAMP.minimumPerHour,
+    Math.ceil(perDay / 8),
+  );
+
+  return {
+    weekIndex: weeksSinceStart,
+    perDay,
+    perHour,
+    startsAt: AUTO_SEND_RAMP.startsAt,
+  };
+}
 
 export const DEFAULT_SCAN_WINDOW_DAYS = 14;
 export const DEFAULT_SCAN_LIMIT = 150;
