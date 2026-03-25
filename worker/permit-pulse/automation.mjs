@@ -1383,6 +1383,95 @@ function getAutoSendEmailContacts(contacts, companyProfile = {}) {
     .slice(0, AUTO_SEND_EMAIL_CONTACT_LIMIT);
 }
 
+function getManualSendEmailContacts(contacts, companyProfile = {}, permit = {}) {
+  const seen = new Set();
+  const scoredContacts = [...contacts]
+    .filter((contact) => contact.email)
+    .map((contact) => ({
+      ...contact,
+      manualSendScore: scoreEmailContactForSelection(contact, companyProfile, permit),
+    }))
+    .filter((contact) => contact.manualSendScore > 0)
+    .sort((left, right) => {
+      if (right.manualSendScore !== left.manualSendScore) {
+        return right.manualSendScore - left.manualSendScore;
+      }
+
+      return Math.round(right.confidence || 0) - Math.round(left.confidence || 0);
+    })
+    .filter((contact) => {
+      const email = normalizeEmailAddress(contact.email);
+      if (!email || seen.has(email)) {
+        return false;
+      }
+
+      seen.add(email);
+      return true;
+    });
+
+  if (scoredContacts.length > 0) {
+    return scoredContacts;
+  }
+
+  return [...contacts]
+    .filter((contact) => {
+      const normalizedEmail = normalizeEmailAddress(contact.email || '');
+      const domain = emailDomain(normalizedEmail);
+      const source = normalizeText(contact.source || '');
+      const officialDomain = normalizeText(companyProfile?.domain || rootDomain(companyProfile?.website || ''));
+      const contactWebsiteDomain = normalizeText(rootDomain(contact.website_url || ''));
+      const directDomainMatch = Boolean(
+        officialDomain && (domain === officialDomain || domain.endsWith(`.${officialDomain}`)),
+      );
+      const websiteDomainMatch = Boolean(
+        officialDomain && contactWebsiteDomain && (
+          contactWebsiteDomain === officialDomain
+          || contactWebsiteDomain.endsWith(`.${officialDomain}`)
+        ),
+      );
+      const manualSource = source === 'manual';
+      const fallbackConfidence = Math.round(contact.confidence || 0);
+
+      if (!normalizedEmail || !domain) {
+        return false;
+      }
+
+      if (isBlockedEmailDomain(domain) || isPlaceholderMailbox(normalizedEmail) || source === 'pattern_guess') {
+        return false;
+      }
+
+      if (manualSource || directDomainMatch || websiteDomainMatch || isEntityAlignedEmailContact(contact, companyProfile, permit)) {
+        return true;
+      }
+
+      if (isFreeMailboxDomain(domain)) {
+        return false;
+      }
+
+      return fallbackConfidence >= 70 && source !== 'brave_search';
+    })
+    .map((contact) => ({
+      ...contact,
+      manualSendScore: Math.max(1, Math.round(contact.confidence || 0)),
+    }))
+    .sort((left, right) => {
+      if (Boolean(right.is_primary) !== Boolean(left.is_primary)) {
+        return Boolean(right.is_primary) ? 1 : -1;
+      }
+
+      return right.manualSendScore - left.manualSendScore;
+    })
+    .filter((contact) => {
+      const email = normalizeEmailAddress(contact.email);
+      if (!email || seen.has(email)) {
+        return false;
+      }
+
+      seen.add(email);
+      return true;
+    });
+}
+
 function buildDraft(lead, companyProfile, contacts) {
   const primaryContact = pickPrimaryContact(contacts, companyProfile);
   const address = sanitizeOutreachCopy(lead.address);
