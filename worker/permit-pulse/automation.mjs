@@ -39,8 +39,13 @@ const ENRICHMENT_BATCH_LIMIT = 4;
 const SEND_BATCH_LIMIT = 4;
 const AUTO_SEND_ENABLED = true;
 const ZEROBOUNCE_ENABLED = false;
-const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 70;
-const AUTO_SEND_EMAIL_CONTACT_LIMIT = 3;
+const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 50;
+const MANUAL_SEND_EMAIL_SCORE_THRESHOLD = 25;
+const AUTO_SEND_EMAIL_CONTACT_LIMIT = 1;
+const MANUAL_SEND_EMAIL_CONTACT_LIMIT = 1;
+const EMAIL_RESEARCH_ONLY_THRESHOLD = 25;
+const DOMAIN_HEALTH_CACHE_DAYS = 7;
+const PERSON_VERIFICATION_CACHE_DAYS = 30;
 const DIRECTORY_DOMAIN_DENYLIST = [
   'yelp.com',
   'angi.com',
@@ -87,6 +92,17 @@ const EMAIL_PLATFORM_DOMAIN_DENYLIST = [
   'weebly.com',
   'godaddysites.com',
 ];
+const GENERIC_MAILBOX_LOCALS = [
+  'info',
+  'sales',
+  'contact',
+  'hello',
+  'office',
+  'admin',
+  'support',
+  'estimating',
+  'billing',
+];
 const FREE_MAILBOX_DOMAINS = [
   'gmail.com',
   'yahoo.com',
@@ -97,6 +113,20 @@ const FREE_MAILBOX_DOMAINS = [
   'hotmail.com',
   'live.com',
   'msn.com',
+];
+const STALE_PAGE_PHRASES = [
+  'this domain is for sale',
+  'under construction',
+  'coming soon',
+  'parked by',
+  'buy this domain',
+  'this page is not available',
+  'website expired',
+  'account suspended',
+  "this site can't be reached",
+  'godaddy',
+  'squarespace expir',
+  'wix expir',
 ];
 const PLACEHOLDER_EMAIL_LOCALS = [
   'noreply',
@@ -297,6 +327,207 @@ function normalizeEmailAddress(email = '') {
   return normalizeText(email);
 }
 
+function getMailboxLocalType(local = '') {
+  const normalized = normalizeText(local);
+  return GENERIC_MAILBOX_LOCALS.includes(normalized) ? 'generic' : 'named';
+}
+
+function inferEmailPattern(email = '') {
+  const normalized = normalizeEmailAddress(email);
+  const local = emailLocalPart(normalized);
+  if (!local) {
+    return '';
+  }
+
+  if (local.includes('.')) {
+    return 'first.last';
+  }
+
+  if (/^[a-z][a-z]+$/.test(local)) {
+    return 'first';
+  }
+
+  if (/^[a-z][a-z]+[a-z][a-z]+$/.test(local)) {
+    return 'firstlast';
+  }
+
+  if (/^[a-z][a-z]+$/.test(local.replace(/[0-9]/g, ''))) {
+    return 'first';
+  }
+
+  if (/^[a-z][a-z]+[a-z]+$/.test(local) && local.length >= 5) {
+    return 'firstlast';
+  }
+
+  if (/^[a-z][a-z]+$/.test(local) && local.length <= 4) {
+    return 'first';
+  }
+
+  if (/^[a-z][a-z]+[a-z]$/.test(local)) {
+    return 'flast';
+  }
+
+  if (/^[a-z][a-z]+/.test(local) && !local.includes('.') && local.length >= 3) {
+    return local.length <= 5 ? 'first' : 'firstlast';
+  }
+
+  return 'other';
+}
+
+function extractTextSnippet(text = '', needle = '') {
+  const normalizedText = String(text || '');
+  const normalizedNeedle = String(needle || '').trim();
+  if (!normalizedText || !normalizedNeedle) {
+    return '';
+  }
+
+  const lower = normalizedText.toLowerCase();
+  const index = lower.indexOf(normalizedNeedle.toLowerCase());
+  if (index === -1) {
+    return normalizedText.slice(0, 160).trim();
+  }
+
+  const start = Math.max(0, index - 70);
+  const end = Math.min(normalizedText.length, index + normalizedNeedle.length + 70);
+  return normalizedText.slice(start, end).replace(/\s+/g, ' ').trim();
+}
+
+function extractHeading(markdown = '') {
+  const match = String(markdown || '').match(/^#\s+(.+)$/m);
+  return match?.[1]?.trim() || '';
+}
+
+function detectPageType(url = '', content = '') {
+  const normalizedUrl = normalizeText(url);
+  const heading = normalizeText(extractHeading(content));
+  const combined = `${normalizedUrl} ${heading}`;
+
+  if (
+    combined.includes('/contact')
+    || combined.includes('contact-us')
+    || combined.includes('get in touch')
+    || combined.includes('contact')
+  ) {
+    return 'contact';
+  }
+
+  if (combined.includes('/about') || combined.includes('about us') || combined.includes('our story')) {
+    return 'about';
+  }
+
+  if (
+    combined.includes('/team')
+    || combined.includes('/staff')
+    || combined.includes('meet our')
+    || combined.includes('our team')
+  ) {
+    return 'team';
+  }
+
+  if (normalizedUrl.includes('/blog') || normalizedUrl.includes('/news')) {
+    return 'blog';
+  }
+
+  return normalizedUrl || heading ? 'other' : 'unknown';
+}
+
+function detectExtractionMethod(text = '', email = '') {
+  const content = String(text || '');
+  if (content.includes(`mailto:${email}`)) {
+    return 'mailto_link';
+  }
+
+  if (content.includes('"email"') || content.includes("'email'")) {
+    return 'structured_data';
+  }
+
+  return 'text_scrape';
+}
+
+function checkPageStaleness(page = {}) {
+  const content = normalizeText([page.text || '', page.markdown || '', page.html || ''].join(' '));
+  const signals = {
+    is_stale: false,
+    stale_reasons: [],
+    age_penalty: 0,
+  };
+
+  const copyrightMatch = content.match(/(?:©|copyright)\s*(20\d{2})/);
+  if (copyrightMatch) {
+    const year = Number.parseInt(copyrightMatch[1], 10);
+    const currentYear = new Date().getFullYear();
+    const age = currentYear - year;
+    if (age >= 4) {
+      signals.is_stale = true;
+      signals.stale_reasons.push(`Copyright year ${year}, ${age} years old`);
+      signals.age_penalty = Math.min(age * 5, 30);
+    } else if (age >= 2) {
+      signals.stale_reasons.push(`Copyright year ${year}`);
+      signals.age_penalty = age * 3;
+    }
+  }
+
+  const parkedPhrase = STALE_PAGE_PHRASES.find((phrase) => content.includes(phrase));
+  if (parkedPhrase) {
+    signals.is_stale = true;
+    signals.stale_reasons.push(`Parked or dead page signal: ${parkedPhrase}`);
+    signals.age_penalty = Math.max(signals.age_penalty, 50);
+  }
+
+  const textOnly = String(page.text || page.markdown || '').trim();
+  if (textOnly.length > 0 && textOnly.length < 200) {
+    signals.stale_reasons.push('Very thin page content');
+    signals.age_penalty += 10;
+  }
+
+  return signals;
+}
+
+function buildEmailProvenance({
+  source = 'unknown',
+  url = '',
+  pageType = 'unknown',
+  extractionMethod = 'text_scrape',
+  rawContext = '',
+  foundAt,
+  staleness = null,
+  domainHealth = null,
+}) {
+  return {
+    source,
+    url,
+    page_type: pageType,
+    extraction_method: extractionMethod,
+    found_at: foundAt || new Date().toISOString(),
+    raw_context: rawContext,
+    staleness: staleness || undefined,
+    domain_health: domainHealth || undefined,
+  };
+}
+
+function applyTimeDecay(trustScore, foundAt) {
+  if (!foundAt) {
+    return trustScore * 0.7;
+  }
+
+  const ageMs = Date.now() - new Date(foundAt).getTime();
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+
+  if (ageDays <= 3) return trustScore * 1.0;
+  if (ageDays <= 7) return trustScore * 0.95;
+  if (ageDays <= 14) return trustScore * 0.85;
+  if (ageDays <= 30) return trustScore * 0.7;
+  if (ageDays <= 60) return trustScore * 0.5;
+  return trustScore * 0.3;
+}
+
+function getReputationMultiplier(reputationScore) {
+  if (reputationScore >= 70) return 1.2;
+  if (reputationScore >= 40) return 1.0;
+  if (reputationScore >= 20) return 0.6;
+  return 0.2;
+}
+
 function isFreeMailboxDomain(domain = '') {
   return FREE_MAILBOX_DOMAINS.includes(normalizeText(domain));
 }
@@ -319,6 +550,194 @@ function isPlaceholderMailbox(email = '') {
     || local.endsWith(`.${entry}`)
     || local.includes(`${entry}+`)
   );
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 3000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function looksParkedContent(content = '', finalUrl = '') {
+  const lower = normalizeText(`${content} ${finalUrl}`);
+  return STALE_PAGE_PHRASES.some((phrase) => lower.includes(phrase));
+}
+
+async function checkDomainHealth(env, gateway, domain) {
+  const normalizedDomain = normalizeText(domain);
+  if (!normalizedDomain) {
+    return {
+      domain: '',
+      has_mx: false,
+      has_website: false,
+      is_parked: false,
+      mx_records: [],
+      health_score: 0,
+      checked_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + (DOMAIN_HEALTH_CACHE_DAYS * 86400000)).toISOString(),
+    };
+  }
+
+  if (isFreeMailboxDomain(normalizedDomain)) {
+    return {
+      domain: normalizedDomain,
+      has_mx: true,
+      has_website: true,
+      is_parked: false,
+      mx_records: [{ exchange: normalizedDomain }],
+      health_score: 100,
+      checked_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + (DOMAIN_HEALTH_CACHE_DAYS * 86400000)).toISOString(),
+    };
+  }
+
+  const cached = await gateway.getDomainHealth(normalizedDomain);
+  if (cached?.expires_at && new Date(cached.expires_at).getTime() > Date.now()) {
+    return cached;
+  }
+
+  const result = {
+    domain: normalizedDomain,
+    has_mx: false,
+    has_website: false,
+    is_parked: false,
+    mx_records: [],
+    health_score: 0,
+    checked_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + (DOMAIN_HEALTH_CACHE_DAYS * 86400000)).toISOString(),
+  };
+
+  try {
+    const dnsPayload = await fetchJson(
+      `${API_ENDPOINTS.cloudflareDns}?${new URLSearchParams({ name: normalizedDomain, type: 'MX' }).toString()}`,
+      {
+        headers: {
+          Accept: 'application/dns-json',
+        },
+      },
+    );
+    const answers = Array.isArray(dnsPayload?.Answer) ? dnsPayload.Answer : [];
+    result.mx_records = answers.map((answer) => ({
+      data: answer.data || '',
+      ttl: answer.TTL || 0,
+    }));
+    result.has_mx = result.mx_records.length > 0;
+  } catch {
+    result.has_mx = false;
+  }
+
+  try {
+    const websiteResponse = await fetchWithTimeout(`https://${normalizedDomain}`, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'MetroGlass Leads/1.0',
+      },
+    }, 3000);
+    const text = websiteResponse.ok ? await websiteResponse.text() : '';
+    result.has_website = websiteResponse.ok && text.trim().length > 100;
+    result.is_parked = looksParkedContent(text, websiteResponse.url || '');
+  } catch {
+    result.has_website = false;
+  }
+
+  if (!result.has_mx) {
+    result.health_score = 0;
+  } else if (result.has_website && !result.is_parked) {
+    result.health_score = 100;
+  } else if (result.has_mx && !result.has_website) {
+    result.health_score = 50;
+  } else if (result.has_mx && result.is_parked) {
+    result.health_score = 20;
+  }
+
+  await gateway.upsertDomainHealth(result);
+  return result;
+}
+
+async function getDomainReputationSnapshot(gateway, domain) {
+  const normalizedDomain = normalizeText(domain);
+  if (!normalizedDomain) {
+    return null;
+  }
+
+  const cached = await gateway.getDomainReputation(normalizedDomain);
+  if (cached) {
+    return cached;
+  }
+
+  return {
+    domain: normalizedDomain,
+    total_sent: 0,
+    total_delivered: 0,
+    total_bounced: 0,
+    total_replied: 0,
+    reputation_score: 50,
+  };
+}
+
+async function recordEmailOutcome(gateway, {
+  leadId,
+  email,
+  outcome,
+  sentAt,
+  bounceType = '',
+  bounceReason = '',
+  countAsSend = true,
+}) {
+  const normalizedEmail = normalizeEmailAddress(email);
+  const domain = emailDomain(normalizedEmail);
+  const local = emailLocalPart(normalizedEmail);
+  const pattern = inferEmailPattern(normalizedEmail);
+  const outcomeAt = new Date().toISOString();
+
+  await gateway.insertEmailOutcome({
+    id: createId(),
+    lead_id: leadId,
+    email_address: normalizedEmail,
+    domain,
+    local_part: local,
+    email_pattern: pattern || null,
+    outcome,
+    bounce_type: bounceType || null,
+    bounce_reason: bounceReason || null,
+    sent_at: sentAt,
+    outcome_at: outcomeAt,
+  });
+
+  const previous = await getDomainReputationSnapshot(gateway, domain);
+  const next = {
+    domain,
+    total_sent: Number(previous?.total_sent || 0) + (countAsSend ? 1 : 0),
+    total_delivered: Number(previous?.total_delivered || 0) + (outcome === 'delivered' || outcome === 'replied' ? 1 : 0),
+    total_bounced: Number(previous?.total_bounced || 0) + (outcome === 'bounced' ? 1 : 0),
+    total_replied: Number(previous?.total_replied || 0) + (outcome === 'replied' ? 1 : 0),
+    delivery_rate: 0,
+    last_bounce_at: outcome === 'bounced' ? outcomeAt : previous?.last_bounce_at || null,
+    last_success_at: outcome === 'delivered' || outcome === 'replied' ? outcomeAt : previous?.last_success_at || null,
+    reputation_score: clamp(
+      Number(previous?.reputation_score || 50)
+        + (outcome === 'replied' ? 5 : 0)
+        + (outcome === 'delivered' ? 2 : 0)
+        - (outcome === 'bounced' && bounceType === 'hard' ? 15 : 0)
+        - (outcome === 'bounced' && bounceType !== 'hard' ? 5 : 0)
+        - (outcome === 'opted_out' ? 10 : 0),
+      0,
+      100,
+    ),
+    updated_at: outcomeAt,
+  };
+
+  next.delivery_rate = next.total_sent > 0 ? Number((next.total_delivered / next.total_sent).toFixed(2)) : null;
+  await gateway.upsertDomainReputation(next);
+  return next;
 }
 
 function getKnownPersonTokens(permit) {
@@ -774,12 +1193,12 @@ function buildContactability(permit, propertyProfile, companyProfile, contacts) 
     missing.push('website');
   }
 
-  const directEmail = contacts.find((contact) => contact.email && contact.type === 'verified');
+  const directEmail = contacts.find((contact) => contact.email && buildEmailTrust(contact, companyProfile, permit).assessment?.sendableAuto);
   const publicEmail = contacts.find(
-    (contact) => contact.email && contact.type === 'public' && Number(contact.confidence || 0) >= 60,
+    (contact) => contact.email && buildEmailTrust(contact, companyProfile, permit).assessment?.sendableManual,
   );
   const guessedEmail = contacts.find(
-    (contact) => contact.email && contact.type === 'guessed' && Number(contact.confidence || 0) >= 42,
+    (contact) => contact.email && buildEmailTrust(contact, companyProfile, permit).assessment?.researchOnly,
   );
   const phone = contacts.find((contact) => contact.phone);
   const form = contacts.find((contact) => contact.contact_form_url);
@@ -872,7 +1291,7 @@ function getRolePriority(role = '') {
 
 function isGenericMailbox(email = '') {
   const local = normalizeText(email.split('@')[0] || '');
-  return ['info', 'sales', 'contact', 'hello', 'office', 'admin', 'support', 'estimating', 'billing'].includes(local);
+  return getMailboxLocalType(local) === 'generic';
 }
 
 function assessEmailCandidate(email, { companyProfile, permit, source = '' } = {}) {
@@ -884,62 +1303,94 @@ function assessEmailCandidate(email, { companyProfile, permit, source = '' } = {
   const companyTokens = getKnownCompanyTokens(companyProfile || {}, permit || {});
   const localSearchable = local.replace(/[._+-]/g, ' ');
   const personMatches = countTokenMatches(personTokens, localSearchable);
-  const companyMatches = countTokenMatches(companyTokens, localSearchable);
+  const companyMatches = countTokenMatches(companyTokens, `${localSearchable} ${domain}`);
   const matchesOfficialDomain = Boolean(
     officialDomain && (domain === officialDomain || domain.endsWith(`.${officialDomain}`)),
   );
   const freeMailbox = isFreeMailboxDomain(domain);
   const genericMailbox = isGenericMailbox(normalizedEmail);
+  const guessed = source === 'pattern_guess';
 
   if (!domain || isBlockedEmailDomain(domain) || isPlaceholderMailbox(normalizedEmail)) {
-    return { accept: false, confidence: 0, domain, reason: 'junk-email' };
+    return {
+      accept: false,
+      confidence: 0,
+      score: 0,
+      domain,
+      genericMailbox,
+      freeMailbox,
+      guessed,
+      matchesOfficialDomain,
+      personMatches,
+      companyMatches,
+      sendableAuto: false,
+      sendableManual: false,
+      researchOnly: true,
+      reason: 'Blocked, placeholder, or junk email.',
+      positives: [],
+      negatives: ['Blocked or placeholder email'],
+    };
   }
 
-  if (!matchesOfficialDomain && !freeMailbox) {
-    return { accept: false, confidence: 0, domain, reason: 'unrelated-domain' };
+  if (!matchesOfficialDomain && !freeMailbox && companyMatches === 0) {
+    return {
+      accept: false,
+      confidence: 0,
+      score: 0,
+      domain,
+      genericMailbox,
+      freeMailbox,
+      guessed,
+      matchesOfficialDomain,
+      personMatches,
+      companyMatches,
+      sendableAuto: false,
+      sendableManual: false,
+      researchOnly: true,
+      reason: 'Email domain does not align with the chosen company.',
+      positives: [],
+      negatives: ['Unrelated non-free domain'],
+    };
   }
 
   if (freeMailbox && personMatches === 0 && companyMatches === 0) {
-    return { accept: false, confidence: 0, domain, reason: 'free-mailbox-without-match' };
+    return {
+      accept: false,
+      confidence: 0,
+      score: 0,
+      domain,
+      genericMailbox,
+      freeMailbox,
+      guessed,
+      matchesOfficialDomain,
+      personMatches,
+      companyMatches,
+      sendableAuto: false,
+      sendableManual: false,
+      researchOnly: true,
+      reason: 'Free mailbox has no supporting person or company match.',
+      positives: [],
+      negatives: ['Free mailbox without any entity alignment'],
+    };
   }
-
-  let confidence = 0;
-
-  if (matchesOfficialDomain) {
-    confidence += 62;
-  } else if (freeMailbox) {
-    confidence += 34;
-  }
-
-  if (source === 'firecrawl') {
-    confidence += 12;
-  } else if (source === 'website_resolution') {
-    confidence += 8;
-  } else if (source === 'brave_search') {
-    confidence -= 16;
-  } else if (source === 'pattern_guess') {
-    confidence -= 10;
-  }
-
-  if (genericMailbox) {
-    confidence -= matchesOfficialDomain ? 10 : 16;
-  } else {
-    confidence += 8;
-  }
-
-  confidence += Math.min(12, personMatches * 6);
-  confidence += Math.min(10, companyMatches * 5);
 
   return {
-    accept: confidence >= 28,
-    confidence: clamp(confidence, 0, 96),
+    accept: true,
+    confidence: 0,
+    score: 0,
     domain,
     genericMailbox,
     freeMailbox,
+    guessed,
     matchesOfficialDomain,
     personMatches,
     companyMatches,
-    reason: confidence >= 28 ? 'accepted' : 'low-trust',
+    sendableAuto: false,
+    sendableManual: false,
+    researchOnly: false,
+    reason: 'Email candidate needs evidence-based scoring.',
+    positives: [],
+    negatives: [],
   };
 }
 
@@ -953,17 +1404,43 @@ function buildEmailTrust(contact, companyProfile = {}, permit = {}) {
     };
   }
 
+  const storedBreakdown = contact.trust_breakdown && typeof contact.trust_breakdown === 'object'
+    ? contact.trust_breakdown
+    : null;
+  if (storedBreakdown?.score !== undefined) {
+    return {
+      score: Math.round(Number(storedBreakdown.score || 0)),
+      aligned: Boolean(storedBreakdown.entityAligned),
+      reason: storedBreakdown.reason || 'Trust score stored during enrichment.',
+      assessment: storedBreakdown.assessment || null,
+      personAligned: Boolean(storedBreakdown.personAligned),
+      companyAligned: Boolean(storedBreakdown.companyAligned),
+      breakdown: storedBreakdown,
+    };
+  }
+
+  const provenance = contact.provenance && typeof contact.provenance === 'object'
+    ? contact.provenance
+    : {};
   const assessment = assessEmailCandidate(contact.email, {
     companyProfile,
     permit,
-    source: contact.source || '',
+    source: provenance.source || contact.source || '',
   });
   if (!assessment.accept) {
     return {
       score: 0,
       aligned: false,
-      reason: 'This email is not trustworthy enough to use.',
+      reason: assessment.reason || 'This email is not trustworthy enough to use.',
       assessment,
+      personAligned: false,
+      companyAligned: false,
+      breakdown: {
+        score: 0,
+        reason: assessment.reason || 'Rejected email candidate.',
+        positives: assessment.positives || [],
+        negatives: assessment.negatives || [],
+      },
     };
   }
 
@@ -973,43 +1450,213 @@ function buildEmailTrust(contact, companyProfile = {}, permit = {}) {
     assessment.matchesOfficialDomain ||
     companyAligned ||
     personAligned ||
-    contact.source === 'manual';
+    (provenance.source || contact.source) === 'manual';
 
-  let score = Math.round(assessment.confidence || 0);
-  score += contact.verified ? 12 : 0;
-  score += contact.type === 'verified' ? 16 : contact.type === 'public' ? 8 : -10;
-  score += assessment.matchesOfficialDomain ? 16 : 0;
-  score += personAligned ? 12 : 0;
-  score += companyAligned ? 8 : 0;
-  score += contact.source === 'google_maps' ? 10 : 0;
-  score += contact.source === 'firecrawl' ? 8 : 0;
-  score += contact.source === 'manual' ? 12 : 0;
-  score += assessment.genericMailbox ? -12 : 6;
-  score += contact.type === 'guessed' ? -18 : 0;
+  const positives = [];
+  const negatives = [];
+  let score = 0;
 
-  if (!entityAligned && !assessment.freeMailbox) {
-    score -= 24;
+  const pageType = provenance.page_type || 'unknown';
+  const extractionMethod = provenance.extraction_method || 'text_scrape';
+  const staleness = provenance.staleness || {};
+  const domainHealth = provenance.domain_health || {};
+  const domainHealthScore = Number(
+    domainHealth.health_score ?? (assessment.freeMailbox ? 100 : assessment.matchesOfficialDomain ? 60 : 40),
+  );
+  const reputation = Number(contact.domain_reputation_score || contact.trust_breakdown?.domainReputationScore || 50);
+  const reverseVerification = contact.person_verification || null;
+  const source = provenance.source || contact.source || '';
+
+  if (domainHealthScore === 0) {
+    negatives.push('Domain has no MX records');
+    return {
+      score: 0,
+      aligned: false,
+      reason: 'Domain cannot receive mail.',
+      assessment: {
+        ...assessment,
+        sendableAuto: false,
+        sendableManual: false,
+        researchOnly: true,
+      },
+      personAligned,
+      companyAligned,
+      breakdown: {
+        score: 0,
+        reason: 'Domain has no MX records.',
+        positives,
+        negatives,
+      },
+    };
   }
 
-  const normalizedScore = clamp(score, 0, 100);
-  let reason = 'The route exists, but the supporting evidence is still thin.';
-  if (assessment.matchesOfficialDomain && personAligned) {
+  if (pageType === 'contact' || pageType === 'about' || pageType === 'team') {
+    const value = extractionMethod === 'mailto_link' ? 25 : 20;
+    positives.push(`Found on ${pageType} page`);
+    score += value;
+  } else if (pageType === 'footer') {
+    positives.push('Found in site footer');
+    score += 10;
+  } else if (pageType === 'blog' || pageType === 'other') {
+    positives.push('Found on site page');
+    score += 5;
+  } else if (source === 'manual') {
+    positives.push('Entered manually');
+    score += 3;
+  } else if (pageType === 'unknown') {
+    positives.push('Unknown page source');
+    score += 3;
+  }
+
+  if (extractionMethod === 'mailto_link' && assessment.matchesOfficialDomain) {
+    positives.push('Mailto link on official site');
+    score += 20;
+  }
+
+  if (personAligned) {
+    positives.push('Name matches permit contact');
+    score += 15;
+  } else {
+    negatives.push('No person name alignment');
+    score -= 5;
+  }
+
+  if (assessment.matchesOfficialDomain) {
+    positives.push('Domain matches resolved company');
+    score += 10;
+  }
+
+  if ((source === 'google_maps' || extractionMethod === 'structured_data') && contact.email) {
+    positives.push('Business profile source');
+    score += 10;
+  }
+
+  if (assessment.companyMatches > 0) {
+    positives.push('Company token appears in domain or local part');
+    score += 5;
+  } else {
+    negatives.push('No company name alignment');
+    score -= 5;
+  }
+
+  if (assessment.personMatches > 0) {
+    positives.push('Person token appears in local part');
+    score += 5;
+  }
+
+  if (source === 'manual') {
+    positives.push('Operator entered this route');
+    score += 3;
+  }
+
+  if (assessment.guessed || contact.type === 'guessed') {
+    negatives.push('Pattern guessed email');
+    score -= 30;
+  }
+
+  if (assessment.freeMailbox) {
+    negatives.push('Free mailbox');
+    score -= 25;
+  }
+
+  if (assessment.genericMailbox) {
+    negatives.push('Generic inbox');
+    score -= 15;
+  }
+
+  if (source === 'firecrawl' && !['contact', 'about', 'team', 'footer'].includes(pageType)) {
+    negatives.push('Found on low-context scraped page');
+    score -= 10;
+  }
+
+  if (Number(staleness.age_penalty || 0) > 0) {
+    negatives.push(`Stale page penalty ${staleness.age_penalty}`);
+    score -= Number(staleness.age_penalty || 0);
+  }
+
+  if (domainHealthScore > 0 && domainHealthScore < 30) {
+    negatives.push('Domain health is weak');
+    score = Math.min(score, 20);
+  }
+
+  if (!entityAligned && !assessment.freeMailbox) {
+    negatives.push('Entity alignment is weak');
+    score -= 20;
+  }
+
+  if (reverseVerification?.verified) {
+    positives.push('Person verified at company');
+    score += 12;
+  } else if (reverseVerification && reverseVerification.confidence === 0) {
+    negatives.push('Reverse verification points to a different company');
+    score -= 30;
+  } else if (reverseVerification && reverseVerification.confidence > 0 && reverseVerification.confidence < 0.5) {
+    negatives.push('Could not verify person at company');
+    score -= 15;
+  }
+
+  score = applyTimeDecay(score, provenance.found_at);
+  score *= getReputationMultiplier(reputation);
+  const normalizedScore = clamp(Math.round(score), 0, 100);
+  const researchOnly = assessment.guessed || normalizedScore < EMAIL_RESEARCH_ONLY_THRESHOLD || domainHealthScore < 30;
+  const sendableAuto =
+    normalizedScore >= AUTO_SEND_EMAIL_SCORE_THRESHOLD
+    && !assessment.guessed
+    && !assessment.freeMailbox
+    && domainHealthScore >= 50;
+  const sendableManual =
+    normalizedScore >= MANUAL_SEND_EMAIL_SCORE_THRESHOLD
+    && !assessment.guessed
+    && domainHealthScore > 0;
+
+  let reason = 'Evidence is still thin.';
+  if (positives.includes('Mailto link on official site')) {
+    reason = 'Mailto link on the official site.';
+  } else if (positives.includes('Found on contact page')) {
+    reason = 'Found on the company contact page.';
+  } else if (personAligned && assessment.matchesOfficialDomain) {
     reason = 'Named contact on the chosen company domain.';
   } else if (assessment.matchesOfficialDomain) {
     reason = 'Same domain as the chosen company.';
   } else if (assessment.freeMailbox && personAligned) {
-    reason = 'Free mailbox, but the name matches the permit contact.';
-  } else if (companyAligned) {
-    reason = 'Contact details still tie back to the chosen company.';
+    reason = 'Free mailbox, but the person name matches the permit.';
   }
 
   return {
     score: normalizedScore,
     aligned: entityAligned || assessment.freeMailbox,
     reason,
-    assessment,
+    assessment: {
+      ...assessment,
+      confidence: normalizedScore,
+      score: normalizedScore,
+      sendableAuto,
+      sendableManual,
+      researchOnly,
+    },
     personAligned,
     companyAligned,
+    breakdown: {
+      score: normalizedScore,
+      reason,
+      positives,
+      negatives,
+      entityAligned,
+      personAligned,
+      companyAligned,
+      domainHealthScore,
+      domainReputationScore: reputation,
+      provenance,
+      assessment: {
+        ...assessment,
+        confidence: normalizedScore,
+        score: normalizedScore,
+        sendableAuto,
+        sendableManual,
+        researchOnly,
+      },
+      reverseVerification,
+    },
   };
 }
 
@@ -1087,6 +1734,49 @@ function scoreEmailContactForSelection(contact, companyProfile = {}, permit = {}
   return buildEmailTrust(contact, companyProfile, permit).score;
 }
 
+function pickEmailContacts(contacts, companyProfile = {}, permit = {}) {
+  const emailContacts = [...contacts]
+    .filter((contact) => contact.email)
+    .map((contact) => {
+      const trust = buildEmailTrust(contact, companyProfile, permit);
+      return {
+        contact,
+        trust,
+        score: trust.score,
+      };
+    })
+    .filter((entry) => entry.score >= MANUAL_SEND_EMAIL_SCORE_THRESHOLD && !entry.trust.assessment?.researchOnly)
+    .sort((left, right) => {
+      if (Boolean(right.contact.is_primary) !== Boolean(left.contact.is_primary)) {
+        return Boolean(right.contact.is_primary) ? 1 : -1;
+      }
+      return right.score - left.score;
+    });
+
+  const explicitPrimary = emailContacts.find((entry) => entry.contact.is_primary);
+  const primaryEntry =
+    explicitPrimary
+    || emailContacts.find((entry) => !isGenericMailbox(entry.contact.email))
+    || emailContacts[0]
+    || null;
+  const fallbackEntry = emailContacts.find((entry) => {
+    if (!primaryEntry || entry.contact.id === primaryEntry.contact.id) {
+      return false;
+    }
+
+    return (
+      isGenericMailbox(entry.contact.email)
+      || emailDomain(entry.contact.email) !== emailDomain(primaryEntry.contact.email)
+    );
+  }) || null;
+
+  return {
+    primary: primaryEntry?.contact || null,
+    fallback: fallbackEntry?.contact || null,
+    ranked: emailContacts,
+  };
+}
+
 function buildRouteCandidates({ companyProfile, contacts, permit }) {
   const premiumFirm = isPremiumLinkedInTarget(companyProfile);
   const candidates = [];
@@ -1098,12 +1788,13 @@ function buildRouteCandidates({ companyProfile, contacts, permit }) {
 
     if (contact.email) {
       const emailTrust = buildEmailTrust(contact, companyProfile, permit);
-      if (emailTrust.score <= 0 || !emailTrust.aligned) {
+      if (emailTrust.score <= 0 || !emailTrust.aligned || emailTrust.assessment?.researchOnly) {
         return;
       }
 
       let score = 34 + Math.round(rolePriority * 0.7) + Math.round(emailTrust.score * 0.58);
       score += contact.verified ? 8 : 0;
+      score += contact.is_primary ? 18 : 0;
 
       candidates.push({
         channel: 'email',
@@ -1119,7 +1810,7 @@ function buildRouteCandidates({ companyProfile, contacts, permit }) {
 
     if (contact.phone) {
       const phoneTrust = buildPhoneTrust(contact, companyProfile, permit);
-      const score = 18 + Math.round(rolePriority * 0.45) + Math.round(phoneTrust.score * 0.46);
+      const score = 18 + Math.round(rolePriority * 0.45) + Math.round(phoneTrust.score * 0.46) + (contact.is_primary ? 14 : 0);
       candidates.push({
         channel: 'phone',
         score: clamp(score, 0, 100),
@@ -1134,7 +1825,7 @@ function buildRouteCandidates({ companyProfile, contacts, permit }) {
 
     if (contact.contact_form_url) {
       const formTrust = buildFormTrust(contact, companyProfile);
-      const score = 16 + Math.round(formTrust.score * 0.48) + Math.round((companyProfile.confidence || 0) * 0.08);
+      const score = 16 + Math.round(formTrust.score * 0.48) + Math.round((companyProfile.confidence || 0) * 0.08) + (contact.is_primary ? 12 : 0);
       candidates.push({
         channel: 'form',
         score: clamp(score, 0, 100),
@@ -1149,7 +1840,7 @@ function buildRouteCandidates({ companyProfile, contacts, permit }) {
 
     if (contact.linkedin_url) {
       const linkedinTrust = buildLinkedInTrust(contact, companyProfile, permit);
-      const score = (premiumFirm ? 28 : 10) + Math.round(rolePriority * 0.3) + Math.round(linkedinTrust.score * 0.24);
+      const score = (premiumFirm ? 28 : 10) + Math.round(rolePriority * 0.3) + Math.round(linkedinTrust.score * 0.24) + (contact.is_primary ? 10 : 0);
       candidates.push({
         channel: 'linkedin',
         score: clamp(score, 0, 100),
@@ -1216,6 +1907,7 @@ function buildChannelDecision({ score, contactability, companyProfile, contacts,
   const routeCandidates = buildRouteCandidates({ companyProfile, contacts, permit });
   const selected = routeCandidates[0];
   const alternatives = uniq(routeCandidates.slice(1).map((candidate) => candidate.channel)).filter(Boolean);
+  const emailSelection = pickEmailContacts(contacts, companyProfile, permit);
 
   if (!selected) {
     return {
@@ -1233,17 +1925,16 @@ function buildChannelDecision({ score, contactability, companyProfile, contacts,
     };
   }
 
-  const emailCandidates = routeCandidates.filter((candidate) => candidate.channel === 'email');
-  const suggestedCc = selected.channel === 'email'
-    ? normalizeEmailAddress(
-      emailCandidates
-        .find((candidate, index) =>
-          index > 0 &&
-          (candidate.routeTrustScore || 0) >= AUTO_SEND_EMAIL_SCORE_THRESHOLD &&
-          emailDomain(candidate.contact?.email || '') === emailDomain(selected.contact?.email || ''),
-        )?.contact?.email || '',
-    )
-    : '';
+  const fallbackTrust = emailSelection.fallback
+    ? buildEmailTrust(emailSelection.fallback, companyProfile, permit)
+    : null;
+  const suggestedCc =
+    selected.channel === 'email'
+    && emailSelection.fallback
+    && (fallbackTrust?.score || 0) >= AUTO_SEND_EMAIL_SCORE_THRESHOLD
+    && emailDomain(emailSelection.fallback.email || '') === emailDomain(selected.contact?.email || '')
+      ? normalizeEmailAddress(emailSelection.fallback.email || '')
+      : '';
   const manualAutoSendEligible =
     AUTO_SEND_ENABLED &&
     selected.channel === 'email' &&
@@ -1538,7 +2229,12 @@ function getBusinessHourState(now = new Date()) {
 }
 
 function pickPrimaryContact(contacts, companyProfile = {}, permit = {}) {
-  const trustedEmailContact = pickBestEmailContact(contacts, companyProfile, permit);
+  const explicitPrimary = contacts.find((contact) => contact.is_primary);
+  if (explicitPrimary) {
+    return explicitPrimary;
+  }
+
+  const trustedEmailContact = pickEmailContacts(contacts, companyProfile, permit).primary;
 
   return trustedEmailContact
     || [...contacts]
@@ -1551,76 +2247,48 @@ function pickPrimaryContact(contacts, companyProfile = {}, permit = {}) {
 }
 
 function pickBestEmailContact(contacts, companyProfile = {}, permit = {}) {
-  const emailContacts = [...contacts]
-    .filter((contact) => contact.email)
-    .sort((left, right) => {
-      return scoreEmailContactForSelection(right, companyProfile, permit) - scoreEmailContactForSelection(left, companyProfile, permit);
-    });
-
-  return emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile, permit) > 0) || null;
+  return pickEmailContacts(contacts, companyProfile, permit).primary;
 }
 
 function getAutoSendEmailContacts(contacts, companyProfile = {}, permit = {}) {
-  const seen = new Set();
+  const picked = pickEmailContacts(contacts, companyProfile, permit);
+  const primaryTrust = picked.primary ? buildEmailTrust(picked.primary, companyProfile, permit) : null;
+  if (!picked.primary || !primaryTrust?.assessment?.sendableAuto) {
+    return [];
+  }
 
-  return [...contacts]
-    .filter((contact) => contact.email && contact.type !== 'guessed')
-    .map((contact) => ({
-      ...contact,
-      autoSendScore: scoreEmailContactForSelection(contact, companyProfile, permit),
-    }))
-    .filter((contact) => contact.autoSendScore >= AUTO_SEND_EMAIL_SCORE_THRESHOLD)
-    .sort((left, right) => {
-      if (right.autoSendScore !== left.autoSendScore) {
-        return right.autoSendScore - left.autoSendScore;
-      }
-
-      return Math.round(right.confidence || 0) - Math.round(left.confidence || 0);
-    })
-    .filter((contact) => {
-      const email = normalizeEmailAddress(contact.email);
-      if (!email || seen.has(email)) {
-        return false;
-      }
-
-      seen.add(email);
-      return true;
-    })
-    .slice(0, AUTO_SEND_EMAIL_CONTACT_LIMIT);
+  return [picked.primary];
 }
 
 function getManualSendEmailContacts(contacts, companyProfile = {}, permit = {}) {
-  const seen = new Set();
+  const picked = pickEmailContacts(contacts, companyProfile, permit);
+  const manual = [];
 
-  return [...contacts]
-    .filter((contact) => contact.email)
-    .map((contact) => ({
-      ...contact,
-      manualSendScore: scoreEmailContactForSelection(contact, companyProfile, permit),
-    }))
-    .filter((contact) => contact.manualSendScore >= 40)
-    .sort((left, right) => {
-      if (right.manualSendScore !== left.manualSendScore) {
-        return right.manualSendScore - left.manualSendScore;
-      }
+  if (picked.primary) {
+    const trust = buildEmailTrust(picked.primary, companyProfile, permit);
+    if (trust.assessment?.sendableManual) {
+      manual.push(picked.primary);
+    }
+  }
 
-      return Math.round(right.confidence || 0) - Math.round(left.confidence || 0);
-    })
-    .filter((contact) => {
-      const email = normalizeEmailAddress(contact.email);
-      if (!email || seen.has(email)) {
-        return false;
-      }
+  if (picked.fallback) {
+    const trust = buildEmailTrust(picked.fallback, companyProfile, permit);
+    if (trust.assessment?.sendableManual) {
+      manual.push(picked.fallback);
+    }
+  }
 
-      seen.add(email);
-      return true;
-    })
-    .slice(0, AUTO_SEND_EMAIL_CONTACT_LIMIT);
+  return manual.slice(0, MANUAL_SEND_EMAIL_CONTACT_LIMIT);
 }
 
 function buildDraft(lead, companyProfile, contacts) {
   const permit = lead.raw_permit || lead;
-  const primaryContact = pickPrimaryContact(contacts, companyProfile, permit);
+  const emailSelection = pickEmailContacts(contacts, companyProfile, permit);
+  const activeEmailRole = lead.enrichment_summary?.emailStrategy?.activeEmailRole || 'primary';
+  const activeEmailContact = activeEmailRole === 'fallback'
+    ? emailSelection.fallback || emailSelection.primary
+    : emailSelection.primary || emailSelection.fallback;
+  const primaryContact = activeEmailContact || pickPrimaryContact(contacts, companyProfile, permit);
   const address = sanitizeOutreachCopy(lead.address);
   const projectAngle = getProjectAngle(lead);
   const relevanceScore = Number(lead.score_breakdown?.relevanceScore || lead.scoreBreakdown?.relevanceScore || 0.3);
@@ -1633,11 +2301,6 @@ function buildDraft(lead, companyProfile, contacts) {
   const introLine = sanitizeOutreachCopy(buildDraftIntro(lead, projectAngle, relevanceKeyword, role, strategy));
   const valueLine = sanitizeOutreachCopy(getDraftValueLine(role, projectAngle));
   const cta = sanitizeOutreachCopy(chooseDraftCta(lead, role, projectAngle, relevanceScore, strategy));
-  const evidenceLine = sanitizeOutreachCopy(
-    role.includes('filing') || role.includes('architect') || role.includes('design')
-      ? `${companyName} looked like a possible fit for this permit, so I wanted to reach out without overcomplicating it.`
-      : `This looked relevant for ${companyName}.`,
-  );
   const subject = sanitizeOutreachCopy(
     `${address}, ${projectAngle.includes('custom glass') ? 'glass scope' : projectAngle}`,
   );
@@ -1646,9 +2309,7 @@ function buildDraft(lead, companyProfile, contacts) {
     '',
     introLine,
     '',
-    `${valueLine} ${evidenceLine}`,
-    '',
-    pluginLine,
+    valueLine,
     '',
     cta,
     '',
@@ -1784,13 +2445,34 @@ function buildDerivedLeadState({
 }) {
   const permit = leadRow.raw_permit || {};
   const contactability = buildContactability(permit, propertyProfile, companyProfile, contacts);
-  const channelDecision = buildChannelDecision({
+  let channelDecision = buildChannelDecision({
     score: leadRow.score,
     contactability,
     companyProfile,
     contacts,
     permit,
   });
+  const emailSelection = pickEmailContacts(contacts, companyProfile, permit);
+  if (leadRow.enrichment_summary?.emailStrategy?.activeEmailRole === 'fallback' && emailSelection.fallback) {
+    const fallbackTrust = buildEmailTrust(emailSelection.fallback, companyProfile, permit);
+    channelDecision = {
+      ...channelDecision,
+      primary: 'email',
+      reason: fallbackTrust.reason || channelDecision.reason,
+      routeConfidence: fallbackTrust.score,
+      recipientType: emailSelection.fallback.type || 'public',
+      targetRole: emailSelection.fallback.role || companyProfile.role || 'company',
+      routeSource: emailSelection.fallback.source || '',
+      trustReason: fallbackTrust.reason || '',
+      sendTrust: fallbackTrust.score,
+      primaryEmail: emailSelection.fallback.email || '',
+      fallbackEmail: emailSelection.primary?.email || '',
+      primaryEmailTrust: fallbackTrust.score,
+      fallbackEmailTrust: emailSelection.primary ? buildEmailTrust(emailSelection.primary, companyProfile, permit).score : 0,
+      activeEmailRole: 'fallback',
+      autoSendEligible: Boolean(fallbackTrust.assessment?.sendableAuto),
+    };
+  }
   const readiness = buildOutreachReadiness(leadRow.score, contactability, companyProfile, contacts, channelDecision);
   const qualityTier = buildQualityTier({ leadRow, contactability, companyProfile, contacts });
   const { priorityLabel, priorityScore } = buildPriorityState(leadRow.score, contactability, readiness);
@@ -1832,6 +2514,11 @@ function buildDerivedLeadState({
     channelDecision: {
       ...channelDecision,
       autoSendEligible,
+      primaryEmail: emailSelection.primary?.email || '',
+      fallbackEmail: emailSelection.fallback?.email || '',
+      primaryEmailTrust: emailSelection.primary ? buildEmailTrust(emailSelection.primary, companyProfile, permit).score : 0,
+      fallbackEmailTrust: emailSelection.fallback ? buildEmailTrust(emailSelection.fallback, companyProfile, permit).score : 0,
+      activeEmailRole: leadRow.enrichment_summary?.emailStrategy?.activeEmailRole || 'primary',
     },
     readiness,
     qualityTier,
@@ -1885,6 +2572,7 @@ function buildLeadRow(permit, scoreBreakdown) {
     contactability_breakdown: {},
     enrichment_summary: {
       qualityTier: scoreBreakdown.relevanceScore < MIN_RELEVANCE_THRESHOLD ? 'dead' : scoreBreakdown.relevanceScore >= 0.8 ? 'hot' : scoreBreakdown.relevanceScore >= 0.5 ? 'warm' : 'cold',
+      lowRelevance: scoreBreakdown.relevanceScore >= MIN_RELEVANCE_THRESHOLD && scoreBreakdown.relevanceScore < 0.4,
     },
     raw_permit: permit,
     project_tags: buildProjectTags(permit),
@@ -2823,6 +3511,80 @@ async function resolvePersonSignals(env, permit, companyProfile, options = {}) {
   return searches.filter((entry) => entry.linkedin_url || entry.organization_url);
 }
 
+async function reverseVerifyPerson(env, gateway, personName, companyName) {
+  const normalizedPerson = (personName || '').trim();
+  const normalizedCompany = (companyName || '').trim();
+  if (!normalizedPerson || !normalizedCompany || !env.BRAVE_API_KEY) {
+    return {
+      verified: false,
+      confidence: 0,
+      signals: [],
+      search_results_summary: '',
+    };
+  }
+
+  const cached = await gateway.getPersonVerification(normalizedPerson, normalizedCompany);
+  if (cached?.expires_at && new Date(cached.expires_at).getTime() > Date.now()) {
+    return cached;
+  }
+
+  const results = mapSearchResults(
+    await runBraveSearch(env, `"${normalizedPerson}" "${normalizedCompany}" LinkedIn`),
+  ).slice(0, 5);
+
+  const personTokens = tokenizeName(normalizedPerson);
+  const companyTokens = tokenizeName(normalizedCompany);
+  const strongMatch = results.find((result) => {
+    const searchable = normalizeText([result.title, result.description, result.url].filter(Boolean).join(' '));
+    return countTokenMatches(personTokens, searchable) > 0 && countTokenMatches(companyTokens, searchable) > 0;
+  });
+  const negativeMatch = results.find((result) => {
+    const searchable = normalizeText([result.title, result.description, result.url].filter(Boolean).join(' '));
+    return countTokenMatches(personTokens, searchable) > 0
+      && countTokenMatches(companyTokens, searchable) === 0
+      && (searchable.includes('linkedin') || searchable.includes('former'));
+  });
+
+  const signals = [];
+  let confidence = 0.2;
+  let verified = false;
+
+  if (strongMatch) {
+    verified = true;
+    confidence = 0.9;
+    signals.push(`Search result ties ${normalizedPerson} to ${normalizedCompany}`);
+  } else if (negativeMatch) {
+    verified = false;
+    confidence = 0;
+    signals.push(`Search suggests ${normalizedPerson} is tied to a different company`);
+  } else if (results.length > 0) {
+    confidence = 0.5;
+    signals.push(`Search found ${results.length} related result${results.length > 1 ? 's' : ''}, but none were conclusive`);
+  } else {
+    signals.push('No search results tied the person to the company');
+  }
+
+  const summary = results
+    .slice(0, 2)
+    .map((result) => [result.title, result.description].filter(Boolean).join(' — '))
+    .join(' | ');
+
+  const record = {
+    id: cached?.id || createId(),
+    person_name: normalizedPerson,
+    company_name: normalizedCompany,
+    verified,
+    confidence,
+    signals,
+    search_results_summary: summary,
+    checked_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + (PERSON_VERIFICATION_CACHE_DAYS * 86400000)).toISOString(),
+  };
+
+  await gateway.upsertPersonVerification(record);
+  return record;
+}
+
 async function scrapeWebsiteSignals(env, leadScore, website, options = {}) {
   if (!env.FIRECRAWL_API_KEY || !website || (!options.force && leadScore < HIGH_VALUE_SCORE)) {
     return null;
@@ -2855,11 +3617,23 @@ async function scrapeWebsiteSignals(env, leadScore, website, options = {}) {
         }
 
         const payload = await response.json();
-        return payload?.data?.markdown || '';
+        const markdown = payload?.data?.markdown || '';
+        return {
+          url,
+          markdown,
+          text: markdown,
+          pageType: detectPageType(url, markdown),
+          staleness: checkPageStaleness({
+            url,
+            markdown,
+            text: markdown,
+          }),
+        };
       }),
     );
 
-    const combined = pages.filter(Boolean).join('\n');
+    const validPages = pages.filter(Boolean);
+    const combined = validPages.map((page) => page.markdown).join('\n');
     if (!combined) {
       return null;
     }
@@ -2873,11 +3647,28 @@ async function scrapeWebsiteSignals(env, leadScore, website, options = {}) {
         links.find((entry) => normalizeText(entry).includes('forms')),
     };
 
+    const emailCandidates = validPages.flatMap((page) =>
+      extractEmails(page.markdown).map((email) => ({
+        email,
+        provenance: buildEmailProvenance({
+          source: 'firecrawl',
+          url: page.url,
+          pageType: page.pageType,
+          extractionMethod: detectExtractionMethod(page.markdown, email),
+          foundAt: new Date().toISOString(),
+          rawContext: extractTextSnippet(page.markdown, email),
+          staleness: page.staleness,
+        }),
+      })),
+    );
+
     return {
-      emails: extractEmails(combined),
+      emailCandidates,
+      emails: emailCandidates.map((entry) => entry.email),
       phones: extractPhones(combined),
       socialLinks,
       serviceText: combined.slice(0, 1400),
+      pages: validPages,
     };
   } catch {
     return null;
@@ -2956,6 +3747,100 @@ function dedupeContacts(contacts) {
   });
 
   return deduped;
+}
+
+function mergeStoredEmailCandidateMeta(contacts, leadRow = {}) {
+  const metadata = Array.isArray(leadRow.enrichment_summary?.emailCandidates)
+    ? leadRow.enrichment_summary.emailCandidates
+    : [];
+  if (metadata.length === 0) {
+    return contacts;
+  }
+
+  const metaByEmail = new Map(
+    metadata.map((entry) => [normalizeEmailAddress(entry.email || ''), entry]),
+  );
+
+  return contacts.map((contact) => {
+    const match = metaByEmail.get(normalizeEmailAddress(contact.email || ''));
+    return match
+      ? {
+          ...contact,
+          provenance: match.provenance || contact.provenance,
+          trust_score: Number(match.trustScore || contact.trust_score || 0),
+          trust_breakdown: match.trustBreakdown || contact.trust_breakdown,
+          person_verification: match.personVerification || contact.person_verification,
+        }
+      : contact;
+  });
+}
+
+async function hydrateEmailTrustForContacts(env, gateway, contacts, companyProfile, permit) {
+  const domainHealthCache = new Map();
+  const reputationCache = new Map();
+
+  for (const contact of contacts) {
+    if (!contact.email) {
+      continue;
+    }
+
+    const domain = emailDomain(contact.email);
+    let domainHealth = domainHealthCache.get(domain);
+    if (!domainHealth) {
+      domainHealth = await checkDomainHealth(env, gateway, domain);
+      domainHealthCache.set(domain, domainHealth);
+    }
+
+    let domainReputation = reputationCache.get(domain);
+    if (!domainReputation) {
+      domainReputation = await getDomainReputationSnapshot(gateway, domain);
+      reputationCache.set(domain, domainReputation);
+    }
+
+    contact.provenance = {
+      ...(contact.provenance || {}),
+      source: contact.provenance?.source || contact.source || 'unknown',
+      page_type: contact.provenance?.page_type || 'unknown',
+      extraction_method: contact.provenance?.extraction_method || (contact.source === 'pattern_guess' ? 'pattern_guess' : 'text_scrape'),
+      found_at: contact.provenance?.found_at || new Date().toISOString(),
+      raw_context: contact.provenance?.raw_context || '',
+      domain_health: domainHealth,
+      staleness: contact.provenance?.staleness || undefined,
+    };
+    contact.domain_reputation_score = Number(domainReputation?.reputation_score || 50);
+  }
+
+  const picked = pickEmailContacts(contacts, companyProfile, permit);
+  const candidatesToVerify = [picked.primary, picked.fallback].filter(Boolean);
+
+  for (const contact of candidatesToVerify) {
+    const initialTrust = buildEmailTrust(contact, companyProfile, permit);
+    if (
+      initialTrust.score >= AUTO_SEND_EMAIL_SCORE_THRESHOLD
+      && contact.name
+      && !isGenericMailbox(contact.email)
+    ) {
+      contact.person_verification = await reverseVerifyPerson(
+        env,
+        gateway,
+        contact.name,
+        companyProfile.company_name || permit.applicant_business_name || permit.owner_business_name || '',
+      );
+    }
+  }
+
+  contacts.forEach((contact) => {
+    if (!contact.email) {
+      return;
+    }
+
+    const trust = buildEmailTrust(contact, companyProfile, permit);
+    contact.trust_score = trust.score;
+    contact.trust_breakdown = trust.breakdown || {};
+    contact.confidence = Math.max(Math.round(contact.confidence || 0), trust.score);
+  });
+
+  return contacts;
 }
 
 async function enrichLead(env, gateway, leadRow, options = {}) {
@@ -3178,17 +4063,8 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
     });
   }
 
-  (websiteSignals?.emails || []).forEach((email, index) => {
-    const assessment = assessEmailCandidate(email, {
-      companyProfile: company,
-      permit,
-      source: 'firecrawl',
-    });
-
-    if (!assessment.accept) {
-      return;
-    }
-
+  (websiteSignals?.emailCandidates || []).forEach((entry, index) => {
+    const email = entry.email;
     contacts.push({
       id: createId('contact'),
       name: permit.owner_name || getApplicantName(permit) || '',
@@ -3200,10 +4076,18 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       instagram_url: socialLinks.instagram_url || '',
       contact_form_url: socialLinks.contact_form_url || '',
       type: 'public',
-      confidence: assessment.confidence,
+      confidence: 0,
       source: 'firecrawl',
       verified: false,
       is_primary: index === 0,
+      provenance: entry.provenance || buildEmailProvenance({
+        source: 'firecrawl',
+        url: company.website || '',
+        pageType: 'unknown',
+        extractionMethod: 'text_scrape',
+        rawContext: '',
+        foundAt: new Date().toISOString(),
+      }),
     });
   });
 
@@ -3228,16 +4112,6 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
 
   const guessedEmails = generateGuessedEmails(company, permit, contacts);
   guessedEmails.forEach((email, index) => {
-    const assessment = assessEmailCandidate(email, {
-      companyProfile: company,
-      permit,
-      source: 'pattern_guess',
-    });
-
-    if (!assessment.accept) {
-      return;
-    }
-
     contacts.push({
       id: createId('contact'),
       name: getApplicantName(permit) || getFilingRepName(permit) || permit.owner_name || '',
@@ -3249,10 +4123,18 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       instagram_url: socialLinks.instagram_url || '',
       contact_form_url: socialLinks.contact_form_url || '',
       type: 'guessed',
-      confidence: assessment.confidence,
+      confidence: 0,
       source: 'pattern_guess',
       verified: false,
       is_primary: !contacts.some((contact) => contact.email) && index === 0,
+      provenance: buildEmailProvenance({
+        source: 'pattern_guess',
+        url: company.website || searchSignals.website || '',
+        pageType: 'unknown',
+        extractionMethod: 'pattern_guess',
+        rawContext: `Pattern guessed from ${company.domain || rootDomain(company.website || '')}`,
+        foundAt: new Date().toISOString(),
+      }),
     });
   });
 
@@ -3276,12 +4158,15 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
   }
 
   const dedupedContacts = dedupeContacts(contacts);
+  await hydrateEmailTrustForContacts(env, gateway, dedupedContacts, company, permit);
+  const emailSelection = pickEmailContacts(dedupedContacts, company, permit);
   const primaryContact = pickPrimaryContact(dedupedContacts, company, permit) || null;
   dedupedContacts.forEach((contact) => {
     contact.is_primary = Boolean(primaryContact && contact.id === primaryContact.id);
   });
 
-  const primaryEmailCandidate = primaryContact?.email || '';
+  const primaryEmailCandidate = emailSelection.primary?.email || '';
+  const fallbackEmailCandidate = emailSelection.fallback?.email || '';
   const shouldVerify =
     Boolean(primaryEmailCandidate) &&
     (leadRow.score >= HIGH_VALUE_SCORE || options.force);
@@ -3327,6 +4212,30 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
       verification,
       qualityTier: derivedState.qualityTier,
       trustScores: derivedState.trustScores,
+      emailStrategy: {
+        primaryEmail: primaryEmailCandidate,
+        fallbackEmail: fallbackEmailCandidate,
+        primaryEmailTrust: emailSelection.primary ? buildEmailTrust(emailSelection.primary, company, permit).score : 0,
+        fallbackEmailTrust: emailSelection.fallback ? buildEmailTrust(emailSelection.fallback, company, permit).score : 0,
+        activeEmailRole: leadRow.primary_bounced_at ? 'fallback' : 'primary',
+        operatorVouched: Boolean(leadRow.operator_vouched || leadRow.enrichment_summary?.operatorVouched),
+        emailVerifiedBy: leadRow.email_verified_by || leadRow.enrichment_summary?.emailVerifiedBy || '',
+      },
+      emailCandidates: dedupedContacts
+        .filter((contact) => contact.email)
+        .map((contact) => ({
+          id: contact.id,
+          email: contact.email,
+          name: contact.name || '',
+          role: contact.role || '',
+          type: contact.type || 'public',
+          source: contact.source || '',
+          trustScore: Number(contact.trust_score || 0),
+          trustBreakdown: contact.trust_breakdown || {},
+          provenance: contact.provenance || {},
+          personVerification: contact.person_verification || null,
+          isPrimary: Boolean(contact.is_primary),
+        })),
     },
     company_match_strength: company.match_strength,
     company_domain: company.domain,
@@ -3412,8 +4321,16 @@ async function maybeAutoSend(env, gateway, enriched) {
     return { sent: false, reason: 'Throttle limit reached' };
   }
 
-  const emailContacts = getAutoSendEmailContacts(contacts, lead.enrichment_summary?.company || {}, lead.raw_permit || lead);
-  if (emailContacts.length === 0) {
+  const companyProfile = lead.enrichment_summary?.company || {};
+  const permit = lead.raw_permit || lead;
+  const emailSelection = pickEmailContacts(contacts, companyProfile, permit);
+  const activeRole = lead.enrichment_summary?.emailStrategy?.activeEmailRole || 'primary';
+  const activeContact = activeRole === 'fallback'
+    ? emailSelection.fallback || emailSelection.primary
+    : emailSelection.primary || emailSelection.fallback;
+  const activeTrust = activeContact ? buildEmailTrust(activeContact, companyProfile, permit) : null;
+
+  if (!activeContact || !activeTrust?.assessment?.sendableAuto) {
     await gateway.patch('leads', [eq('id', lead.id)], {
       auto_send_reason: 'No strong email route is available for auto-send.',
       status: 'needs review',
@@ -3422,112 +4339,76 @@ async function maybeAutoSend(env, gateway, enriched) {
   }
 
   const duplicateSince = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000)).toISOString();
-  let sentCount = 0;
-  const sentRecipients = [];
-  const skippedRecipients = [];
-
-  for (const [index, contact] of emailContacts.entries()) {
-    if ((sentToday + sentCount) >= sendLimits.perDay || (sentThisHour + sentCount) >= sendLimits.perHour) {
-      skippedRecipients.push({
-        recipient: contact.email,
-        reason: 'Throttle limit reached',
-      });
-      break;
-    }
-
-    const isDuplicate = await gateway.hasDuplicateOutreach(contact.email, duplicateSince);
-    if (isDuplicate) {
-      skippedRecipients.push({
-        recipient: contact.email,
-        reason: 'Duplicate within 30 days',
-      });
-      continue;
-    }
-
-    const gmailResult = await sendAutomationEmail(env, {
-      recipient: contact.email,
-      subject: outreachDraft.subject,
-      body: outreachDraft.draft,
-    });
-
-    const sentAt = new Date().toISOString();
-    const outreachPayload = {
-      status: 'sent',
-      sent_at: sentAt,
-      gmail_message_id: gmailResult.id || '',
-      gmail_thread_id: gmailResult.threadId || '',
-      recipient: contact.email,
-      recipient_type: contact.type,
-    };
-
-    if (index === 0) {
-      await gateway.patch('outreach', [eq('id', outreachDraft.id)], outreachPayload);
-    } else {
-      await gateway.insert('outreach', {
-        id: createId('outreach'),
-        lead_id: lead.id,
-        channel: outreachDraft.channel || 'email',
-        recipient: contact.email,
-        recipient_type: contact.type,
-        subject: outreachDraft.subject || '',
-        draft: outreachDraft.draft || '',
-        plugin_line: outreachDraft.plugin_line || '',
-        call_opener: outreachDraft.call_opener || '',
-        follow_up_note: outreachDraft.follow_up_note || '',
-        status: 'sent',
-        sent_at: sentAt,
-        gmail_message_id: gmailResult.id || '',
-        gmail_thread_id: gmailResult.threadId || '',
-        metadata: {
-          ...(outreachDraft.metadata || {}),
-          autoSend: true,
-          autoRecipientRank: index + 1,
-        },
-      });
-    }
-
-    sentCount += 1;
-    sentRecipients.push(contact.email);
-  }
-
-  if (sentCount === 0) {
+  if (sentToday >= sendLimits.perDay || sentThisHour >= sendLimits.perHour) {
     await gateway.patch('leads', [eq('id', lead.id)], {
-      auto_send_reason: skippedRecipients[0]?.reason || 'No automatic send was completed.',
+      auto_send_reason: 'Throttle limit reached.',
       status: 'needs review',
     });
-    return { sent: false, reason: skippedRecipients[0]?.reason || 'No automatic send was completed.' };
+    return { sent: false, reason: 'Throttle limit reached' };
   }
 
+  const isDuplicate = await gateway.hasDuplicateOutreach(activeContact.email, duplicateSince);
+  if (isDuplicate) {
+    await gateway.patch('leads', [eq('id', lead.id)], {
+      auto_send_reason: 'Duplicate within 30 days.',
+      status: 'needs review',
+    });
+    return { sent: false, reason: 'Duplicate within 30 days' };
+  }
+
+  const gmailResult = await sendAutomationEmail(env, {
+    recipient: activeContact.email,
+    subject: outreachDraft.subject,
+    body: outreachDraft.draft,
+  });
   const sentAt = new Date().toISOString();
+  await gateway.patch('outreach', [eq('id', outreachDraft.id)], {
+    status: 'sent',
+    sent_at: sentAt,
+    gmail_message_id: gmailResult.id || '',
+    gmail_thread_id: gmailResult.threadId || '',
+    recipient: activeContact.email,
+    recipient_type: activeContact.type,
+    metadata: {
+      ...(outreachDraft.metadata || {}),
+      autoSend: true,
+      activeEmailRole: activeRole,
+    },
+  });
+  await recordEmailOutcome(gateway, {
+    leadId: lead.id,
+    email: activeContact.email,
+    outcome: 'unknown',
+    sentAt,
+  });
+
   await Promise.all([
     gateway.patch('leads', [eq('id', lead.id)], {
       status: 'contacted',
       last_contacted_at: sentAt,
       last_sent_at: sentAt,
       duplicate_guard_until: new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
-      auto_send_reason: sentRecipients.length > 1
-        ? `Automatically emailed ${sentRecipients.length} strong contacts inside NYC business hours.`
-        : 'Email sent automatically inside NYC business hours.',
+      auto_send_reason: `Email sent automatically to the ${activeRole} contact.`,
     }),
     gateway.insert('activity_log', {
       id: createId('activity'),
       lead_id: lead.id,
       event_type: 'email_sent',
-      summary: sentRecipients.length > 1 ? 'Emails sent automatically' : 'Email sent automatically',
-      detail: `Sent to ${sentRecipients.join(', ')}`,
+      summary: 'Email sent automatically',
+      detail: `Sent to ${activeContact.email}`,
       metadata: {
         outreachId: outreachDraft.id,
-        recipients: sentRecipients,
-        skippedRecipients,
+        recipients: [activeContact.email],
+        activeEmailRole: activeRole,
       },
     }),
   ]);
 
   return {
     sent: true,
-    count: sentRecipients.length,
-    recipient: sentRecipients[0] || '',
-    recipients: sentRecipients,
+    count: 1,
+    recipient: activeContact.email || '',
+    recipients: [activeContact.email],
     outreachId: outreachDraft.id,
   };
 }
@@ -3572,6 +4453,9 @@ function mapSnapshot(snapshot) {
     const company = companyMap.get(lead.id) || {};
     const property = propertyMap.get(lead.id) || {};
     const contacts = contactsMap.get(lead.id) || [];
+    const emailCandidateMeta = new Map(
+      ((lead.enrichment_summary?.emailCandidates || []).filter(Boolean)).map((entry) => [normalizeEmailAddress(entry.email || ''), entry]),
+    );
     const manualEnrichment = lead.enrichment_summary?.manualEnrichment || {};
     const scoreBreakdown = lead.score_breakdown && typeof lead.score_breakdown === 'object' ? lead.score_breakdown : {};
     const contactability = lead.contactability_breakdown && typeof lead.contactability_breakdown === 'object'
@@ -3668,11 +4552,13 @@ function mapSnapshot(snapshot) {
         companyWebsite: manualEnrichment.companyWebsite || company.website || '',
         directEmail:
           manualEnrichment.directEmail ||
-          contacts.find((contact) => contact.email && contact.type === 'verified')?.email ||
+          lead.enrichment_summary?.emailStrategy?.primaryEmail ||
+          contacts.find((contact) => contact.email && Boolean(emailCandidateMeta.get(normalizeEmailAddress(contact.email || ''))?.trustScore >= AUTO_SEND_EMAIL_SCORE_THRESHOLD))?.email ||
           '',
         genericEmail:
           manualEnrichment.genericEmail ||
-          contacts.find((contact) => contact.email && contact.type === 'public')?.email ||
+          lead.enrichment_summary?.emailStrategy?.fallbackEmail ||
+          contacts.find((contact) => contact.email && isGenericMailbox(contact.email || ''))?.email ||
           '',
         phone: manualEnrichment.phone || contacts.find((contact) => contact.phone)?.phone || '',
         linkedInUrl:
@@ -3714,6 +4600,13 @@ function mapSnapshot(snapshot) {
             ? manualEnrichment.confidenceTags
             : [lead.company_match_strength || 'weak', lead.outreach_readiness_label || 'Needs Review'],
         followUpDate: manualEnrichment.followUpDate || '',
+        primaryEmail: lead.enrichment_summary?.emailStrategy?.primaryEmail || '',
+        fallbackEmail: lead.enrichment_summary?.emailStrategy?.fallbackEmail || '',
+        primaryEmailTrust: Number(lead.enrichment_summary?.emailStrategy?.primaryEmailTrust || 0),
+        fallbackEmailTrust: Number(lead.enrichment_summary?.emailStrategy?.fallbackEmailTrust || 0),
+        activeEmailRole: lead.enrichment_summary?.emailStrategy?.activeEmailRole || 'primary',
+        operatorVouched: Boolean(lead.enrichment_summary?.emailStrategy?.operatorVouched),
+        emailVerifiedBy: lead.enrichment_summary?.emailStrategy?.emailVerifiedBy || '',
       },
       outreachDraft: {
         subject: latestDraft.subject || '',
@@ -3792,6 +4685,7 @@ function mapSnapshot(snapshot) {
         matchedQuery: candidate.metadata?.matchedQuery || '',
       })),
       contacts: contacts.map((contact) => ({
+        ...(emailCandidateMeta.get(normalizeEmailAddress(contact.email || '')) || {}),
         id: contact.id,
         name: contact.name || '',
         role: contact.role || '',
@@ -3830,6 +4724,14 @@ function mapSnapshot(snapshot) {
         recipientType: channelDecision.recipientType || '',
         targetRole: channelDecision.targetRole || '',
         routeSource: channelDecision.routeSource || '',
+        trustReason: channelDecision.trustReason || '',
+        suggestedCc: channelDecision.suggestedCc || '',
+        sendTrust: Number(channelDecision.sendTrust || 0),
+        primaryEmail: lead.enrichment_summary?.emailStrategy?.primaryEmail || '',
+        fallbackEmail: lead.enrichment_summary?.emailStrategy?.fallbackEmail || '',
+        primaryEmailTrust: Number(lead.enrichment_summary?.emailStrategy?.primaryEmailTrust || 0),
+        fallbackEmailTrust: Number(lead.enrichment_summary?.emailStrategy?.fallbackEmailTrust || 0),
+        activeEmailRole: lead.enrichment_summary?.emailStrategy?.activeEmailRole || 'primary',
       },
       outreachHistory,
       automationSummary: {
@@ -3838,6 +4740,9 @@ function mapSnapshot(snapshot) {
         autoSendEligible: Boolean(lead.auto_send_eligible),
         autoSendReason: lead.auto_send_reason || '',
         lastAutomationRunAt: lead.last_enriched_at || lead.updated_at,
+        operatorVouched: Boolean(lead.enrichment_summary?.emailStrategy?.operatorVouched),
+        emailVerifiedBy: lead.enrichment_summary?.emailStrategy?.emailVerifiedBy || '',
+        activeEmailRole: lead.enrichment_summary?.emailStrategy?.activeEmailRole || 'primary',
       },
     };
   });
@@ -3920,6 +4825,11 @@ export async function runPermitAutomationCycle(env) {
 
 function needsAutomationPass(lead) {
   if (isAutomationTerminalStatus(lead.status)) {
+    return false;
+  }
+
+  const relevanceScore = Number(lead.score_breakdown?.relevanceScore || 0.3);
+  if (relevanceScore >= MIN_RELEVANCE_THRESHOLD && relevanceScore < 0.4) {
     return false;
   }
 
@@ -4139,11 +5049,12 @@ async function loadLeadAutomationContext(gateway, leadId) {
 
 async function recomputeLeadAutomationState(gateway, leadRow, options = {}) {
   const context = await loadLeadAutomationContext(gateway, leadRow.id);
+  const contactsWithMeta = mergeStoredEmailCandidateMeta(context.contacts, leadRow);
   const derivedState = buildDerivedLeadState({
     leadRow,
     companyProfile: context.company,
     propertyProfile: context.property,
-    contacts: context.contacts,
+    contacts: contactsWithMeta,
     promoteDrafted: Boolean(options.promoteDrafted),
   });
 
@@ -4402,7 +5313,8 @@ async function refreshLeadDraftNowInternal(env, gateway, leadId, options = {}) {
     },
     async () => {
       const context = await loadLeadAutomationContext(gateway, lead.id);
-      const draft = buildDraft({ ...lead, best_channel: lead.best_channel || 'email' }, context.company, context.contacts);
+      const contactsWithMeta = mergeStoredEmailCandidateMeta(context.contacts, lead);
+      const draft = buildDraft({ ...lead, best_channel: lead.best_channel || 'email' }, context.company, contactsWithMeta);
 
       await upsertDraftRecord(
         gateway,
@@ -4716,6 +5628,106 @@ export async function updateLeadAutomationState(env, leadId, patch) {
   return updateLeadAutomationStateInternal(env, gateway, leadId, patch);
 }
 
+async function markLeadEmailOutcomeInternal(env, gateway, leadId, contactId, payload = {}, options = {}) {
+  const leadRow = await loadLeadForAction(gateway, leadId);
+  if (!leadRow) {
+    throw new Error('Lead not found');
+  }
+
+  const context = await loadLeadAutomationContext(gateway, leadRow.id);
+  const contacts = mergeStoredEmailCandidateMeta(context.contacts, leadRow);
+  const contact = contacts.find((entry) => entry.id === contactId);
+  if (!contact?.email) {
+    throw new Error('Email contact not found');
+  }
+
+  const outcome = payload.outcome || 'delivered';
+  const nowIso = new Date().toISOString();
+  const emailStrategy = {
+    ...(leadRow.enrichment_summary?.emailStrategy || {}),
+  };
+
+  await runAutomationJob(
+    gateway,
+    {
+      jobType: 'manual_enrichment',
+      provider: 'worker',
+      leadId: leadRow.id,
+      summary: `Recording email outcome for ${leadRow.address}`,
+      detail: 'Updating email trust history and fallback behavior.',
+      retryable: false,
+    },
+    async () => {
+      await recordEmailOutcome(gateway, {
+        leadId: leadRow.id,
+        email: contact.email,
+        outcome,
+        sentAt: leadRow.last_sent_at || nowIso,
+        bounceType: payload.bounceType || '',
+        bounceReason: payload.bounceReason || '',
+        countAsSend: false,
+      });
+
+      if (outcome === 'bounced' && emailStrategy.activeEmailRole !== 'fallback' && emailStrategy.fallbackEmail) {
+        emailStrategy.activeEmailRole = 'fallback';
+        emailStrategy.emailVerifiedBy = 'bounce_detected';
+        emailStrategy.primaryBouncedAt = nowIso;
+
+        const latestDraft = context.latestDraft;
+        if (latestDraft?.id) {
+          await gateway.patch('outreach', [eq('id', latestDraft.id)], {
+            recipient: emailStrategy.fallbackEmail,
+            recipient_type: 'fallback',
+            status: 'queued',
+            metadata: {
+              ...(latestDraft.metadata || {}),
+              activeEmailRole: 'fallback',
+            },
+          });
+        }
+      } else if (outcome === 'replied') {
+        emailStrategy.operatorVouched = true;
+        emailStrategy.emailVerifiedBy = 'reply_detected';
+      } else if (outcome === 'delivered') {
+        emailStrategy.operatorVouched = true;
+        emailStrategy.emailVerifiedBy = payload.verifiedBy || 'delivery_confirmed';
+      }
+
+      await gateway.patch('leads', [eq('id', leadRow.id)], {
+        status: outcome === 'replied' ? 'replied' : outcome === 'bounced' ? 'outreach-ready' : leadRow.status,
+        auto_send_reason: outcome === 'bounced' && emailStrategy.fallbackEmail
+          ? 'Primary email bounced, fallback email is queued.'
+          : leadRow.auto_send_reason || '',
+        enrichment_summary: {
+          ...(leadRow.enrichment_summary || {}),
+          emailStrategy,
+        },
+      });
+
+      await gateway.insert('activity_log', {
+        id: createId('activity'),
+        lead_id: leadRow.id,
+        event_type: 'status_updated',
+        summary: outcome === 'bounced' ? 'Email bounced' : outcome === 'replied' ? 'Reply recorded' : 'Email verified',
+        detail: `${contact.email} marked as ${outcome}.`,
+        metadata: {
+          contactId,
+          email: contact.email,
+          outcome,
+        },
+      });
+    },
+    options,
+  );
+
+  return getPermitAutomationSnapshot(env);
+}
+
+export async function markLeadEmailOutcome(env, leadId, contactId, payload) {
+  const gateway = createSupabaseGateway(env);
+  return markLeadEmailOutcomeInternal(env, gateway, leadId, contactId, payload);
+}
+
 async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
   const leadRow = await loadLeadForAction(gateway, leadId);
   if (!leadRow) {
@@ -4754,83 +5766,57 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         throw new Error('No draft available to send');
       }
 
-      const emailContacts = getManualSendEmailContacts(contacts, lead.companyProfile || {}, lead.raw_permit || lead);
-      if (emailContacts.length === 0) {
+      const companyProfile = lead.companyProfile || {};
+      const permit = lead.raw_permit || lead;
+      const emailSelection = pickEmailContacts(contacts, companyProfile, permit);
+      const activeRole = latestOutreach.metadata?.activeEmailRole || lead.channelDecision?.activeEmailRole || 'primary';
+      const activeContact = activeRole === 'fallback'
+        ? emailSelection.fallback || emailSelection.primary
+        : emailSelection.primary || emailSelection.fallback;
+      const activeTrust = activeContact ? buildEmailTrust(activeContact, companyProfile, permit) : null;
+      if (!activeContact || !activeTrust?.assessment?.sendableManual) {
         throw new Error('No email available');
       }
 
       const duplicateSince = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000)).toISOString();
-      const sentRecipients = [];
-      const skippedRecipients = [];
-
-      for (const [index, contact] of emailContacts.entries()) {
-        const isDuplicate = await gateway.hasDuplicateOutreach(contact.email, duplicateSince);
-        if (isDuplicate) {
-          skippedRecipients.push({
-            recipient: contact.email,
-            reason: 'Duplicate within 30 days',
-          });
-          continue;
-        }
-
-        const gmailResult = await sendAutomationEmail(env, {
-          recipient: contact.email,
-          subject: latestOutreach.subject,
-          body: latestOutreach.body,
-        });
-
-        const sentAt = new Date().toISOString();
-        const outreachPayload = {
-          status: 'sent',
-          sent_at: sentAt,
-          gmail_message_id: gmailResult.id || '',
-          gmail_thread_id: gmailResult.threadId || '',
-          recipient: contact.email,
-          recipient_type: contact.type,
-        };
-
-        if (index === 0) {
-          await gateway.patch('outreach', [eq('id', latestOutreach.id)], outreachPayload);
-        } else {
-          await gateway.insert('outreach', {
-            id: createId('outreach'),
-            lead_id: lead.id,
-            channel: latestOutreach.channel || 'email',
-            recipient: contact.email,
-            recipient_type: contact.type,
-            subject: latestOutreach.subject || '',
-            draft: latestOutreach.body || '',
-            plugin_line: latestOutreach.pluginLine || '',
-            call_opener: latestOutreach.callOpener || '',
-            follow_up_note: latestOutreach.followUpNote || '',
-            status: 'sent',
-            sent_at: sentAt,
-            gmail_message_id: gmailResult.id || '',
-            gmail_thread_id: gmailResult.threadId || '',
-            metadata: {
-              ...(latestOutreach.metadata || {}),
-              manualSend: true,
-              recipientRank: index + 1,
-            },
-          });
-        }
-
-        sentRecipients.push(contact.email);
+      const isDuplicate = await gateway.hasDuplicateOutreach(activeContact.email, duplicateSince);
+      if (isDuplicate) {
+        throw new Error('Duplicate within 30 days');
       }
 
-      if (sentRecipients.length === 0) {
-        throw new Error(skippedRecipients[0]?.reason || 'No email could be sent');
-      }
+      const gmailResult = await sendAutomationEmail(env, {
+        recipient: activeContact.email,
+        subject: latestOutreach.subject,
+        body: latestOutreach.body,
+      });
 
       const sentAt = new Date().toISOString();
+      await gateway.patch('outreach', [eq('id', latestOutreach.id)], {
+        status: 'sent',
+        sent_at: sentAt,
+        gmail_message_id: gmailResult.id || '',
+        gmail_thread_id: gmailResult.threadId || '',
+        recipient: activeContact.email,
+        recipient_type: activeContact.type,
+        metadata: {
+          ...(latestOutreach.metadata || {}),
+          manualSend: true,
+          activeEmailRole: activeRole,
+        },
+      });
+      await recordEmailOutcome(gateway, {
+        leadId: leadRow.id,
+        email: activeContact.email,
+        outcome: 'unknown',
+        sentAt,
+      });
+
       await gateway.patch('leads', [eq('permit_key', lead.id)], {
         status: 'contacted',
         last_contacted_at: sentAt,
         last_sent_at: sentAt,
         duplicate_guard_until: new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
-        auto_send_reason: sentRecipients.length > 1
-          ? `Operator sent email to ${sentRecipients.length} contacts.`
-          : 'Email sent manually by operator.',
+        auto_send_reason: `Operator sent email to the ${activeRole} contact.`,
       });
 
       const latestLead = (await gateway.getLeadById(leadRow.id)) || leadRow;
@@ -4842,8 +5828,8 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
 
       return {
         success: true,
-        recipient: sentRecipients[0],
-        recipients: sentRecipients,
+        recipient: activeContact.email,
+        recipients: [activeContact.email],
         sentAt,
       };
     },

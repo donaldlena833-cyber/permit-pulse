@@ -180,6 +180,13 @@ export interface EnrichmentData {
   sourceTags: string[]
   confidenceTags: string[]
   followUpDate: string
+  primaryEmail?: string
+  fallbackEmail?: string
+  primaryEmailTrust?: number
+  fallbackEmailTrust?: number
+  activeEmailRole?: "primary" | "fallback"
+  operatorVouched?: boolean
+  emailVerifiedBy?: string
 }
 
 export interface PropertyProfile {
@@ -229,6 +236,59 @@ export interface ContactRecord {
   type: ContactType
   verified: boolean
   isPrimary: boolean
+  trustScore?: number
+  trustBreakdown?: {
+    score?: number
+    reason?: string
+    positives?: string[]
+    negatives?: string[]
+    domainHealthScore?: number
+    domainReputationScore?: number
+    assessment?: {
+      sendableAuto?: boolean
+      sendableManual?: boolean
+      researchOnly?: boolean
+    }
+    provenance?: {
+      source?: string
+      url?: string
+      page_type?: string
+      extraction_method?: string
+      found_at?: string
+      raw_context?: string
+      staleness?: {
+        is_stale?: boolean
+        stale_reasons?: string[]
+        age_penalty?: number
+      }
+      domain_health?: {
+        health_score?: number
+        has_mx?: boolean
+        has_website?: boolean
+        is_parked?: boolean
+      }
+    }
+    reverseVerification?: {
+      verified?: boolean
+      confidence?: number
+      signals?: string[]
+      search_results_summary?: string
+    } | null
+  }
+  provenance?: {
+    source?: string
+    url?: string
+    page_type?: string
+    extraction_method?: string
+    found_at?: string
+    raw_context?: string
+  }
+  personVerification?: {
+    verified?: boolean
+    confidence?: number
+    signals?: string[]
+    search_results_summary?: string
+  } | null
 }
 
 export interface EnrichmentFact {
@@ -256,6 +316,14 @@ export interface ChannelDecision {
   recipientType?: string
   targetRole?: string
   routeSource?: string
+  trustReason?: string
+  suggestedCc?: string
+  sendTrust?: number
+  primaryEmail?: string
+  fallbackEmail?: string
+  primaryEmailTrust?: number
+  fallbackEmailTrust?: number
+  activeEmailRole?: "primary" | "fallback"
 }
 
 export interface OutreachHistoryItem {
@@ -281,6 +349,9 @@ export interface AutomationSummary {
   autoSendEligible: boolean
   autoSendReason: string
   lastAutomationRunAt: string | null
+  operatorVouched?: boolean
+  emailVerifiedBy?: string
+  activeEmailRole?: "primary" | "fallback"
 }
 
 export type ResolutionCandidateType = "company" | "person"

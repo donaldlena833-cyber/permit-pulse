@@ -126,6 +126,30 @@ export function createSupabaseGateway(env) {
       })) || [];
     },
 
+    async safeUpsert(table, payload, onConflict) {
+      try {
+        return await this.upsert(table, payload, onConflict);
+      } catch (error) {
+        if (isMissingRelationError(error, table)) {
+          return [];
+        }
+
+        throw error;
+      }
+    },
+
+    async safeInsert(table, payload) {
+      try {
+        return await this.insert(table, payload);
+      } catch (error) {
+        if (isMissingRelationError(error, table)) {
+          return [];
+        }
+
+        throw error;
+      }
+    },
+
     async patch(table, filters, payload) {
       return (await request(env, table, {
         method: 'PATCH',
@@ -140,6 +164,82 @@ export function createSupabaseGateway(env) {
         method: 'DELETE',
         query: `?${filters.join('&')}`,
       });
+    },
+
+    async getDomainHealth(domain) {
+      return (await this.safeSelect('domain_health', {
+        filters: [eq('domain', domain)],
+        pageLimit: 1,
+      }))[0] || null;
+    },
+
+    async upsertDomainHealth(payload) {
+      const rows = await this.safeUpsert('domain_health', payload, 'domain');
+      return rows[0] || null;
+    },
+
+    async getDomainReputation(domain) {
+      return (await this.safeSelect('domain_reputation', {
+        filters: [eq('domain', domain)],
+        pageLimit: 1,
+      }))[0] || null;
+    },
+
+    async upsertDomainReputation(payload) {
+      const rows = await this.safeUpsert('domain_reputation', payload, 'domain');
+      return rows[0] || null;
+    },
+
+    async getEmailOutcomesForDomain(domain) {
+      return this.safeSelect('email_outcomes', {
+        filters: [eq('domain', domain)],
+        ordering: [order('outcome_at', 'desc')],
+        pageLimit: 50,
+      });
+    },
+
+    async getEmailOutcomesForPattern(domain, emailPattern) {
+      return this.safeSelect('email_outcomes', {
+        filters: [eq('domain', domain), eq('email_pattern', emailPattern)],
+        ordering: [order('outcome_at', 'desc')],
+        pageLimit: 20,
+      });
+    },
+
+    async insertEmailOutcome(payload) {
+      const rows = await this.safeInsert('email_outcomes', payload);
+      return rows[0] || null;
+    },
+
+    async getPersonVerification(personName, companyName) {
+      return (await this.safeSelect('person_verification', {
+        filters: [eq('person_name', personName), eq('company_name', companyName)],
+        ordering: [order('checked_at', 'desc')],
+        pageLimit: 1,
+      }))[0] || null;
+    },
+
+    async upsertPersonVerification(payload) {
+      const existing = await this.getPersonVerification(payload.person_name, payload.company_name);
+      if (existing?.id) {
+        const rows = await this.safePatch('person_verification', [eq('id', existing.id)], payload);
+        return rows[0] || { ...existing, ...payload };
+      }
+
+      const rows = await this.safeInsert('person_verification', payload);
+      return rows[0] || null;
+    },
+
+    async safePatch(table, filters, payload) {
+      try {
+        return await this.patch(table, filters, payload);
+      } catch (error) {
+        if (isMissingRelationError(error, table)) {
+          return [];
+        }
+
+        throw error;
+      }
     },
 
     async getLeadByPermitKey(permitKey) {
@@ -215,7 +315,25 @@ export function createSupabaseGateway(env) {
         return [];
       }
 
-      return this.insert('contacts', contacts.map((contact) => ({ ...contact, lead_id: leadId })));
+      return this.insert('contacts', contacts.map((contact) => ({
+        id: contact.id,
+        lead_id: leadId,
+        company_profile_id: contact.company_profile_id || null,
+        name: contact.name || '',
+        role: contact.role || '',
+        email: contact.email || '',
+        phone: contact.phone || '',
+        website_url: contact.website_url || '',
+        linkedin_url: contact.linkedin_url || '',
+        instagram_url: contact.instagram_url || '',
+        contact_form_url: contact.contact_form_url || '',
+        type: contact.type || 'public',
+        confidence: contact.confidence || 0,
+        source: contact.source || 'worker',
+        verified: Boolean(contact.verified),
+        verified_at: contact.verified_at || null,
+        is_primary: Boolean(contact.is_primary),
+      })));
     },
 
     async replaceFacts(leadId, facts) {

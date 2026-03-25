@@ -16,6 +16,7 @@ import {
   sendLeadImmediately,
   selectResolverCandidate,
   setPrimaryLeadContact,
+  vouchLeadEmail,
 } from "@/features/permit-pulse/lib/remote"
 import { loadStore, saveStore } from "@/features/permit-pulse/lib/storage"
 import {
@@ -755,6 +756,21 @@ export function usePermitPulse() {
     }
   }, [applyRemoteSnapshot])
 
+  const vouchEmailRoute = useCallback(async (leadId: string, contactId: string) => {
+    try {
+      const snapshot = await vouchLeadEmail(leadId, contactId)
+      applyRemoteSnapshot(snapshot)
+      toast.success("Email verified", {
+        description: "This route is now treated as a trusted company contact.",
+      })
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "Email verification failed"
+      toast.error("Email verification failed", {
+        description: message,
+      })
+    }
+  }, [applyRemoteSnapshot])
+
   const refreshLeadAutomation = useCallback(async (leadId: string) => {
     if (!automationHealth?.hasSupabase) {
       toast.error("Automation setup incomplete", {
@@ -905,6 +921,7 @@ export function usePermitPulse() {
     acceptResolverCandidate,
     rejectResolverCandidate: rejectResolverCandidateAction,
     setPrimaryContactRoute,
+    vouchEmailRoute,
     refreshLeadAutomation,
     sendLeadNow,
     retryJob,

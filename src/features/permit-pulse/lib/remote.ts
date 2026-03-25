@@ -197,6 +197,15 @@ export async function setPrimaryLeadContact(leadId: string, contactId: string): 
   )
 }
 
+export async function vouchLeadEmail(leadId: string, contactId: string): Promise<AutomationSnapshot> {
+  return requestJson<AutomationSnapshot>(
+    `/api/v2/leads/${encodeURIComponent(leadId)}/contacts/${encodeURIComponent(contactId)}/vouch`,
+    {
+      method: "POST",
+    },
+  )
+}
+
 export async function sendLeadImmediately(
   leadId: string,
 ): Promise<{ success: boolean; recipient?: string; sentAt?: string }> {

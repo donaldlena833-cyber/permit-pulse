@@ -1,6 +1,7 @@
 import {
   enrichLeadNow,
   getPermitAutomationSnapshot,
+  markLeadEmailOutcome,
   rejectLeadCandidate,
   refreshLeadDraftNow,
   retryAutomationJob,
@@ -197,6 +198,29 @@ export async function handlePermitPulseAutomationRequest(request, env) {
       return json(snapshot);
     }
 
+    const contactOutcomeMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/contacts\/([^/]+)\/outcome$/);
+    if (contactOutcomeMatch && request.method === 'POST') {
+      const patch = await request.json();
+      const snapshot = await markLeadEmailOutcome(
+        env,
+        decodeURIComponent(contactOutcomeMatch[1]),
+        decodeURIComponent(contactOutcomeMatch[2]),
+        patch,
+      );
+      return json(snapshot);
+    }
+
+    const contactVouchMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/contacts\/([^/]+)\/vouch$/);
+    if (contactVouchMatch && request.method === 'POST') {
+      const snapshot = await markLeadEmailOutcome(
+        env,
+        decodeURIComponent(contactVouchMatch[1]),
+        decodeURIComponent(contactVouchMatch[2]),
+        { outcome: 'delivered', verifiedBy: 'operator' },
+      );
+      return json(snapshot);
+    }
+
     const sendMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/send$/);
     if (sendMatch && request.method === 'POST') {
       const result = await sendLeadNow(env, decodeURIComponent(sendMatch[1]));
@@ -228,6 +252,8 @@ export async function handlePermitPulseAutomationRequest(request, env) {
           'POST /api/v2/leads/:id/candidates/:candidateId/select': 'Accept a resolver candidate',
           'POST /api/v2/leads/:id/candidates/:candidateId/reject': 'Reject a resolver candidate',
           'POST /api/v2/leads/:id/contacts/:contactId/primary': 'Promote a contact as the primary route',
+          'POST /api/v2/leads/:id/contacts/:contactId/vouch': 'Mark an email route as verified by the operator',
+          'POST /api/v2/leads/:id/contacts/:contactId/outcome': 'Record delivered, bounced, or replied for one email route',
           'POST /api/v2/leads/:id/send': 'Send the latest draft now',
           'POST /api/v2/jobs/:id/retry': 'Retry a failed automation job',
         },

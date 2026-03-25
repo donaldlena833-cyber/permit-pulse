@@ -88,6 +88,7 @@ interface LeadDetailPanelProps {
   onAcceptCandidate: (leadId: string, candidateId: string) => void
   onRejectCandidate: (leadId: string, candidateId: string) => void
   onSetPrimaryContact: (leadId: string, contactId: string) => void
+  onVouchEmail: (leadId: string, contactId: string) => void
 }
 
 function getTrustScore(lead: PermitLead) {
@@ -315,6 +316,7 @@ export function LeadDetailPanel({
   onAcceptCandidate,
   onRejectCandidate,
   onSetPrimaryContact,
+  onVouchEmail,
 }: LeadDetailPanelProps) {
   const actionLinks = useMemo(() => {
     if (!lead) {
@@ -408,6 +410,12 @@ export function LeadDetailPanel({
     contacts.find((contact) => contact.email)?.email ||
     ""
   const phone = chosenContact?.phone || lead.enrichment.phone || contacts.find((contact) => contact.phone)?.phone || ""
+  const fallbackEmail = lead.channelDecision.fallbackEmail || lead.enrichment.fallbackEmail || ""
+  const primaryEmailTrust = chosenContact?.trustScore || lead.channelDecision.primaryEmailTrust || lead.enrichment.primaryEmailTrust || 0
+  const fallbackEmailTrust = lead.channelDecision.fallbackEmailTrust || lead.enrichment.fallbackEmailTrust || 0
+  const trustBreakdown = chosenContact?.trustBreakdown || null
+  const trustHighlights = Array.isArray(trustBreakdown?.positives) ? trustBreakdown.positives.slice(0, 4) : []
+  const trustWarnings = Array.isArray(trustBreakdown?.negatives) ? trustBreakdown.negatives.slice(0, 3) : []
   const linkedIn =
     chosenContact?.linkedInUrl ||
     lead.enrichment.linkedInUrl ||
@@ -487,6 +495,20 @@ export function LeadDetailPanel({
                   onAction={primaryEmail ? () => copyValue("Email", primaryEmail) : undefined}
                   value={primaryEmail || "No email selected yet"}
                 />
+                {primaryEmail ? (
+                  <div className="rounded-[18px] border border-navy-200/70 bg-white/80 px-3 py-2.5 dark:border-dark-border/70 dark:bg-dark-card/80">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                      Why it is trusted
+                    </div>
+                    <div className="mt-1 text-sm leading-6 text-navy-700 dark:text-dark-text">
+                      {trustBreakdown?.reason || lead.channelDecision.trustReason || "The worker still needs stronger route evidence."}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <ActionMeta label="Trust" value={`${primaryEmailTrust}`} />
+                      {fallbackEmail ? <ActionMeta label="Fallback" value={fallbackEmail} /> : null}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-2">
                   <CompactField label="Company" value={selectedCompanyCandidate?.label || lead.companyProfile.name || "Still resolving"} />
                   <CompactField label="Route" value={lead.channelDecision.primary} />
@@ -564,6 +586,18 @@ export function LeadDetailPanel({
                   onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
                   value={linkedIn}
                 />
+                {chosenContact?.email ? (
+                  <Button
+                    className="h-10 justify-start rounded-2xl border-navy-200 bg-white/90 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+                    disabled={lead.automationSummary.operatorVouched}
+                    onClick={() => onVouchEmail(lead.id, chosenContact.id)}
+                    type="button"
+                    variant="outline"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    {lead.automationSummary.operatorVouched ? "Email verified" : "Mark email verified"}
+                  </Button>
+                ) : null}
               </div>
             </InfoBlock>
 
@@ -1106,7 +1140,58 @@ export function LeadDetailPanel({
                         onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
                         value={linkedIn}
                       />
+                      {fallbackEmail ? (
+                        <RouteRow
+                          actionLabel="Copy"
+                          icon={Mail}
+                          label="Fallback email"
+                          onAction={() => copyValue("Fallback email", fallbackEmail)}
+                          value={fallbackEmail}
+                        />
+                      ) : null}
                     </div>
+                    {primaryEmail ? (
+                      <div className="mt-3 rounded-[20px] border border-navy-200/70 bg-cream-50/70 p-3 dark:border-dark-border/70 dark:bg-dark-bg">
+                        <div className="flex flex-wrap gap-2">
+                          <ActionMeta label="Trust" value={`${primaryEmailTrust}`} />
+                          {fallbackEmail ? <ActionMeta label="Fallback trust" value={`${fallbackEmailTrust}`} /> : null}
+                          <ActionMeta label="Active" value={lead.channelDecision.activeEmailRole || "primary"} />
+                        </div>
+                        <p className="mt-3 text-sm leading-6 text-navy-700 dark:text-dark-text">
+                          {trustBreakdown?.reason || lead.channelDecision.trustReason || "The worker still needs stronger route evidence."}
+                        </p>
+                        {trustHighlights.length > 0 ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {trustHighlights.map((item) => (
+                              <span
+                                key={item}
+                                className="rounded-full border border-navy-200 bg-white/80 px-3 py-1 text-xs text-navy-600 dark:border-dark-border dark:bg-dark-card dark:text-dark-muted"
+                              >
+                                {item}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {trustWarnings.length > 0 ? (
+                          <p className="mt-3 text-xs leading-5 text-navy-500 dark:text-dark-muted">
+                            {trustWarnings.join(" • ")}
+                          </p>
+                        ) : null}
+                        {chosenContact?.email ? (
+                          <div className="mt-3">
+                            <Button
+                              className="h-8 rounded-xl px-3 text-[11px]"
+                              disabled={lead.automationSummary.operatorVouched}
+                              onClick={() => onVouchEmail(lead.id, chosenContact.id)}
+                              type="button"
+                              variant="outline"
+                            >
+                              {lead.automationSummary.operatorVouched ? "Email verified" : "Mark email verified"}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <p className="mt-3 text-sm leading-6 text-navy-500 dark:text-dark-muted">
                       {chosenContact
                         ? `${chosenContact.name || "Unnamed contact"} • ${chosenContact.role || "No role"} • ${chosenContact.source}`

@@ -126,6 +126,7 @@ function WorkspacePane({
   onAcceptCandidate,
   onRejectCandidate,
   onSetPrimaryContact,
+  onVouchEmail,
   automationHealth,
   enrichingLeadId,
   sendingLeadId,
@@ -155,6 +156,7 @@ function WorkspacePane({
   onAcceptCandidate: (leadId: string, candidateId: string) => void
   onRejectCandidate: (leadId: string, candidateId: string) => void
   onSetPrimaryContact: (leadId: string, contactId: string) => void
+  onVouchEmail: (leadId: string, contactId: string) => void
   automationHealth: ReturnType<typeof usePermitPulse>["automationHealth"]
   enrichingLeadId: string | null
   sendingLeadId: string | null
@@ -207,6 +209,7 @@ function WorkspacePane({
                 onAcceptCandidate={onAcceptCandidate}
                 onRejectCandidate={onRejectCandidate}
                 onSetPrimaryContact={onSetPrimaryContact}
+                onVouchEmail={onVouchEmail}
               />
             </div>
           </div>
@@ -263,6 +266,7 @@ function WorkspacePane({
               onAcceptCandidate={onAcceptCandidate}
               onRejectCandidate={onRejectCandidate}
               onSetPrimaryContact={onSetPrimaryContact}
+              onVouchEmail={onVouchEmail}
             />
           </ResizablePanel>
         </ResizablePanelGroup>
@@ -346,6 +350,7 @@ function MetroGlassLeadsWorkspace({
     acceptResolverCandidate,
     rejectResolverCandidate,
     setPrimaryContactRoute,
+    vouchEmailRoute,
     setFollowUpDate,
   } = usePermitPulse()
 
@@ -401,6 +406,7 @@ function MetroGlassLeadsWorkspace({
     onAcceptCandidate: acceptResolverCandidate,
     onRejectCandidate: rejectResolverCandidate,
     onSetPrimaryContact: setPrimaryContactRoute,
+    onVouchEmail: vouchEmailRoute,
   }
 
   const currentWorkspacePane =

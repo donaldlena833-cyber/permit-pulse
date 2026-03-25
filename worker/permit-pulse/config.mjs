@@ -13,6 +13,7 @@ export const API_ENDPOINTS = {
   googleGeocode: 'https://maps.googleapis.com/maps/api/geocode/json',
   googlePlacesTextSearch: 'https://maps.googleapis.com/maps/api/place/textsearch/json',
   googlePlaceDetails: 'https://maps.googleapis.com/maps/api/place/details/json',
+  cloudflareDns: 'https://cloudflare-dns.com/dns-query',
   zerobounceValidate: 'https://api.zerobounce.net/v2/validate',
 };
 
@@ -112,7 +113,7 @@ export const PLUGIN_LINES = [
   'We focus on clear pricing, clean installs, and straightforward coordination.',
 ];
 
-export const MIN_RELEVANCE_THRESHOLD = 0.2;
+export const MIN_RELEVANCE_THRESHOLD = 0.15;
 
 export const PERMIT_RELEVANCE_RULES = [
   { keyword: 'bathroom renovation', score: 1.0, angle: 'shower enclosures and mirrors' },
@@ -129,6 +130,8 @@ export const PERMIT_RELEVANCE_RULES = [
   { keyword: 'hotel renovation', score: 0.8, angle: 'mirror walls and interior glazing' },
   { keyword: 'restaurant renovation', score: 0.8, angle: 'storefront and partition glazing' },
   { keyword: 'mirror', score: 0.95, angle: 'custom mirrors' },
+  { keyword: 'wine room', score: 0.85, angle: 'glass wine rooms and doors' },
+  { keyword: 'display case', score: 0.8, angle: 'display glass and mirrors' },
   { keyword: 'kitchen renovation', score: 0.7, angle: 'backsplash mirrors or glass accents' },
   { keyword: 'general renovation', score: 0.6, angle: 'custom glass scope' },
   { keyword: 'interior alteration', score: 0.6, angle: 'custom glass scope' },
@@ -137,8 +140,10 @@ export const PERMIT_RELEVANCE_RULES = [
   { keyword: 'full gut renovation', score: 0.5, angle: 'custom glass scope' },
   { keyword: 'commercial alteration', score: 0.5, angle: 'commercial glazing scope' },
   { keyword: 'lobby renovation', score: 0.5, angle: 'lobby mirrors or feature glass' },
+  { keyword: 'gym', score: 0.4, angle: 'mirror walls or partitions' },
   { keyword: 'fitness center', score: 0.4, angle: 'mirror walls or partitions' },
   { keyword: 'spa', score: 0.4, angle: 'shower glass or mirrors' },
+  { keyword: 'pool', score: 0.4, angle: 'glass railings or partitions' },
   { keyword: 'structural alteration', score: 0.2, angle: 'custom glass scope' },
   { keyword: 'electrical', score: 0.1, angle: 'custom glass scope' },
   { keyword: 'plumbing', score: 0.15, angle: 'custom glass scope' },
@@ -155,6 +160,10 @@ export const PERMIT_RELEVANCE_RULES = [
   { keyword: 'sign', score: 0.1, angle: 'storefront glazing' },
   { keyword: 'antenna', score: 0.0, angle: 'custom glass scope' },
   { keyword: 'solar panel', score: 0.0, angle: 'custom glass scope' },
+  { keyword: 'gas', score: 0.05, angle: 'custom glass scope' },
+  { keyword: 'oil burner', score: 0.0, angle: 'custom glass scope' },
+  { keyword: 'curb cut', score: 0.0, angle: 'custom glass scope' },
+  { keyword: 'crane', score: 0.0, angle: 'custom glass scope' },
 ];
 
 export const AUTO_SEND_RAMP = {
