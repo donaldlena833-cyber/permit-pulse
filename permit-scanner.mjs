@@ -1692,10 +1692,10 @@ export default {
     console.log(`   Generated ${followUpResult.generated} follow-up drafts`);
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    const automationResponse = await handlePermitPulseAutomationRequest(request, env);
+    const automationResponse = await handlePermitPulseAutomationRequest(request, env, ctx);
     if (automationResponse) return automationResponse;
 
     // CORS preflight

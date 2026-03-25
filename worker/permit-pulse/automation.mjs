@@ -3593,8 +3593,7 @@ async function scrapeWebsiteSignals(env, leadScore, website, options = {}) {
   const urls = uniq([
     website,
     website.replace(/\/$/, '') + '/contact',
-    website.replace(/\/$/, '') + '/about',
-  ]).slice(0, 3);
+  ]).slice(0, options.force ? 2 : 1);
 
   try {
     const pages = await Promise.all(
@@ -3775,9 +3774,35 @@ function mergeStoredEmailCandidateMeta(contacts, leadRow = {}) {
   });
 }
 
-async function hydrateEmailTrustForContacts(env, gateway, contacts, companyProfile, permit) {
+async function hydrateEmailTrustForContacts(env, gateway, contacts, companyProfile, permit, options = {}) {
   const domainHealthCache = new Map();
   const reputationCache = new Map();
+  const prioritizedDomains = [];
+  const officialDomain = normalizeText(companyProfile?.domain || rootDomain(companyProfile?.website || ''));
+
+  if (officialDomain) {
+    prioritizedDomains.push(officialDomain);
+  }
+
+  contacts
+    .filter((contact) => contact.email)
+    .sort((left, right) => {
+      const leftEmail = normalizeEmailAddress(left.email || '');
+      const rightEmail = normalizeEmailAddress(right.email || '');
+      const leftDomain = emailDomain(leftEmail);
+      const rightDomain = emailDomain(rightEmail);
+      const leftOfficial = leftDomain === officialDomain ? 1 : 0;
+      const rightOfficial = rightDomain === officialDomain ? 1 : 0;
+      const leftManual = left.source === 'manual' ? 1 : 0;
+      const rightManual = right.source === 'manual' ? 1 : 0;
+      return (rightOfficial - leftOfficial) || (rightManual - leftManual) || ((right.confidence || 0) - (left.confidence || 0));
+    })
+    .forEach((contact) => {
+      const domain = emailDomain(contact.email || '');
+      if (domain && !prioritizedDomains.includes(domain) && prioritizedDomains.length < 3) {
+        prioritizedDomains.push(domain);
+      }
+    });
 
   for (const contact of contacts) {
     if (!contact.email) {
@@ -3787,7 +3812,18 @@ async function hydrateEmailTrustForContacts(env, gateway, contacts, companyProfi
     const domain = emailDomain(contact.email);
     let domainHealth = domainHealthCache.get(domain);
     if (!domainHealth) {
-      domainHealth = await checkDomainHealth(env, gateway, domain);
+      domainHealth = prioritizedDomains.includes(domain)
+        ? await checkDomainHealth(env, gateway, domain)
+        : {
+            domain,
+            has_mx: true,
+            has_website: false,
+            is_parked: false,
+            mx_records: [],
+            health_score: 50,
+            checked_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + (DOMAIN_HEALTH_CACHE_DAYS * 86400000)).toISOString(),
+          };
       domainHealthCache.set(domain, domainHealth);
     }
 
@@ -3813,19 +3849,21 @@ async function hydrateEmailTrustForContacts(env, gateway, contacts, companyProfi
   const picked = pickEmailContacts(contacts, companyProfile, permit);
   const candidatesToVerify = [picked.primary, picked.fallback].filter(Boolean);
 
-  for (const contact of candidatesToVerify) {
-    const initialTrust = buildEmailTrust(contact, companyProfile, permit);
-    if (
-      initialTrust.score >= AUTO_SEND_EMAIL_SCORE_THRESHOLD
-      && contact.name
-      && !isGenericMailbox(contact.email)
-    ) {
-      contact.person_verification = await reverseVerifyPerson(
-        env,
-        gateway,
-        contact.name,
-        companyProfile.company_name || permit.applicant_business_name || permit.owner_business_name || '',
-      );
+  if (options.deepVerify === true) {
+    for (const contact of candidatesToVerify) {
+      const initialTrust = buildEmailTrust(contact, companyProfile, permit);
+      if (
+        initialTrust.score >= AUTO_SEND_EMAIL_SCORE_THRESHOLD
+        && contact.name
+        && !isGenericMailbox(contact.email)
+      ) {
+        contact.person_verification = await reverseVerifyPerson(
+          env,
+          gateway,
+          contact.name,
+          companyProfile.company_name || permit.applicant_business_name || permit.owner_business_name || '',
+        );
+      }
     }
   }
 
@@ -4811,7 +4849,7 @@ export async function runPermitAutomationCycle(env) {
   const gateway = createSupabaseGateway(env);
   const ingestResult = await runPermitIngestInternal(env, gateway);
   const enrichmentResult = await runEnrichmentBatchInternal(env, gateway, ingestResult.leads, {
-    limit: Math.max(ENRICHMENT_BATCH_LIMIT, Math.min(ingestResult.leads?.length || ENRICHMENT_BATCH_LIMIT, 12)),
+    limit: Math.max(ENRICHMENT_BATCH_LIMIT, Math.min(ingestResult.leads?.length || ENRICHMENT_BATCH_LIMIT, 6)),
   });
 
   return {

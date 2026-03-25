@@ -60,7 +60,7 @@ async function authenticateRequest(request, env) {
   return response.json();
 }
 
-export async function handlePermitPulseAutomationRequest(request, env) {
+export async function handlePermitPulseAutomationRequest(request, env, ctx) {
   const url = new URL(request.url);
 
   if (!url.pathname.startsWith('/api/v2')) {
@@ -99,8 +99,24 @@ export async function handlePermitPulseAutomationRequest(request, env) {
     }
 
     if (url.pathname === '/api/v2/run' && request.method === 'POST') {
-      const result = await runPermitAutomationCycle(env);
-      return json(result);
+      const task = runPermitAutomationCycle(env).catch((error) => {
+        console.error('Background automation run failed', error);
+      });
+
+      if (ctx?.waitUntil) {
+        ctx.waitUntil(task);
+        return json({
+          started: true,
+          mode: 'background',
+          message: 'Scan, enrichment, and send automation started in the background.',
+        });
+      }
+
+      const result = await task;
+      return json(result || {
+        started: false,
+        mode: 'foreground',
+      });
     }
 
     if (url.pathname === '/api/v2/jobs/ingest' && request.method === 'POST') {
