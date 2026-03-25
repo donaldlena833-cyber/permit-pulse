@@ -2278,10 +2278,10 @@ function getManualSendEmailContacts(contacts, companyProfile = {}, permit = {}) 
     }
   }
 
-  return manual.slice(0, MANUAL_SEND_EMAIL_CONTACT_LIMIT);
-}
+  if (manual.length > 0) {
+    return manual.slice(0, MANUAL_SEND_EMAIL_CONTACT_LIMIT);
+  }
 
-function getManualSendEmailContacts(contacts, companyProfile = {}, permit = {}) {
   const seen = new Set();
   const scoredContacts = [...contacts]
     .filter((contact) => contact.email)
@@ -2367,7 +2367,8 @@ function getManualSendEmailContacts(contacts, companyProfile = {}, permit = {}) 
 
       seen.add(email);
       return true;
-    });
+    })
+    .slice(0, MANUAL_SEND_EMAIL_CONTACT_LIMIT);
 }
 
 function buildDraft(lead, companyProfile, contacts) {
