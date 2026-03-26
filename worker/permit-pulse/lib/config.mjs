@@ -1,6 +1,8 @@
 const DEFAULT_CONFIG = {
   daily_send_cap: 20,
   min_relevance_threshold: 0.15,
+  scan_window_days: 14,
+  scan_limit_per_source: 0,
   auto_send_trust_threshold: 50,
   manual_send_trust_threshold: 25,
   follow_up_enabled: true,

@@ -242,10 +242,11 @@ export async function runIngestStage(env, db, runId, config) {
   const activeSources = Array.isArray(config.active_sources) && config.active_sources.length > 0
     ? config.active_sources
     : ['nyc_dob'];
-  const maxPermitsPerSource = 10;
+  const maxPermitsPerSource = Number(config.scan_limit_per_source || 0);
+  const scanWindowDays = Math.max(1, Number(config.scan_window_days || 14));
 
   const since = new Date();
-  since.setDate(since.getDate() - 14);
+  since.setDate(since.getDate() - scanWindowDays);
   const sinceDay = since.toISOString().split('T')[0];
 
   const counters = {
