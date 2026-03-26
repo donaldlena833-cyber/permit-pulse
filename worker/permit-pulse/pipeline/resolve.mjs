@@ -1,9 +1,127 @@
 import { appendLeadEvent } from '../lib/events.mjs';
 import { eq, order } from '../lib/supabase.mjs';
-import { cleanCompanyName, getBaseDomain, normalizeWhitespace } from '../lib/utils.mjs';
+import { clamp, cleanCompanyName, getBaseDomain, normalizeText, normalizeWhitespace, uniq } from '../lib/utils.mjs';
 
-async function searchBraveWebsite(env, query) {
+const DIRECTORY_DOMAIN_DENYLIST = [
+  'yelp.com',
+  'angi.com',
+  'angieslist.com',
+  'houzz.com',
+  'yellowpages.com',
+  'superpages.com',
+  'mapquest.com',
+  'manta.com',
+  'facebook.com',
+  'linkedin.com',
+  'instagram.com',
+  'bbb.org',
+  'dnb.com',
+  'buzzfile.com',
+  'bizapedia.com',
+  'buildzoom.com',
+  'bldup.com',
+  'opencorporates.com',
+  'chamberofcommerce.com',
+  'nextdoor.com',
+  'zoominfo.com',
+  'crunchbase.com',
+  'constructionjournal.com',
+  'thebluebook.com',
+  'alignable.com',
+  'contactout.com',
+  'rocketreach.co',
+  'rocketreach.io',
+  'lusha.com',
+  'seamless.ai',
+  'hunter.io',
+  'skrapp.io',
+  'salesintel.io',
+  'adapt.io',
+  'apollo.io',
+];
+
+function tokenizeCompany(value) {
+  return cleanCompanyName(value)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 3);
+}
+
+function countTokenMatches(tokens, haystack) {
+  return tokens.reduce((total, token) => total + (haystack.includes(token) ? 1 : 0), 0);
+}
+
+function buildLeadCompanyTokens(lead) {
+  return uniq([
+    ...tokenizeCompany(lead?.applicant_name || ''),
+    ...tokenizeCompany(lead?.owner_name || ''),
+    ...tokenizeCompany(lead?.company_name || ''),
+  ]);
+}
+
+function isDirectoryDomain(domain = '') {
+  const normalized = normalizeText(domain);
+  return DIRECTORY_DOMAIN_DENYLIST.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
+}
+
+function scoreResolverCandidate(lead, candidate) {
+  const domain = getBaseDomain(candidate.domain || candidate.website || '');
+  const companyTokens = buildLeadCompanyTokens(lead);
+  const nameText = normalizeText(candidate.company_name || '');
+  const searchable = normalizeText([candidate.company_name, candidate.website, candidate.domain].join(' '));
+  const nameMatches = countTokenMatches(companyTokens, nameText);
+  const domainMatches = countTokenMatches(companyTokens, domain);
+  const totalMatches = countTokenMatches(companyTokens, searchable);
+  let confidence = Number(candidate.confidence || 0);
+  const reasons = Array.isArray(candidate.reasons) ? [...candidate.reasons] : [];
+
+  if (candidate.website) {
+    confidence += 6;
+  }
+  if (nameMatches > 0) {
+    confidence += Math.min(nameMatches * 12, 24);
+    reasons.push('Candidate name matches permit company tokens');
+  }
+  if (domainMatches > 0) {
+    confidence += Math.min(domainMatches * 10, 20);
+    reasons.push('Candidate domain matches permit company tokens');
+  }
+  if (candidate.source === 'google_maps' && candidate.website) {
+    confidence += 8;
+  }
+  if (candidate.source === 'brave_search' && candidate.website) {
+    confidence += 5;
+  }
+  if (candidate.source === 'permit_data' && !candidate.website && !domain) {
+    confidence -= 10;
+  }
+  if (isDirectoryDomain(domain)) {
+    confidence -= 60;
+    reasons.push('Directory/social domain deprioritized');
+  }
+  if (domain && companyTokens.length > 0 && totalMatches === 0 && candidate.source !== 'permit_data') {
+    confidence -= 25;
+    reasons.push('No permit-company token match');
+  }
+  if (!candidate.website && !domain && candidate.source !== 'permit_data') {
+    confidence -= 10;
+  }
+
+  return {
+    ...candidate,
+    domain,
+    confidence: clamp(confidence, 0, 95),
+    reasons,
+  };
+}
+
+async function searchBraveWebsite(env, lead) {
+  const query = `${lead.applicant_name || lead.owner_name || ''} ${lead.address || ''}`.trim();
   if (!env.BRAVE_API_KEY || !query) {
+    return null;
+  }
+  const companyTokens = buildLeadCompanyTokens(lead);
+  if (companyTokens.length === 0) {
     return null;
   }
 
@@ -20,19 +138,35 @@ async function searchBraveWebsite(env, query) {
 
   const payload = await response.json();
   const result = Array.isArray(payload?.web?.results)
-    ? payload.web.results.find((item) => item?.url && !String(item.url).includes('linkedin.com'))
+    ? payload.web.results
+      .filter((item) => item?.url)
+      .map((item) => {
+        const domain = getBaseDomain(item.url);
+        const searchable = normalizeText([item.title, item.description, item.url].join(' '));
+        const tokenMatches = countTokenMatches(companyTokens, searchable);
+        let score = tokenMatches * 12;
+        if (domain && countTokenMatches(companyTokens, domain) > 0) {
+          score += 10;
+        }
+        if (isDirectoryDomain(domain)) {
+          score -= 50;
+        }
+        return { item, score, domain };
+      })
+      .filter((entry) => entry.score > -10)
+      .sort((left, right) => right.score - left.score)[0]
     : null;
 
-  if (!result?.url) {
+  if (!result?.item?.url) {
     return null;
   }
 
   return {
-    company_name: cleanCompanyName(result.title || query),
-    website: result.url,
-    domain: getBaseDomain(result.url),
+    company_name: cleanCompanyName(result.item.title || lead.applicant_name || lead.owner_name || query),
+    website: result.item.url,
+    domain: result.domain,
     source: 'brave_search',
-    confidence: 50,
+    confidence: clamp(32 + result.score, 20, 82),
     reasons: ['Brave search found matching website'],
   };
 }
@@ -46,6 +180,10 @@ async function searchGoogleMapsCandidate(env, lead) {
   if (!query) {
     return null;
   }
+  const companyTokens = buildLeadCompanyTokens(lead);
+  if (companyTokens.length === 0) {
+    return null;
+  }
 
   const searchUrl = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&key=${env.GOOGLE_MAPS_API_KEY}`;
   const searchResponse = await fetch(searchUrl);
@@ -54,7 +192,15 @@ async function searchGoogleMapsCandidate(env, lead) {
   }
 
   const searchPayload = await searchResponse.json();
-  const place = Array.isArray(searchPayload?.results) ? searchPayload.results[0] : null;
+  const place = Array.isArray(searchPayload?.results)
+    ? searchPayload.results
+      .map((entry) => ({
+        entry,
+        score: countTokenMatches(companyTokens, normalizeText(entry?.name || '')) * 14,
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score)[0]?.entry
+    : null;
   if (!place?.place_id) {
     return null;
   }
@@ -77,7 +223,7 @@ async function searchGoogleMapsCandidate(env, lead) {
     domain: getBaseDomain(detail.website || ''),
     phone: detail.formatted_phone_number || '',
     source: 'google_maps',
-    confidence: detail.website ? 60 : 42,
+    confidence: detail.website ? 55 : 36,
     reasons: ['Google Maps matched business at project address'],
   };
 }
@@ -161,9 +307,10 @@ function dedupeCandidates(candidates) {
   return Array.from(bestByKey.values());
 }
 
-function rankCandidates(candidates) {
+function rankCandidates(lead, candidates) {
   return dedupeCandidates(candidates)
-    .filter((candidate) => candidate.company_name)
+    .map((candidate) => scoreResolverCandidate(lead, candidate))
+    .filter((candidate) => candidate.company_name && Number(candidate.confidence || 0) >= 20)
     .sort((left, right) => Number(right.confidence || 0) - Number(left.confidence || 0));
 }
 
@@ -184,16 +331,19 @@ export async function resolveLeadCompany(env, db, runId, leadId) {
   const permitCandidates = buildPermitCandidates(lead);
   const carryForwardCandidates = buildCarryForwardCandidates(lead, history);
   const [braveCandidate, mapsCandidate] = await Promise.all([
-    searchBraveWebsite(env, `${lead.applicant_name || lead.owner_name || ''} ${lead.address || ''}`.trim()),
+    searchBraveWebsite(env, lead),
     searchGoogleMapsCandidate(env, lead),
   ]);
 
-  const candidates = rankCandidates([
-    ...carryForwardCandidates,
-    ...permitCandidates,
-    ...(braveCandidate ? [braveCandidate] : []),
-    ...(mapsCandidate ? [mapsCandidate] : []),
-  ]);
+  const candidates = rankCandidates(
+    lead,
+    [
+      ...carryForwardCandidates,
+      ...permitCandidates,
+      ...(braveCandidate ? [braveCandidate] : []),
+      ...(mapsCandidate ? [mapsCandidate] : []),
+    ],
+  );
 
   await db.update('v2_company_candidates', [eq('lead_id', leadId), eq('is_current', true)], {
     is_current: false,

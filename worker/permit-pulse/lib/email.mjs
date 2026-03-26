@@ -50,6 +50,19 @@ export const PLACEHOLDER_EMAIL_LOCALS = [
   'email',
 ];
 
+export const BLOCKED_EMAIL_DOMAINS = [
+  'example.com',
+  'example.org',
+  'example.net',
+  'schema.org',
+  'sentry.io',
+  'wixpress.com',
+  'wixsite.com',
+  'wordpress.com',
+  'secureserver.net',
+  'godaddy.com',
+];
+
 export function isFreeMailbox(domain) {
   return FREE_MAILBOX_DOMAINS.includes(normalizeText(domain));
 }
@@ -71,5 +84,9 @@ export function isBlockedEmail(email) {
     return true;
   }
   const domain = getDomainFromEmail(email);
-  return !domain || isPlaceholderEmail(email);
+  return (
+    !domain
+    || isPlaceholderEmail(email)
+    || BLOCKED_EMAIL_DOMAINS.some((entry) => domain === entry || domain.endsWith(`.${entry}`))
+  );
 }

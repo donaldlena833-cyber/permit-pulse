@@ -1,10 +1,12 @@
 import nycDob from '../sources/nyc-dob.mjs';
+import { METROGLASS_PROFILE, PERMIT_RELEVANCE_RULES } from '../config.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
 import { eq } from '../lib/supabase.mjs';
 import {
   buildPermitKey,
   cleanCompanyName,
   nowIso,
+  normalizeText,
   normalizeWhitespace,
 } from '../lib/utils.mjs';
 
@@ -64,23 +66,69 @@ export const GLASS_RELEVANCE = {
   crane: 0.0,
 };
 
+const DIRECT_KEYWORDS = METROGLASS_PROFILE.directKeywords.map((keyword) => normalizeText(keyword));
+const INFERRED_KEYWORDS = METROGLASS_PROFILE.inferredKeywords.map((keyword) => normalizeText(keyword));
+const NEGATIVE_KEYWORDS = METROGLASS_PROFILE.negativeKeywords.map((keyword) => normalizeText(keyword));
+
+function countKeywordHits(text, keywords) {
+  return keywords.filter((keyword) => text.includes(keyword));
+}
+
 export function scorePermitRelevance(workDescription) {
   if (!workDescription) {
-    return { score: 0.3, keyword: null };
+    return { score: 0, keyword: null, matchType: 'none' };
   }
 
-  const lower = workDescription.toLowerCase();
-  let best = 0;
-  let keyword = null;
+  const lower = normalizeText(workDescription);
+  const directHits = countKeywordHits(lower, DIRECT_KEYWORDS);
+  const inferredHits = countKeywordHits(lower, INFERRED_KEYWORDS);
+  const negativeHits = countKeywordHits(lower, NEGATIVE_KEYWORDS);
+  const matchedRule = PERMIT_RELEVANCE_RULES
+    .filter((rule) => lower.includes(normalizeText(rule.keyword)))
+    .sort((left, right) => right.score - left.score)[0] || null;
+
+  let best = matchedRule?.score || 0;
+  let keyword = matchedRule?.keyword || null;
+  let matchType = matchedRule ? 'rule' : 'none';
+
+  if (directHits.length >= 2) {
+    best = Math.max(best, 0.9);
+    keyword = keyword || directHits[0];
+    matchType = matchedRule ? matchType : 'direct';
+  } else if (directHits.length === 1) {
+    best = Math.max(best, 0.75);
+    keyword = keyword || directHits[0];
+    matchType = matchedRule ? matchType : 'direct';
+  } else if (inferredHits.length >= 2) {
+    best = Math.max(best, 0.45);
+    keyword = keyword || inferredHits[0];
+    matchType = matchedRule ? matchType : 'inferred';
+  } else if (inferredHits.length === 1) {
+    best = Math.max(best, 0.3);
+    keyword = keyword || inferredHits[0];
+    matchType = matchedRule ? matchType : 'inferred';
+  }
 
   for (const [candidate, score] of Object.entries(GLASS_RELEVANCE)) {
-    if (lower.includes(candidate) && score > best) {
-      best = score;
-      keyword = candidate;
+    if (!lower.includes(candidate) || score <= best) {
+      continue;
     }
+    best = score;
+    keyword = candidate;
+    matchType = 'rule';
   }
 
-  return { score: best || 0.3, keyword };
+  if (negativeHits.length > 0 && directHits.length === 0 && (!matchedRule || matchedRule.score < 0.4)) {
+    best = inferredHits.length > 0 ? Math.min(best, 0.2) : 0;
+    keyword = keyword || negativeHits[0];
+    matchType = best > 0 ? 'mixed' : 'negative';
+  }
+
+  return {
+    score: best,
+    keyword,
+    matchType,
+  };
 }
 
 function deriveQualityTier(relevanceScore) {

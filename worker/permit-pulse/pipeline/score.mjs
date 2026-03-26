@@ -1,11 +1,13 @@
 import { checkDomainHealth } from '../lib/dns.mjs';
 import { isFreeMailbox, isGenericInbox } from '../lib/email.mjs';
 import { eq } from '../lib/supabase.mjs';
-import { daysAgo } from '../lib/utils.mjs';
+import { daysAgo, getBaseDomain } from '../lib/utils.mjs';
 
 export function scoreEmail(candidate, domainHealth, domainReputation) {
   let trust = 0;
   const reasons = [];
+  const sourceDomain = getBaseDomain(candidate.provenance_url || '');
+  const matchesSourceDomain = Boolean(sourceDomain) && sourceDomain === candidate.domain;
 
   if (!domainHealth || domainHealth.health_score === 0) {
     return {
@@ -45,6 +47,12 @@ export function scoreEmail(candidate, domainHealth, domainReputation) {
 
   if (candidate.provenance_source === 'direct_fetch') {
     trust += 8; reasons.push('+8 direct fetch source');
+  }
+  if (matchesSourceDomain) {
+    trust += 12; reasons.push('+12 email domain matches source site');
+  }
+  if (candidate.provenance_extraction_method === 'mailto_link' && matchesSourceDomain) {
+    trust += 8; reasons.push('+8 matching-domain mailto');
   }
 
   if (candidate.company_token_in_domain) {

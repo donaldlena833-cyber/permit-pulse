@@ -1,7 +1,7 @@
 import { appendLeadEvent } from '../lib/events.mjs';
 import { isGenericInbox } from '../lib/email.mjs';
 import { eq, order } from '../lib/supabase.mjs';
-import { daysSince, normalizeText } from '../lib/utils.mjs';
+import { daysSince } from '../lib/utils.mjs';
 
 function computeQualityTier(lead, primaryCandidate) {
   const relevanceScore = Number(lead.relevance_score || 0);
@@ -42,6 +42,10 @@ function isSendApproved(candidate) {
   return Boolean(candidate?.is_auto_sendable || candidate?.is_manual_sendable);
 }
 
+function isTrustedPublished(candidate) {
+  return isPublishedContact(candidate) && isSendApproved(candidate);
+}
+
 function pickPreferredPublished(candidates) {
   const ordered = sortCandidates(candidates);
   return (
@@ -66,16 +70,16 @@ export async function selectLeadRoute(db, runId, leadId) {
     ordering: [order('trust_score', 'desc')],
   });
 
-  const publishedCandidates = sortCandidates(candidates.filter(isPublishedContact));
+  const trustedPublishedCandidates = sortCandidates(candidates.filter(isTrustedPublished));
   const approvedCandidates = sortCandidates(
     candidates.filter((candidate) => Number(candidate.trust_score || 0) >= 25 && !candidate.is_research_only && isSendApproved(candidate)),
   );
 
   const approvedPrimary = approvedCandidates.find((candidate) => !isGenericInbox(candidate.local_part)) || approvedCandidates[0] || null;
   const approvedFallback = approvedCandidates.find((candidate) => candidate.id !== approvedPrimary?.id && Number(candidate.trust_score || 0) >= 20) || null;
-  const discoveredPrimary = approvedPrimary || pickPreferredPublished(publishedCandidates);
+  const discoveredPrimary = approvedPrimary || pickPreferredPublished(trustedPublishedCandidates);
   const discoveredFallback = approvedFallback
-    || publishedCandidates.find((candidate) => candidate.id !== discoveredPrimary?.id)
+    || trustedPublishedCandidates.find((candidate) => candidate.id !== discoveredPrimary?.id)
     || null;
 
   for (const candidate of candidates) {
