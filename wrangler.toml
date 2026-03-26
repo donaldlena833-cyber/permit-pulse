@@ -1,6 +1,10 @@
 name = "permit-pulse-scanner"
-main = "permit-scanner.mjs"
+main = "worker/permit-pulse/index.mjs"
 compatibility_date = "2024-01-01"
+
+[limits]
+cpu_ms = 300_000
+subrequests = 50_000
 
 # Daily at 7am ET (12:00 UTC during EDT) — main scan + reply check + follow-ups
 # Also at 6pm ET (23:00 UTC) — reply check + follow-ups only

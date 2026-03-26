@@ -1,50 +1,30 @@
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --background: 36 56% 98%;
-  --foreground: 24 12% 18%;
-  --card: 36 35% 96%;
-  --card-foreground: 24 12% 18%;
-  --popover: 36 35% 96%;
-  --popover-foreground: 24 12% 18%;
-  --primary: 34 42% 52%;
-  --primary-foreground: 36 56% 98%;
-  --secondary: 35 26% 91%;
-  --secondary-foreground: 24 12% 18%;
-  --muted: 35 26% 92%;
-  --muted-foreground: 27 12% 40%;
-  --accent: 33 42% 85%;
-  --accent-foreground: 24 12% 18%;
-  --destructive: 6 51% 47%;
-  --destructive-foreground: 36 56% 98%;
-  --border: 32 24% 84%;
-  --input: 32 24% 84%;
-  --ring: 34 42% 52%;
-  --radius: 1.5rem;
-}
-
-.dark {
-  --background: 24 12% 8%;
-  --foreground: 36 42% 93%;
-  --card: 28 14% 12%;
-  --card-foreground: 36 42% 93%;
-  --popover: 28 14% 12%;
-  --popover-foreground: 36 42% 93%;
-  --primary: 34 42% 52%;
-  --primary-foreground: 36 42% 93%;
-  --secondary: 29 12% 17%;
-  --secondary-foreground: 36 42% 93%;
-  --muted: 29 12% 17%;
-  --muted-foreground: 37 16% 66%;
-  --accent: 28 15% 20%;
-  --accent-foreground: 36 42% 93%;
-  --destructive: 6 48% 50%;
-  --destructive-foreground: 36 42% 93%;
-  --border: 29 11% 21%;
-  --input: 29 11% 21%;
-  --ring: 34 42% 52%;
+  --background: 36 25% 88%;
+  --foreground: 0 0% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 10%;
+  --primary: 25 78% 47%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 34 30% 94%;
+  --secondary-foreground: 0 0% 10%;
+  --muted: 36 21% 92%;
+  --muted-foreground: 34 10% 37%;
+  --accent: 28 79% 47%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 356 79% 41%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 32 24% 78%;
+  --input: 32 24% 78%;
+  --ring: 25 78% 47%;
+  --radius: 0.75rem;
 }
 
 @layer base {
@@ -60,19 +40,19 @@
     @apply bg-background text-foreground font-sans antialiased;
     min-height: 100vh;
     background-image:
-      radial-gradient(circle at top left, rgba(184, 138, 82, 0.12), transparent 30%),
-      radial-gradient(circle at 80% 0%, rgba(52, 47, 43, 0.08), transparent 24%);
-    font-family: "Avenir Next", Avenir, "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+      radial-gradient(circle at top left, rgba(212, 105, 26, 0.08), transparent 28%),
+      linear-gradient(180deg, rgba(255, 251, 246, 0.7), rgba(232, 226, 217, 0.2));
+    font-family: "Inter", "Segoe UI", sans-serif;
   }
 
   ::selection {
-    background: rgba(184, 138, 82, 0.22);
+    background: rgba(212, 105, 26, 0.18);
   }
 }
 
 @layer utilities {
   .surface-glow {
-    box-shadow: 0 24px 80px rgba(52, 47, 43, 0.08);
+    box-shadow: 0 24px 80px rgba(26, 26, 26, 0.08);
   }
 }
 
@@ -93,6 +73,6 @@
 *::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
-  background: rgba(113, 98, 84, 0.35);
+  background: rgba(95, 86, 76, 0.35);
   background-clip: padding-box;
 }
