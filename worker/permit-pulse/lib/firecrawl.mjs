@@ -52,11 +52,6 @@ function hasUsefulEmailContent(page) {
   return EMAIL_SIGNAL.test(`${String(page?.markdown || '')}\n${String(page?.html || '')}`);
 }
 
-function shouldFallbackToHtml(page) {
-  const markdown = String(page?.markdown || '');
-  return !hasUsefulEmailContent(page) || markdown.length < 240;
-}
-
 async function fetchViaFirecrawl(env, url) {
   const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
     method: 'POST',
@@ -121,24 +116,46 @@ export async function scrapeWebsitePages(env, website) {
 
   for (const url of urls) {
     try {
-      let page = env.FIRECRAWL_API_KEY ? await fetchViaFirecrawl(env, url) : await fetchHtml(url);
-      if (env.FIRECRAWL_API_KEY && shouldFallbackToHtml(page)) {
+      let directPage = null;
+
+      try {
+        directPage = await fetchHtml(url);
+      } catch {
+        directPage = null;
+      }
+
+      if (directPage && hasUsefulEmailContent(directPage)) {
+        pages.push({
+          ...directPage,
+          fetchSource: 'direct_fetch',
+          pageType: detectPageType(directPage.url, directPage.title, directPage.heading),
+        });
+        continue;
+      }
+
+      if (env.FIRECRAWL_API_KEY) {
         try {
-          const htmlPage = await fetchHtml(url);
-          if (hasUsefulEmailContent(htmlPage) || String(htmlPage.markdown || '').length > String(page.markdown || '').length) {
-            page = {
-              ...htmlPage,
-              crawlRef: page.crawlRef || null,
-            };
+          const firecrawlPage = await fetchViaFirecrawl(env, url);
+          if (firecrawlPage) {
+            pages.push({
+              ...firecrawlPage,
+              fetchSource: 'firecrawl',
+              pageType: detectPageType(firecrawlPage.url, firecrawlPage.title, firecrawlPage.heading),
+            });
+            continue;
           }
         } catch {
-          // Keep Firecrawl result when raw HTML fallback fails.
+          // Fall back to direct HTML when Firecrawl fails too.
         }
       }
-      pages.push({
-        ...page,
-        pageType: detectPageType(page.url, page.title, page.heading),
-      });
+
+      if (directPage) {
+        pages.push({
+          ...directPage,
+          fetchSource: 'direct_fetch',
+          pageType: detectPageType(directPage.url, directPage.title, directPage.heading),
+        });
+      }
     } catch {
       continue;
     }

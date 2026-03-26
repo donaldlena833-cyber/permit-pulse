@@ -63,26 +63,6 @@ function inferPersonContext(lead) {
   return { personName, personRole };
 }
 
-function buildPatternGuesses(lead) {
-  const domain = lead.company_domain || getBaseDomain(lead.company_website || '');
-  if (!domain) {
-    return [];
-  }
-
-  const fullName = normalizeText(lead.applicant_name || '');
-  const [first = '', last = ''] = fullName.split(/\s+/);
-  if (!first || !last) {
-    return [`info@${domain}`];
-  }
-
-  return [
-    `${first}.${last}@${domain}`,
-    `${first[0]}${last}@${domain}`,
-    `${first}${last}@${domain}`,
-    `info@${domain}`,
-  ];
-}
-
 function extractMailtoEmails(page) {
   return Array.from(String(page?.html || '').matchAll(/mailto:([^"'?#\s>]+)/gi))
     .map((match) => decodeURIComponent(String(match[1] || '')).trim().toLowerCase())
@@ -189,7 +169,7 @@ function extractEmailsFromPage(lead, page, runId) {
       person_name_match: personFirstToken ? getLocalPart(email).includes(personFirstToken) : false,
       person_token_in_local: personFirstToken ? getLocalPart(email).includes(personFirstToken) : false,
       company_token_in_domain: companyFirstToken ? getDomainFromEmail(email).includes(companyFirstToken) : false,
-      provenance_source: 'firecrawl',
+      provenance_source: page.fetchSource || 'direct_fetch',
       provenance_url: page.url,
       provenance_page_type: page.pageType,
       provenance_extraction_method: detectExtractionMethod(page, email),
@@ -215,9 +195,6 @@ function extractPhoneFromPages(pages) {
 function candidatePriority(candidate) {
   if (candidate.provenance_source === 'manual') {
     return 100;
-  }
-  if (candidate.provenance_source === 'pattern_guess') {
-    return 0;
   }
   if (candidate.provenance_page_type === 'contact' && candidate.provenance_extraction_method === 'mailto_link') {
     return 60;
@@ -254,11 +231,6 @@ export async function discoverLeadContacts(env, db, runId, leadId) {
   const emailRows = pages.flatMap((page) => extractEmailsFromPage(lead, page, runId));
   const deduped = [];
   const bestByEmail = new Map();
-  const { personName, personRole } = inferPersonContext(lead);
-  const personFirstToken = normalizeText(personName).split(/\s+/)[0] || '';
-  const companyFirstToken = lead.company_name
-    ? normalizeText(lead.company_name).split(/\s+/)[0]
-    : '';
 
   for (const row of emailRows) {
     const current = bestByEmail.get(row.email_address);
@@ -269,34 +241,6 @@ export async function discoverLeadContacts(env, db, runId, leadId) {
 
   for (const row of bestByEmail.values()) {
     deduped.push(row);
-  }
-
-  if (deduped.length === 0) {
-    for (const guess of buildPatternGuesses(lead)) {
-      const localPart = getLocalPart(guess);
-      deduped.push({
-        lead_id: lead.id,
-        run_id: runId,
-        email_address: guess,
-        domain: getDomainFromEmail(guess),
-        local_part: localPart,
-        person_name: personName ? titleCase(personName) : '',
-        person_role: personRole,
-        person_name_match: personFirstToken ? localPart.includes(personFirstToken) : false,
-        person_token_in_local: personFirstToken ? localPart.includes(personFirstToken) : false,
-        company_token_in_domain: companyFirstToken ? getDomainFromEmail(guess).includes(companyFirstToken) : false,
-        provenance_source: 'pattern_guess',
-        provenance_url: lead.company_website || '',
-        provenance_page_type: 'unknown',
-        provenance_extraction_method: 'pattern_guess',
-        provenance_page_title: '',
-        provenance_page_heading: '',
-        provenance_raw_context: 'Generated from company domain and permit contact',
-        provenance_crawl_ref: null,
-        provenance_stale_penalty: 0,
-        provenance_stale_reasons: [],
-      });
-    }
   }
 
   if (deduped.length > 0) {
