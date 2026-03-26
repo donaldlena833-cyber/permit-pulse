@@ -43,6 +43,10 @@ export function scoreEmail(candidate, domainHealth, domainReputation) {
     trust += 3; reasons.push('+3 non-primary page');
   }
 
+  if (candidate.provenance_source === 'direct_fetch') {
+    trust += 8; reasons.push('+8 direct fetch source');
+  }
+
   if (candidate.company_token_in_domain) {
     trust += 10; reasons.push('+10 domain matches company');
   }
