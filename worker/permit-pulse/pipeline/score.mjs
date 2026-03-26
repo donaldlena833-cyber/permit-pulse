@@ -1,5 +1,5 @@
 import { checkDomainHealth } from '../lib/dns.mjs';
-import { isFreeMailbox, isGenericInbox } from '../lib/email.mjs';
+import { isFreeMailbox, isGenericInbox, normalizeEmail } from '../lib/email.mjs';
 import { eq } from '../lib/supabase.mjs';
 import { daysAgo, getBaseDomain } from '../lib/utils.mjs';
 
@@ -126,6 +126,9 @@ async function loadDomainReputation(db, domain) {
 }
 
 export async function scoreLeadEmails(env, db, runId, leadId) {
+  const lead = await db.single('v2_leads', {
+    filters: [eq('id', leadId)],
+  });
   const candidates = await db.select('v2_email_candidates', {
     filters: [eq('lead_id', leadId), eq('is_current', true)],
     ordering: ['order=discovered_at.desc'],
@@ -139,6 +142,16 @@ export async function scoreLeadEmails(env, db, runId, leadId) {
       loadDomainReputation(db, candidate.domain),
     ]);
     const score = scoreEmail(candidate, domainHealth, domainReputation);
+    const isOperatorApprovedRoute = Boolean(lead?.operator_vouched)
+      && normalizeEmail(candidate.email_address) === normalizeEmail(lead?.contact_email || '');
+
+    if (isOperatorApprovedRoute) {
+      score.trust = Math.max(score.trust, 45);
+      score.reasons = ['+45 operator approved route', ...score.reasons.filter((reason) => reason !== '+45 operator approved route')];
+      score.manual_sendable = true;
+      score.research_only = false;
+    }
+
     await db.update('v2_email_candidates', [`id=eq.${candidate.id}`], {
       trust_score: score.trust,
       trust_reasons: score.reasons,

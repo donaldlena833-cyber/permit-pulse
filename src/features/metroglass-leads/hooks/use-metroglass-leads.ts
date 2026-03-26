@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import {
+  addManualLeadEmail,
   archiveLead,
   enrichLeadNow,
   fetchConfig,
@@ -14,6 +15,7 @@ import {
   logPhoneFollowUp,
   markOutcome,
   refreshDraft,
+  selectLeadEmail,
   sendAllReady,
   sendFollowUp,
   sendLeadNow,
@@ -198,6 +200,12 @@ export function useMetroglassLeads() {
     switchFallback: (leadId: string) => runAction(leadId, async () => {
       await switchToFallback(leadId)
     }, "Fallback activated"),
+    chooseEmail: (leadId: string, candidateId: string) => runAction(leadId, async () => {
+      await selectLeadEmail(leadId, candidateId)
+    }, "Email route selected"),
+    addManualEmail: (leadId: string, payload: { email: string; note?: string }) => runAction(leadId, async () => {
+      await addManualLeadEmail(leadId, payload)
+    }, "Manual email saved"),
     refreshDraft: (leadId: string) => runAction(leadId, async () => {
       await refreshDraft(leadId)
     }, "Draft refreshed"),

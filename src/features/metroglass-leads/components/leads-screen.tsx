@@ -16,12 +16,14 @@ const FILTERS = ["all", "new", "ready", "review", "sent", "archived"]
 
 export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnrich, actionLeadId }: LeadsScreenProps) {
   return (
-    <div className="space-y-4 pb-28">
-      <Panel>
-        <div className="text-[11px] uppercase tracking-[0.24em] text-[#8B7D6B]">Leads</div>
-        <h1 className="mt-2 font-['Instrument_Serif'] text-4xl text-[#1A1A1A]">Active queue</h1>
-        <p className="mt-2 text-sm text-[#5F564C]">Discovered contacts first, send route second, weak guesses kept out of the way.</p>
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+    <div className="space-y-5 pb-32">
+      <Panel className="overflow-hidden bg-[linear-gradient(145deg,#fff9f2,#ffffff_52%,#f5ebde)]">
+        <div className="text-[11px] uppercase tracking-[0.24em] text-[#8B7D6B]">Lead queue</div>
+        <h1 className="mt-3 font-['Instrument_Serif'] text-4xl text-[#1A1A1A] sm:text-5xl">Review with control</h1>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5F564C]">
+          Open a lead, pick the right recipient yourself when the system is unsure, and keep weak evidence from hijacking the route.
+        </p>
+        <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
           {FILTERS.map((value) => (
             <Button
               key={value}
@@ -36,23 +38,33 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
         </div>
       </Panel>
 
-      <div className="space-y-3">
+      <div className="grid gap-4 lg:grid-cols-2">
         {leads.map((lead) => (
           <Panel className="transition hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(26,26,26,0.12)]" key={lead.id}>
             <button className="block w-full text-left" onClick={() => onOpenLead(lead)} type="button">
-              <div className="font-semibold text-[#1A1A1A]">{lead.company_name || "Unnamed lead"}</div>
-              <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
-              <div className="mt-3 text-sm text-[#5F564C]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold tracking-[-0.03em] text-[#1A1A1A]">{lead.company_name || "Unnamed lead"}</div>
+                  <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
+                </div>
+                <div className="rounded-full border border-[#E4D5C5] bg-[#FBF5EC] px-3 py-1 text-xs font-medium capitalize text-[#6B5A48]">
+                  {lead.status}
+                </div>
+              </div>
+
+              <div className="mt-4 text-sm text-[#5F564C]">
                 Relevance: {formatScore(lead.relevance_score)}{lead.relevance_keyword ? ` (${lead.relevance_keyword})` : ""}
               </div>
-              <div className="mt-3 grid gap-2 text-sm text-[#5F564C]">
-                <div>
-                  Best contact: <span className="font-medium text-[#1A1A1A]">{lead.contact_email || "None found"}</span>
-                  {lead.contact_email ? ` (trust ${Math.round(lead.contact_email_trust || 0)})` : ""}
+              <div className="mt-4 grid gap-3 text-sm text-[#5F564C] sm:grid-cols-2">
+                <div className="rounded-[16px] border border-[#EEE4D7] bg-[#FFFCF8] px-3 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Primary</div>
+                  <div className="mt-2 font-medium text-[#1A1A1A]">{lead.contact_email || "None chosen"}</div>
+                  {lead.contact_email ? <div className="mt-1 text-xs">Trust {Math.round(lead.contact_email_trust || 0)}</div> : null}
                 </div>
-                <div>
-                  Alternate: <span className="font-medium text-[#1A1A1A]">{lead.fallback_email || "None"}</span>
-                  {lead.fallback_email ? ` (trust ${Math.round(lead.fallback_email_trust || 0)})` : ""}
+                <div className="rounded-[16px] border border-[#EEE4D7] bg-[#FFFCF8] px-3 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Fallback</div>
+                  <div className="mt-2 font-medium text-[#1A1A1A]">{lead.fallback_email || "No alternate"}</div>
+                  {lead.fallback_email ? <div className="mt-1 text-xs">Trust {Math.round(lead.fallback_email_trust || 0)}</div> : null}
                 </div>
               </div>
             </button>

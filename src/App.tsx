@@ -24,16 +24,18 @@ function AppTabs({
   ] as const
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-[#D9CCBE] bg-[#FFF8F0]/96 px-3 py-3 backdrop-blur">
-      <div className="mx-auto grid max-w-4xl grid-cols-3 gap-2">
+    <nav className="fixed bottom-4 left-0 right-0 z-30 px-3">
+      <div className="mx-auto grid max-w-[560px] grid-cols-3 gap-2 rounded-[22px] border border-[#D9CCBE] bg-[rgba(255,248,240,0.94)] p-2 shadow-[0_18px_40px_rgba(26,26,26,0.12)] backdrop-blur-xl">
         {items.map((item) => {
           const Icon = item.icon
           const active = tab === item.id
           return (
             <button
               key={item.id}
-              className={`flex min-h-[48px] flex-col items-center justify-center rounded-[10px] text-xs font-medium transition ${
-                active ? "bg-[#1A1A1A] text-white" : "bg-white text-[#5F564C]"
+              className={`flex min-h-[54px] flex-col items-center justify-center rounded-[16px] text-xs font-medium transition ${
+                active
+                  ? "bg-[#1A1A1A] text-white shadow-[0_12px_24px_rgba(26,26,26,0.18)]"
+                  : "bg-white/80 text-[#5F564C] hover:bg-white"
               }`}
               onClick={() => onChange(item.id)}
               type="button"
@@ -69,20 +71,35 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
   } = useMetroglassLeads()
 
   return (
-    <div className="min-h-screen bg-[#E8E2D9] text-[#1A1A1A]">
-      <header className="sticky top-0 z-20 border-b border-[#D9CCBE] bg-[#E8E2D9]/92 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-4">
-          <div>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(212,105,26,0.12),transparent_22%),linear-gradient(180deg,#efe4d5,#eadfce_36%,#efe7dc)] text-[#1A1A1A]">
+      <header className="sticky top-0 z-20 border-b border-[#D9CCBE] bg-[rgba(239,228,213,0.88)] backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-4">
+          <div className="min-w-0">
             <div className="text-[11px] uppercase tracking-[0.24em] text-[#D4691A]">MetroGlassPro</div>
-            <div className="font-['Instrument_Serif'] text-3xl leading-none">Leads</div>
+            <div className="mt-1 font-['Instrument_Serif'] text-3xl leading-none sm:text-[2.4rem]">Leads</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                {today?.counts.new ?? 0} new
+              </div>
+              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                {today?.counts.review ?? 0} review
+              </div>
+              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                {today?.counts.ready ?? 0} ready
+              </div>
+              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                Worker {health?.ok ? "healthy" : "offline"}
+              </div>
+            </div>
           </div>
-          <Button className="h-10 rounded-[8px] border border-[#D6C6B6] bg-white text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => void onLogout()} type="button" variant="outline">
+
+          <Button className="h-11 rounded-full border border-[#D6C6B6] bg-white px-5 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => void onLogout()} type="button" variant="outline">
             Log out
           </Button>
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl px-4 py-4">
+      <main className="mx-auto max-w-6xl px-4 py-5">
         {loading ? (
           <div className="flex min-h-[50vh] items-center justify-center">
             <LoaderCircle className="h-7 w-7 animate-spin text-[#D4691A]" />
@@ -134,6 +151,8 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onBounced={(leadId) => void actions.markBounced(leadId)}
         onClose={closeLead}
         onEnrich={(leadId) => void actions.enrichLead(leadId)}
+        onChooseEmail={(leadId, candidateId) => void actions.chooseEmail(leadId, candidateId)}
+        onAddManualEmail={(leadId, payload) => void actions.addManualEmail(leadId, payload)}
         onLogPhoneFollowUp={(leadId, step, notes) => void actions.logPhoneFollowUp(leadId, step, notes)}
         onLost={(leadId) => void actions.markLost(leadId)}
         onRefreshDraft={(leadId) => void actions.refreshDraft(leadId)}

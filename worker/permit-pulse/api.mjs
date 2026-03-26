@@ -5,7 +5,13 @@ import { getLatestRuns, getRunById, enrichLead, startAutomationCycle } from './p
 import { generateLeadDraft } from './pipeline/draft.mjs';
 import { sendLead, sendReadyLeads } from './pipeline/send.mjs';
 import { logPhoneFollowUp, sendFollowUp, skipFollowUp } from './pipeline/follow-up.mjs';
-import { markLeadOutcome, switchLeadToFallback, vouchLeadEmail } from './pipeline/outcomes.mjs';
+import {
+  addManualLeadEmail,
+  chooseLeadEmailCandidate,
+  markLeadOutcome,
+  switchLeadToFallback,
+  vouchLeadEmail,
+} from './pipeline/outcomes.mjs';
 
 function corsHeaders() {
   return {
@@ -405,6 +411,28 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const switchFallbackMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/switch-fallback$/);
     if (switchFallbackMatch && request.method === 'POST') {
       return json(await switchLeadToFallback(db, decodeURIComponent(switchFallbackMatch[1]), user.email || null));
+    }
+
+    const chooseEmailMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/select-email$/);
+    if (chooseEmailMatch && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await chooseLeadEmailCandidate(
+        db,
+        decodeURIComponent(chooseEmailMatch[1]),
+        body.candidate_id,
+        user.email || null,
+      ));
+    }
+
+    const manualEmailMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/manual-email$/);
+    if (manualEmailMatch && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await addManualLeadEmail(
+        db,
+        decodeURIComponent(manualEmailMatch[1]),
+        body,
+        user.email || null,
+      ));
     }
 
     const draftRefreshMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/draft\/refresh$/);

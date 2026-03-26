@@ -113,6 +113,32 @@ export function switchToFallback(leadId: string) {
   )
 }
 
+export function selectLeadEmail(leadId: string, candidateId: string) {
+  return requestJson<{ success: boolean; email: string; fallback_email?: string | null; status: string }>(
+    `/api/leads/${encodeURIComponent(leadId)}/select-email`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ candidate_id: candidateId }),
+    },
+  )
+}
+
+export function addManualLeadEmail(leadId: string, payload: { email: string; note?: string }) {
+  return requestJson<{ success: boolean; email: string; fallback_email?: string | null; status: string }>(
+    `/api/leads/${encodeURIComponent(leadId)}/manual-email`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
 export function refreshDraft(leadId: string) {
   return requestJson<{ subject: string; body: string; cta_type: string }>(
     `/api/leads/${encodeURIComponent(leadId)}/draft/refresh`,

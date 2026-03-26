@@ -1,5 +1,5 @@
 import { appendLeadEvent } from '../lib/events.mjs';
-import { isGenericInbox } from '../lib/email.mjs';
+import { isGenericInbox, normalizeEmail } from '../lib/email.mjs';
 import { eq, order } from '../lib/supabase.mjs';
 import { daysSince } from '../lib/utils.mjs';
 
@@ -71,13 +71,19 @@ export async function selectLeadRoute(db, runId, leadId) {
   });
 
   const trustedPublishedCandidates = sortCandidates(candidates.filter(isTrustedPublished));
+  const operatorPreferredCandidate = lead.operator_vouched && lead.contact_email
+    ? candidates.find((candidate) => normalizeEmail(candidate.email_address) === normalizeEmail(lead.contact_email))
+    : null;
   const approvedCandidates = sortCandidates(
     candidates.filter((candidate) => Number(candidate.trust_score || 0) >= 25 && !candidate.is_research_only && isSendApproved(candidate)),
   );
 
-  const approvedPrimary = approvedCandidates.find((candidate) => !isGenericInbox(candidate.local_part)) || approvedCandidates[0] || null;
+  const approvedPrimary = operatorPreferredCandidate
+    || approvedCandidates.find((candidate) => !isGenericInbox(candidate.local_part))
+    || approvedCandidates[0]
+    || null;
   const approvedFallback = approvedCandidates.find((candidate) => candidate.id !== approvedPrimary?.id && Number(candidate.trust_score || 0) >= 20) || null;
-  const discoveredPrimary = approvedPrimary || pickPreferredPublished(trustedPublishedCandidates);
+  const discoveredPrimary = operatorPreferredCandidate || approvedPrimary || pickPreferredPublished(trustedPublishedCandidates);
   const discoveredFallback = approvedFallback
     || trustedPublishedCandidates.find((candidate) => candidate.id !== discoveredPrimary?.id)
     || null;
