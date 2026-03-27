@@ -44,6 +44,7 @@ import {
   getApplicantDisplay,
   getFilingRepDisplay,
   getPermitAddress,
+  STATUS_LABELS,
 } from "@/features/permit-pulse/lib/format"
 import { getLeadBlocker } from "@/features/permit-pulse/lib/operator"
 import type {
@@ -58,6 +59,7 @@ const STATUS_OPTIONS: LeadStatus[] = [
   "new",
   "reviewed",
   "researching",
+  "email-required",
   "enriched",
   "outreach-ready",
   "drafted",
@@ -118,6 +120,16 @@ function copyValue(label: string, value: string) {
 
 function openExternal(url: string) {
   window.open(url, "_blank", "noopener,noreferrer")
+}
+
+function buildSmsHref(phone: string, message: string) {
+  const recipient = phone.replace(/[^\d+]/g, "")
+  if (!recipient) {
+    return ""
+  }
+
+  const body = encodeURIComponent(message.trim())
+  return body ? `sms:${recipient}?body=${body}` : `sms:${recipient}`
 }
 
 function quickSearchUrl(query: string): string {
@@ -407,13 +419,33 @@ export function LeadDetailPanel({
     lead.enrichment.genericEmail ||
     contacts.find((contact) => contact.email)?.email ||
     ""
+  const allEmails = uniq([
+    primaryEmail,
+    lead.enrichment.directEmail,
+    lead.enrichment.genericEmail,
+    ...contacts.map((contact) => contact.email),
+  ])
   const phone = chosenContact?.phone || lead.enrichment.phone || contacts.find((contact) => contact.phone)?.phone || ""
+  const contactForm =
+    chosenContact?.contactFormUrl ||
+    lead.enrichment.contactFormUrl ||
+    contacts.find((contact) => contact.contactFormUrl)?.contactFormUrl ||
+    ""
   const linkedIn =
     chosenContact?.linkedInUrl ||
     lead.enrichment.linkedInUrl ||
     lead.companyProfile.linkedInUrl ||
     contacts.find((contact) => contact.linkedInUrl)?.linkedInUrl ||
     ""
+  const formMessage = lead.outreachDraft.shortEmail
+    ? lead.outreachDraft.shortEmail
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(" ")
+        .slice(0, 420)
+    : ""
   const companyCandidates = resolutionCandidates.filter((candidate) => candidate.type === "company")
   const personCandidates = resolutionCandidates.filter((candidate) => candidate.type === "person")
   const selectedCompanyCandidate = companyCandidates.find((candidate) => candidate.status === "selected") || null
@@ -426,6 +458,8 @@ export function LeadDetailPanel({
     && lead.outreachDraft.subject
     && lead.outreachDraft.shortEmail,
   )
+  const smsHref = buildSmsHref(phone, lead.outreachDraft.callOpener)
+  const needsEmailRoute = allEmails.length === 0
   const trustScore = getTrustScore(lead)
   const trustLabel = getTrustLabel(trustScore)
   const trustGaps = uniq([...readinessBlockers, ...contactabilityMissing]).slice(0, 4)
@@ -505,7 +539,7 @@ export function LeadDetailPanel({
                     <SelectContent>
                       {STATUS_OPTIONS.map((status) => (
                         <SelectItem key={status} value={status}>
-                          {status}
+                          {STATUS_LABELS[status]}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -564,6 +598,13 @@ export function LeadDetailPanel({
                   onAction={linkedIn ? () => openExternal(linkedIn) : undefined}
                   value={linkedIn}
                 />
+                <RouteRow
+                  actionLabel={contactForm ? "Open" : undefined}
+                  icon={Clipboard}
+                  label="Contact form"
+                  onAction={contactForm ? () => openExternal(contactForm) : undefined}
+                  value={contactForm}
+                />
               </div>
             </InfoBlock>
 
@@ -589,11 +630,33 @@ export function LeadDetailPanel({
 
             <InfoBlock title="Outreach">
               <div className="space-y-3">
-                <ControlButton
-                  icon={Sparkles}
-                  label="Refresh draft"
-                  onClick={() => onGenerateDraft(lead.id)}
-                />
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <ControlButton
+                    icon={Sparkles}
+                    label="Refresh draft"
+                    onClick={() => onGenerateDraft(lead.id)}
+                  />
+                  {smsHref ? (
+                    <ControlButton
+                      icon={Phone}
+                      label="Text now"
+                      onClick={() => {
+                        window.location.href = smsHref
+                      }}
+                    />
+                  ) : null}
+                </div>
+                {needsEmailRoute ? (
+                  <Button
+                    className="h-10 w-full justify-start rounded-2xl border-navy-200 bg-white/90 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+                    onClick={() => onStatusChange(lead.id, "email-required")}
+                    type="button"
+                    variant="outline"
+                  >
+                    <Mail className="h-4 w-4" />
+                    Move to Email Required
+                  </Button>
+                ) : null}
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Subject</label>
                   <Input
@@ -610,6 +673,24 @@ export function LeadDetailPanel({
                     value={lead.outreachDraft.shortEmail}
                   />
                 </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Text message</label>
+                  <Textarea
+                    className="min-h-[88px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                    onChange={(event) => onDraftChange(lead.id, { callOpener: event.target.value })}
+                    value={lead.outreachDraft.callOpener}
+                  />
+                </div>
+                {contactForm ? (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Form-safe message</label>
+                    <Textarea
+                      className="min-h-[112px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
+                      readOnly
+                      value={formMessage}
+                    />
+                  </div>
+                ) : null}
               </div>
             </InfoBlock>
 
@@ -884,7 +965,7 @@ export function LeadDetailPanel({
             </div>
 
             <div className="border-b border-navy-200/70 p-4 dark:border-dark-border/70">
-              <div className="grid gap-2 md:grid-cols-3">
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
                 <ControlButton
                   icon={Bot}
                   label="Run enrichment"
@@ -904,6 +985,15 @@ export function LeadDetailPanel({
                   loading={isSending}
                   onClick={() => onSendNow(lead.id)}
                 />
+                {smsHref ? (
+                  <ControlButton
+                    icon={Phone}
+                    label="Text now"
+                    onClick={() => {
+                      window.location.href = smsHref
+                    }}
+                  />
+                ) : null}
               </div>
 
               <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto]">
@@ -916,7 +1006,7 @@ export function LeadDetailPanel({
                     <SelectContent>
                       {STATUS_OPTIONS.map((status) => (
                         <SelectItem key={status} value={status}>
-                          {status}
+                          {STATUS_LABELS[status]}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -958,8 +1048,21 @@ export function LeadDetailPanel({
                     Use the cleanest route first. Everything else stays secondary.
                   </p>
                 </div>
-                <div className="rounded-full border border-navy-200/70 bg-cream-50/80 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-navy-500 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-muted">
-                  {chosenContact ? "Route ready" : "Still resolving"}
+                <div className="flex flex-wrap items-center gap-2">
+                  {needsEmailRoute ? (
+                    <Button
+                      className="h-9 rounded-full border-navy-200 bg-white/90 px-4 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+                      onClick={() => onStatusChange(lead.id, "email-required")}
+                      type="button"
+                      variant="outline"
+                    >
+                      <Mail className="h-4 w-4" />
+                      Move to Email Required
+                    </Button>
+                  ) : null}
+                  <div className="rounded-full border border-navy-200/70 bg-cream-50/80 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-navy-500 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-muted">
+                    {needsEmailRoute ? "Email missing" : chosenContact ? "Route ready" : "Still resolving"}
+                  </div>
                 </div>
               </div>
 
@@ -1373,8 +1476,33 @@ export function LeadDetailPanel({
                     </div>
                   </InfoBlock>
 
-                  <InfoBlock title="Draft helper" description="Editable outreach copy stays here, not all over the workspace.">
+                  <InfoBlock title="Draft helper" description="Manual control lives here when you need to override the machine and still move fast.">
                     <div className="grid gap-3">
+                      <div className="flex flex-wrap gap-2">
+                        {smsHref ? (
+                          <Button
+                            className="h-9 rounded-full bg-navy-900 px-4 text-white hover:bg-navy-800 dark:bg-dark-text dark:text-dark-bg dark:hover:bg-white"
+                            onClick={() => {
+                              window.location.href = smsHref
+                            }}
+                            type="button"
+                          >
+                            <Phone className="h-4 w-4" />
+                            Text now
+                          </Button>
+                        ) : null}
+                        {needsEmailRoute ? (
+                          <Button
+                            className="h-9 rounded-full border-navy-200 bg-white/90 px-4 text-navy-700 hover:bg-cream-100 dark:border-dark-border dark:bg-dark-bg dark:text-dark-text"
+                            onClick={() => onStatusChange(lead.id, "email-required")}
+                            type="button"
+                            variant="outline"
+                          >
+                            <Mail className="h-4 w-4" />
+                            Email Required
+                          </Button>
+                        ) : null}
+                      </div>
                       <div className="space-y-1.5">
                         <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Subject line</label>
                         <Input
@@ -1401,7 +1529,7 @@ export function LeadDetailPanel({
                       </div>
                       <div className="grid gap-3 xl:grid-cols-2">
                         <div className="space-y-1.5">
-                          <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Call opener</label>
+                          <label className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-500 dark:text-dark-muted">Text message</label>
                           <Textarea
                             className="min-h-[80px] rounded-[22px] border-navy-200 bg-white/90 dark:border-dark-border dark:bg-dark-card"
                             onChange={(event) => onDraftChange(lead.id, { callOpener: event.target.value })}

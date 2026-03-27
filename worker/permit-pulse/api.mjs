@@ -1,5 +1,7 @@
 import {
+  drainAutomationQueue,
   enrichLeadNow,
+  getAutomationJobs,
   getPermitAutomationSnapshot,
   rejectLeadCandidate,
   refreshLeadDraftNow,
@@ -9,6 +11,7 @@ import {
   runPermitAutomationCycle,
   sendLeadNow,
   selectLeadCandidate,
+  startScanRun,
   setLeadPrimaryContact,
   updateLeadAutomationState,
 } from './automation.mjs';
@@ -59,7 +62,7 @@ async function authenticateRequest(request, env) {
   return response.json();
 }
 
-export async function handlePermitPulseAutomationRequest(request, env) {
+export async function handlePermitPulseAutomationRequest(request, env, ctx) {
   const url = new URL(request.url);
 
   if (!url.pathname.startsWith('/api/v2')) {
@@ -99,6 +102,13 @@ export async function handlePermitPulseAutomationRequest(request, env) {
 
     if (url.pathname === '/api/v2/run' && request.method === 'POST') {
       const result = await runPermitAutomationCycle(env);
+      ctx?.waitUntil?.(drainAutomationQueue(env, { limit: 24 }));
+      return json(result);
+    }
+
+    if (url.pathname === '/api/v2/jobs/scan' && request.method === 'POST') {
+      const result = await startScanRun(env, { trigger: 'manual' });
+      ctx?.waitUntil?.(drainAutomationQueue(env, { limit: 24 }));
       return json(result);
     }
 
@@ -119,8 +129,17 @@ export async function handlePermitPulseAutomationRequest(request, env) {
     }
 
     if (url.pathname === '/api/v2/jobs' && request.method === 'GET') {
-      const snapshot = await getPermitAutomationSnapshot(env);
-      return json({ jobs: snapshot.jobs });
+      const runId = url.searchParams.get('runId') || undefined;
+      const payload = await getAutomationJobs(env, { runId });
+      return json(payload);
+    }
+
+    const leadJobsMatch = url.pathname.match(/^\/api\/v2\/leads\/([^/]+)\/jobs$/);
+    if (leadJobsMatch && request.method === 'GET') {
+      const payload = await getAutomationJobs(env, {
+        leadId: decodeURIComponent(leadJobsMatch[1]),
+      });
+      return json(payload);
     }
 
     if (url.pathname === '/api/v2/sent-log' && request.method === 'GET') {
@@ -206,6 +225,7 @@ export async function handlePermitPulseAutomationRequest(request, env) {
     const retryJobMatch = url.pathname.match(/^\/api\/v2\/jobs\/([^/]+)\/retry$/);
     if (retryJobMatch && request.method === 'POST') {
       const snapshot = await retryAutomationJob(env, decodeURIComponent(retryJobMatch[1]));
+      ctx?.waitUntil?.(drainAutomationQueue(env, { limit: 12 }));
       return json(snapshot);
     }
 
@@ -216,10 +236,13 @@ export async function handlePermitPulseAutomationRequest(request, env) {
           'GET /api/v2/health': 'Automation health',
           'GET /api/v2/state': 'Full lead workspace snapshot',
           'GET /api/v2/jobs': 'Recent automation job records',
+          'GET /api/v2/jobs?runId=...': 'Automation jobs for one scan run',
           'GET /api/v2/sent-log': 'Sent outreach records',
-          'POST /api/v2/run': 'Run ingest plus a small enrichment/send batch',
+          'POST /api/v2/run': 'Legacy alias for queueing a background scan run',
+          'POST /api/v2/jobs/scan': 'Queue a background scan run',
           'POST /api/v2/jobs/ingest': 'Run permit ingest only',
           'POST /api/v2/jobs/enrich?limit=4': 'Run a small enrichment batch',
+          'GET /api/v2/leads/:id/jobs': 'Lead-specific automation job history',
           'POST /api/v2/leads/:id/status': 'Persist a lead status',
           'POST /api/v2/leads/:id/enrich': 'Run enrichment for one lead',
           'POST /api/v2/leads/:id/enrichment': 'Persist manual enrichment',
@@ -244,4 +267,4 @@ export async function handlePermitPulseAutomationRequest(request, env) {
   }
 }
 
-export { runPermitAutomationCycle };
+export { drainAutomationQueue, runPermitAutomationCycle };

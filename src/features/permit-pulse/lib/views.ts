@@ -52,6 +52,13 @@ export const SYSTEM_SAVED_VIEWS: SavedView[] = [
     rule: { needsEnrichment: true, tiers: ["hot", "warm"] },
   },
   {
+    id: "email-required",
+    name: "Email Required",
+    description: "Leads you parked until the right inbox is found manually.",
+    accent: "bronze",
+    rule: { statuses: ["email-required"] },
+  },
+  {
     id: "follow-up-due",
     name: "Follow Up Due",
     description: "Leads that need a second touch.",
@@ -82,6 +89,13 @@ export const SYSTEM_SAVED_VIEWS: SavedView[] = [
 ]
 
 export const ENRICHMENT_QUEUE_PRESETS: QueuePreset[] = [
+  {
+    id: "email-required",
+    name: "Email Required",
+    description: "Manual hold list for leads that still need a real email address.",
+    accent: "bronze",
+    rule: { statuses: ["email-required"] },
+  },
   {
     id: "hot-missing-contact",
     name: "Hot, missing contact",

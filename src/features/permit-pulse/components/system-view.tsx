@@ -90,8 +90,16 @@ function JobStatCard({
 
 function formatJobLabel(job: AutomationJob): string {
   switch (job.jobType) {
+    case "scan_run":
+      return "Scan run"
     case "permit_ingest":
       return "Permit ingest"
+    case "resolve":
+      return "Resolve"
+    case "enrich":
+      return "Enrich"
+    case "draft":
+      return "Draft"
     case "enrichment_batch":
       return "Enrichment batch"
     case "lead_enrichment":
@@ -150,10 +158,17 @@ export function SystemView({
   onResetProfile,
 }: SystemViewProps) {
   const jobStats = {
+    queued: jobs.filter((job) => job.status === "queued").length,
     running: jobs.filter((job) => job.status === "running" || job.status === "retrying").length,
     failed: jobs.filter((job) => job.status === "failed").length,
     succeeded: jobs.filter((job) => job.status === "succeeded").length,
   }
+  const providerFailures = jobs.reduce<Record<string, number>>((result, job) => {
+    if (job.status === "failed") {
+      result[job.provider] = (result[job.provider] || 0) + 1
+    }
+    return result
+  }, {})
   const recentJobs = jobs.slice(0, 8)
   const providers = [
     {
@@ -202,7 +217,7 @@ export function SystemView({
       label: "ZeroBounce",
       active: Boolean(automationHealth?.hasZeroBounce),
       icon: ShieldCheck,
-      detail: "Reserved for high-value leads right before send, so credits are not wasted.",
+      detail: "Optional only. MetroGlass Leads no longer depends on ZeroBounce for guarded auto-send.",
     },
   ]
 
@@ -306,7 +321,8 @@ export function SystemView({
               description="Recent automation state, so you can tell whether the machine ran, stalled, or failed without reading raw logs."
               title="Run ledger"
             >
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <JobStatCard label="Queued" tone="neutral" value={jobStats.queued} />
                 <JobStatCard label="Running" tone="neutral" value={jobStats.running} />
                 <JobStatCard label="Failed" tone={jobStats.failed > 0 ? "warning" : "neutral"} value={jobStats.failed} />
                 <JobStatCard
@@ -315,6 +331,19 @@ export function SystemView({
                   value={jobStats.succeeded}
                 />
               </div>
+
+              {Object.keys(providerFailures).length > 0 ? (
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {Object.entries(providerFailures).map(([provider, count]) => (
+                    <span
+                      key={provider}
+                      className="rounded-full border border-orange-200 bg-orange-50/80 px-3 py-1 text-xs text-orange-700 dark:border-orange-800/40 dark:bg-orange-900/15 dark:text-orange-200"
+                    >
+                      {provider}: {count} failed
+                    </span>
+                  ))}
+                </div>
+              ) : null}
 
               <div className="mt-5 space-y-3">
                 {recentJobs.length === 0 ? (

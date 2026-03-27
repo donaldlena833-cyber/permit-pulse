@@ -16,6 +16,7 @@ export const STATUS_LABELS: Record<LeadStatus, string> = {
   new: "New",
   reviewed: "Reviewed",
   researching: "Researching",
+  "email-required": "Email Required",
   enriched: "Enriched",
   "outreach-ready": "Outreach ready",
   drafted: "Drafted",

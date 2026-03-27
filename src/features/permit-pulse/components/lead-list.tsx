@@ -89,6 +89,13 @@ export function LeadList({
                 </button>
                 <button
                   className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
+                  onClick={() => onBulkSetStatus("email-required")}
+                  type="button"
+                >
+                  Email Required
+                </button>
+                <button
+                  className="rounded-full border border-navy-200 bg-white px-3 py-1.5 text-[11px] dark:border-dark-border dark:bg-dark-bg"
                   onClick={() => onBulkSetStatus("enriched")}
                   type="button"
                 >
@@ -145,7 +152,6 @@ export function LeadList({
                             {lead.nextAction.label || lead.humanSummary || "Review lead"}
                           </div>
                           <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-navy-500 dark:text-dark-muted">
-                            <span>{lead.borough}</span>
                             <span>{formatCurrency(lead.estimated_job_costs)}</span>
                             <span className="inline-flex items-center gap-1">
                               <Clock3 className="h-3.5 w-3.5" />

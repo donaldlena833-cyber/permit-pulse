@@ -34,7 +34,7 @@ export function getAttentionItems(leads: PermitLead[], health: AutomationHealth 
       (lead.workflow.status === "new" || lead.workflow.status === "reviewed") &&
       (lead.leadTier === "hot" || lead.leadTier === "warm"),
   ).length
-  const researchCount = activeLeads.filter(needsEnrichment).length
+  const researchCount = activeLeads.filter((lead) => lead.workflow.status === "email-required" || needsEnrichment(lead)).length
   const readyCount = activeLeads.filter(isOutreachReady).length
   const sentToday = activeLeads.filter((lead) => {
     const latestSent = lead.outreachHistory.find((item) => item.status === "sent")?.sentAt
@@ -94,7 +94,7 @@ export function getPipelineColumns(leads: PermitLead[]): PipelineColumn[] {
       title: "Research",
       description: "Still being qualified, enriched, or held for a stronger route.",
       filter: (lead: PermitLead) =>
-        ["new", "reviewed", "researching", "enriched"].includes(lead.workflow.status) || needsEnrichment(lead),
+        ["new", "reviewed", "researching", "email-required", "enriched"].includes(lead.workflow.status) || needsEnrichment(lead),
     },
     {
       id: "ready",
@@ -180,7 +180,6 @@ export function getSystemAlerts(
       !health.hasBrave ? "Brave" : "",
       !health.hasGoogleMaps ? "Google Maps" : "",
       !health.hasFirecrawl ? "Firecrawl" : "",
-      !health.hasZeroBounce ? "ZeroBounce" : "",
     ].filter(Boolean)
 
     if (missingProviders.length > 0) {
@@ -194,7 +193,7 @@ export function getSystemAlerts(
       alerts.push({
         id: "providers-live",
         title: "Automation stack is online",
-        description: "Supabase, Brave, Maps, Firecrawl, and ZeroBounce are available for live enrichment.",
+        description: "Supabase, Brave, Maps, Firecrawl, and Gmail are available for live enrichment and sending.",
         tone: "success",
       })
     }

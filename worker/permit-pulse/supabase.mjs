@@ -86,6 +86,10 @@ function limit(value) {
   return `limit=${value}`;
 }
 
+function not(field, operator, value) {
+  return `${field}=not.${operator}.${escapeValue(value)}`;
+}
+
 export function createSupabaseGateway(env) {
   return {
     async select(table, options = {}) {
@@ -169,7 +173,7 @@ export function createSupabaseGateway(env) {
         this.select('outreach', { ordering: [order('created_at', 'desc')], pageLimit: 500 }),
         this.select('activity_log', { ordering: [order('created_at', 'desc')], pageLimit: 1000 }),
         this.safeSelect('resolution_candidates', { ordering: [order('confidence', 'desc')], pageLimit: 1000 }),
-        this.safeSelect('automation_jobs', { ordering: [order('created_at', 'desc')], pageLimit: 60 }),
+        this.safeSelect('automation_jobs', { ordering: [order('created_at', 'desc')], pageLimit: 250 }),
       ]);
 
       return { leads, properties, companies, contacts, facts, outreach, activity, candidates, jobs };
@@ -274,6 +278,70 @@ export function createSupabaseGateway(env) {
       }))[0] || null;
     },
 
+    async getAutomationJobs(options = {}) {
+      const {
+        runId,
+        leadId,
+        statuses = [],
+        pageLimit = 100,
+      } = options;
+
+      const filters = [];
+      if (runId) {
+        filters.push(eq('run_id', runId));
+      }
+      if (leadId) {
+        filters.push(eq('lead_id', leadId));
+      }
+      if (statuses.length === 1) {
+        filters.push(eq('status', statuses[0]));
+      }
+
+      const rows = await this.safeSelect('automation_jobs', {
+        filters,
+        ordering: [order('created_at', 'desc')],
+        pageLimit,
+      });
+
+      return statuses.length <= 1
+        ? rows
+        : rows.filter((row) => statuses.includes(row.status));
+    },
+
+    async getRunnableAutomationJobs(nowIso, pageLimit = 16) {
+      const [queued, retrying] = await Promise.all([
+        this.safeSelect('automation_jobs', {
+          filters: [eq('status', 'queued')],
+          ordering: [order('created_at', 'asc')],
+          pageLimit,
+        }),
+        this.safeSelect('automation_jobs', {
+          filters: [eq('status', 'retrying')],
+          ordering: [order('created_at', 'asc')],
+          pageLimit,
+        }),
+      ]);
+
+      return [...queued, ...retrying]
+        .filter((job) => !job.next_retry_at || job.next_retry_at <= nowIso)
+        .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime())
+        .slice(0, pageLimit);
+    },
+
+    async getRunChildren(runId, options = {}) {
+      const { excludeJobId = null, pageLimit = 500 } = options;
+      const filters = [eq('run_id', runId)];
+      if (excludeJobId) {
+        filters.push(not('id', 'eq', excludeJobId));
+      }
+
+      return this.safeSelect('automation_jobs', {
+        filters,
+        ordering: [order('created_at', 'asc')],
+        pageLimit,
+      });
+    },
+
     async safeInsertAutomationJob(payload) {
       try {
         return await this.insert('automation_jobs', payload);
@@ -314,9 +382,10 @@ export function createSupabaseGateway(env) {
     gt,
     gte,
     lt,
+    not,
     order,
     limit,
   };
 }
 
-export { eq, gt, gte, lt, order, limit };
+export { eq, gt, gte, lt, not, order, limit };

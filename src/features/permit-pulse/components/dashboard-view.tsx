@@ -16,7 +16,7 @@ import { SectionCard } from "@/features/permit-pulse/components/section-card"
 import { StatsGrid } from "@/features/permit-pulse/components/stats-grid"
 import { formatCurrency, formatNumber, formatRelativeDate, getPermitAddress } from "@/features/permit-pulse/lib/format"
 import type { AttentionItem, SystemAlert } from "@/features/permit-pulse/lib/operator"
-import type { DashboardActivity, DashboardStat, PermitLead } from "@/types/permit-pulse"
+import type { AutomationRunSummary, DashboardActivity, DashboardStat, PermitLead } from "@/types/permit-pulse"
 import { cn } from "@/lib/utils"
 
 interface DashboardViewProps {
@@ -35,6 +35,7 @@ interface DashboardViewProps {
   topLeads: PermitLead[]
   activities: DashboardActivity[]
   lastScanAt: string | null
+  runSummary?: AutomationRunSummary | null
   onScan: () => void
   scanning: boolean
   onOpenLead: (leadId: string) => void
@@ -88,6 +89,30 @@ function AttentionCard({
   )
 }
 
+function EmptyPanel({
+  title,
+  description,
+  actionLabel,
+  onClick,
+}: {
+  title: string
+  description: string
+  actionLabel?: string
+  onClick?: () => void
+}) {
+  return (
+    <div className="rounded-[24px] border border-dashed border-navy-200/80 bg-gradient-to-br from-white/90 to-cream-50/80 p-5 dark:border-dark-border/80 dark:from-dark-card/90 dark:to-dark-bg">
+      <div className="text-sm font-semibold tracking-[-0.02em] text-navy-900 dark:text-dark-text">{title}</div>
+      <p className="mt-2 max-w-xl text-sm leading-6 text-navy-500 dark:text-dark-muted">{description}</p>
+      {actionLabel && onClick ? (
+        <Button className="mt-4 rounded-full" onClick={onClick} type="button" variant="outline">
+          {actionLabel}
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
 export function DashboardView({
   stats,
   attentionItems,
@@ -95,6 +120,7 @@ export function DashboardView({
   topLeads,
   activities,
   lastScanAt,
+  runSummary,
   onScan,
   scanning,
   onOpenLead,
@@ -170,8 +196,24 @@ export function DashboardView({
               </div>
               <div className="mt-1 text-sm font-medium text-navy-900 dark:text-dark-text">
                 {lastScanAt ? `Last scan ${formatRelativeDate(lastScanAt)}` : "No scan yet"}
+            </div>
+          </div>
+
+          {runSummary ? (
+            <div className="rounded-[22px] border border-navy-200/70 bg-white/85 p-4 dark:border-dark-border/70 dark:bg-dark-card/80">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                Latest run
+              </div>
+              <div className="mt-2 text-sm font-semibold text-navy-900 dark:text-dark-text">
+                {runSummary.latestSummary}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-navy-500 dark:text-dark-muted">
+                <span>{runSummary.completedLeadCount}/{runSummary.queuedLeadCount} resolved</span>
+                <span>{runSummary.sentCount} sent</span>
+                <span>{runSummary.failedJobs} failed</span>
               </div>
             </div>
+          ) : null}
             <Button className="rounded-full bg-orange-500 px-4 text-white hover:bg-orange-600" disabled={scanning} onClick={onScan}>
               {scanning ? "Scanning..." : "Scan"}
             </Button>
@@ -218,30 +260,39 @@ export function DashboardView({
           title="Next leads"
         >
           <div className="space-y-3">
-            {topLeads.slice(0, 4).map((lead) => (
-              <button
-                key={lead.id}
-                className="w-full rounded-[22px] border border-navy-200/70 bg-cream-50/80 p-4 text-left dark:border-dark-border/70 dark:bg-dark-bg"
-                onClick={() => onOpenLead(lead.id)}
-                type="button"
-              >
-                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
-                  {getPermitAddress(lead)}
-                </div>
-                <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">{lead.nextAction.label}</div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
-                  <PriorityBadge label={lead.priorityLabel} />
-                </div>
-              </button>
-            ))}
+            {topLeads.length === 0 ? (
+              <EmptyPanel
+                actionLabel="Open opportunities"
+                description="Run a scan or widen the search window. When the queue is light, this space should still tell you what to do next."
+                onClick={() => onOpenOpportunities("feed")}
+                title="No leads are staged right now"
+              />
+            ) : (
+              topLeads.slice(0, 4).map((lead) => (
+                <button
+                  key={lead.id}
+                  className="w-full rounded-[22px] border border-navy-200/70 bg-cream-50/80 p-4 text-left dark:border-dark-border/70 dark:bg-dark-bg"
+                  onClick={() => onOpenLead(lead.id)}
+                  type="button"
+                >
+                  <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                    {getPermitAddress(lead)}
+                  </div>
+                  <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">{lead.nextAction.label}</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                    <PriorityBadge label={lead.priorityLabel} />
+                  </div>
+                </button>
+              ))
+            )}
           </div>
         </SectionCard>
 
-        {systemAlerts.filter((alert) => alert.tone !== "success").slice(0, 2).length > 0 ? (
-          <SectionCard description="Only show system issues here when they need attention." title="Watch">
-            <div className="space-y-3">
-              {systemAlerts.filter((alert) => alert.tone !== "success").slice(0, 2).map((alert) => (
+        <SectionCard description="Only show system issues here when they need attention." title="Watch">
+          <div className="space-y-3">
+            {systemAlerts.filter((alert) => alert.tone !== "success").slice(0, 2).length > 0 ? (
+              systemAlerts.filter((alert) => alert.tone !== "success").slice(0, 2).map((alert) => (
                 <div
                   key={alert.id}
                   className={cn(
@@ -254,10 +305,15 @@ export function DashboardView({
                   <div className="text-sm font-semibold text-navy-900 dark:text-dark-text">{alert.title}</div>
                   <p className="mt-1 text-sm leading-6 text-navy-600 dark:text-dark-muted">{alert.description}</p>
                 </div>
-              ))}
-            </div>
-          </SectionCard>
-        ) : null}
+              ))
+            ) : (
+              <EmptyPanel
+                description="Worker health looks calm. Use this space for true exceptions, not background noise."
+                title="No system issues need attention"
+              />
+            )}
+          </div>
+        </SectionCard>
       </div>
 
       <div className="hidden space-y-6 md:block">
@@ -281,45 +337,54 @@ export function DashboardView({
         <StatsGrid items={statsWithIcons} />
 
         <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-          <SectionCard
-            description="These are the leads most likely to matter right now, based on fit, recency, contactability, and priority."
-            title="Top opportunities"
-          >
-            <div className="space-y-3">
-              {topLeads.slice(0, 5).map((lead) => (
-                <button
-                  key={lead.id}
-                  className="w-full rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-sm dark:border-dark-border/70 dark:bg-dark-bg"
-                  onClick={() => onOpenLead(lead.id)}
-                  type="button"
-                >
-                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0">
-                      <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
-                        {getPermitAddress(lead)}
+            <SectionCard
+              description="These are the leads most likely to matter right now, based on fit, recency, contactability, and priority."
+              title="Top opportunities"
+            >
+              <div className="space-y-3">
+                {topLeads.length === 0 ? (
+                  <EmptyPanel
+                    actionLabel="Run scan"
+                    description="No leads are staged locally right now. Kick off a scan, or move manual holds into Email Required so the queue stays honest."
+                    onClick={onScan}
+                    title="Top opportunities will show up here"
+                  />
+                ) : (
+                  topLeads.slice(0, 5).map((lead) => (
+                    <button
+                      key={lead.id}
+                      className="w-full rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-sm dark:border-dark-border/70 dark:bg-dark-bg"
+                      onClick={() => onOpenLead(lead.id)}
+                      type="button"
+                    >
+                      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                        <div className="min-w-0">
+                          <div className="text-base font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">
+                            {getPermitAddress(lead)}
+                          </div>
+                          <p className="mt-1.5 line-clamp-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">
+                            {lead.humanSummary}
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
+                            <ContactabilityBadge contactability={lead.contactability} />
+                            <PriorityBadge label={lead.priorityLabel} />
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-left xl:text-right">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                            Estimated cost
+                          </div>
+                          <div className="mt-1 text-lg font-semibold tracking-[-0.03em] text-navy-800 dark:text-dark-text">
+                            {formatCurrency(lead.estimated_job_costs)}
+                          </div>
+                        </div>
                       </div>
-                      <p className="mt-1.5 line-clamp-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">
-                        {lead.humanSummary}
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <LeadScoreBadge score={lead.score} tier={lead.leadTier} />
-                        <ContactabilityBadge contactability={lead.contactability} />
-                        <PriorityBadge label={lead.priorityLabel} />
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-left xl:text-right">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                        Estimated cost
-                      </div>
-                      <div className="mt-1 text-lg font-semibold tracking-[-0.03em] text-navy-800 dark:text-dark-text">
-                        {formatCurrency(lead.estimated_job_costs)}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </SectionCard>
+                    </button>
+                  ))
+                )}
+              </div>
+            </SectionCard>
 
           <div className="space-y-6">
             <SectionCard
@@ -351,28 +416,35 @@ export function DashboardView({
               title="Recent changes"
             >
               <div className="space-y-3">
-                {activities.slice(0, 6).map((activity) => (
-                  <button
-                    key={activity.id}
-                    className="flex w-full items-start gap-3 rounded-[22px] border border-navy-200/70 bg-cream-50/75 p-4 text-left dark:border-dark-border/70 dark:bg-dark-bg"
-                    onClick={() => onOpenLead(activity.leadId)}
-                    type="button"
-                  >
-                    <div className="mt-1 rounded-full bg-orange-500/15 p-1.5 text-orange-600 dark:text-orange-300">
-                      <Activity className="h-3.5 w-3.5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="font-medium text-navy-800 dark:text-dark-text">{activity.title}</div>
-                        <div className="text-[11px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                          {formatRelativeDate(activity.createdAt)}
-                        </div>
+                {activities.length === 0 ? (
+                  <EmptyPanel
+                    description="Once scans, enrichments, or manual moves happen, this feed becomes the operator memory for the day."
+                    title="No activity has been recorded yet"
+                  />
+                ) : (
+                  activities.slice(0, 6).map((activity) => (
+                    <button
+                      key={activity.id}
+                      className="flex w-full items-start gap-3 rounded-[22px] border border-navy-200/70 bg-cream-50/75 p-4 text-left dark:border-dark-border/70 dark:bg-dark-bg"
+                      onClick={() => onOpenLead(activity.leadId)}
+                      type="button"
+                    >
+                      <div className="mt-1 rounded-full bg-orange-500/15 p-1.5 text-orange-600 dark:text-orange-300">
+                        <Activity className="h-3.5 w-3.5" />
                       </div>
-                      <div className="mt-1 text-sm text-navy-600 dark:text-dark-muted">{activity.address}</div>
-                      <div className="mt-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">{activity.detail}</div>
-                    </div>
-                  </button>
-                ))}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="font-medium text-navy-800 dark:text-dark-text">{activity.title}</div>
+                          <div className="text-[11px] uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
+                            {formatRelativeDate(activity.createdAt)}
+                          </div>
+                        </div>
+                        <div className="mt-1 text-sm text-navy-600 dark:text-dark-muted">{activity.address}</div>
+                        <div className="mt-2 text-sm leading-6 text-navy-500 dark:text-dark-muted">{activity.detail}</div>
+                      </div>
+                    </button>
+                  ))
+                )}
               </div>
             </SectionCard>
           </div>

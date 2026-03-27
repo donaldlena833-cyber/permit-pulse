@@ -3,7 +3,7 @@ import { RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { BOROUGH_OPTIONS } from "@/features/permit-pulse/lib/format"
+import { BOROUGH_OPTIONS, STATUS_LABELS } from "@/features/permit-pulse/lib/format"
 import type { LeadFilters, LeadStatus, SavedView } from "@/types/permit-pulse"
 import { cn } from "@/lib/utils"
 
@@ -11,6 +11,7 @@ const STATUS_OPTIONS: LeadStatus[] = [
   "new",
   "reviewed",
   "researching",
+  "email-required",
   "enriched",
   "outreach-ready",
   "drafted",
@@ -116,7 +117,7 @@ export function SmartFilterBar({
             <SelectItem value="ALL">All statuses</SelectItem>
             {STATUS_OPTIONS.map((status) => (
               <SelectItem key={status} value={status}>
-                {status}
+                {STATUS_LABELS[status]}
               </SelectItem>
             ))}
           </SelectContent>
@@ -209,7 +210,7 @@ export function SmartFilterBar({
             <SelectItem value="ALL">All statuses</SelectItem>
             {STATUS_OPTIONS.map((status) => (
               <SelectItem key={status} value={status}>
-                {status}
+                {STATUS_LABELS[status]}
               </SelectItem>
             ))}
           </SelectContent>

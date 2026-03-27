@@ -3,6 +3,7 @@ import { toast } from "sonner"
 
 import { DEFAULT_FILTERS, METROGLASSPRO_PROFILE } from "@/features/permit-pulse/data/profile"
 import {
+  fetchAutomationJobs,
   fetchAutomationHealth,
   fetchAutomationSnapshot,
   persistLeadDraft,
@@ -12,9 +13,9 @@ import {
   refreshLeadDraft,
   retryAutomationJob,
   runLeadEnrichment,
-  runPermitIngestJob,
   sendLeadImmediately,
   selectResolverCandidate,
+  startAutomationScan,
   setPrimaryLeadContact,
 } from "@/features/permit-pulse/lib/remote"
 import { loadStore, saveStore } from "@/features/permit-pulse/lib/storage"
@@ -38,6 +39,7 @@ import {
 import type {
   AutomationHealth,
   AutomationJob,
+  AutomationRunSummary,
   AppTheme,
   EnrichmentData,
   LeadFilters,
@@ -53,58 +55,12 @@ import type {
 } from "@/types/permit-pulse"
 
 const API_BASE = "https://data.cityofnewyork.us/resource/rbx6-tga4.json"
-const BLOCKED_AUTO_SEND_DOMAINS = [
-  "contactout.com",
-  "thebluebook.com",
-  "rocketreach.co",
-  "rocketreach.io",
-  "lusha.com",
-  "seamless.ai",
-  "hunter.io",
-  "skrapp.io",
-  "salesintel.io",
-  "adapt.io",
-  "apollo.io",
-  "webflow.io",
-  "wix.com",
-  "wixsite.com",
-  "squarespace.com",
-  "wordpress.com",
-  "weebly.com",
-  "godaddysites.com",
-]
 
 function mapById(leads: PermitLead[]): Record<string, PermitLead> {
   return leads.reduce<Record<string, PermitLead>>((result, lead) => {
     result[lead.id] = lead
     return result
   }, {})
-}
-
-function emailDomain(email: string): string {
-  return email.split("@")[1]?.trim().toLowerCase() ?? ""
-}
-
-function isBlockedAutoSendDomain(email: string): boolean {
-  const domain = emailDomain(email)
-  return BLOCKED_AUTO_SEND_DOMAINS.some((entry) => domain === entry || domain.endsWith(`.${entry}`))
-}
-
-function shouldAutoSendLead(lead: PermitLead | undefined): boolean {
-  if (!lead) {
-    return false
-  }
-
-  const availableEmails = lead.contacts
-    .map((contact) => contact.email)
-    .filter((email): email is string => Boolean(email) && !isBlockedAutoSendDomain(email))
-
-  return Boolean(
-    availableEmails.length > 0
-    && lead.outreachReadiness.label !== "Blocked"
-    && lead.outreachDraft.subject
-    && lead.outreachDraft.shortEmail,
-  )
 }
 
 function buildSodaUrl(profile: TenantProfile, filters: LeadFilters): string {
@@ -139,6 +95,8 @@ export function usePermitPulse() {
   const [remoteHydrating, setRemoteHydrating] = useState(true)
   const [automationHealth, setAutomationHealth] = useState<AutomationHealth | null>(null)
   const [automationJobs, setAutomationJobs] = useState<AutomationJob[]>([])
+  const [latestRunSummary, setLatestRunSummary] = useState<AutomationRunSummary | null>(null)
+  const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [enrichingLeadId, setEnrichingLeadId] = useState<string | null>(null)
   const [sendingLeadId, setSendingLeadId] = useState<string | null>(null)
   const initialScanRef = useRef(false)
@@ -236,13 +194,14 @@ export function usePermitPulse() {
     saveStore(store)
   }, [store])
 
-  const applyRemoteSnapshot = useCallback((snapshot: { leads: PermitLead[]; sentLog: SentLogEntry[]; jobs: AutomationJob[] }) => {
+  const applyRemoteSnapshot = useCallback((snapshot: { leads: PermitLead[]; sentLog: SentLogEntry[]; jobs: AutomationJob[]; latestRunSummary?: AutomationRunSummary | null }) => {
     const orderedLeads = sortLeads(snapshot.leads, "priority")
     const orderedJobs = [...snapshot.jobs].sort(
       (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
     )
 
     setAutomationJobs(orderedJobs)
+    setLatestRunSummary(snapshot.latestRunSummary ?? null)
 
     setStore((currentStore) => ({
       ...currentStore,
@@ -278,6 +237,69 @@ export function usePermitPulse() {
   }, [applyRemoteSnapshot])
 
   useEffect(() => {
+    if (!activeRunId) {
+      return undefined
+    }
+
+    let cancelled = false
+
+    const poll = async () => {
+      try {
+        const [snapshot, jobsPayload] = await Promise.all([
+          fetchAutomationSnapshot(),
+          fetchAutomationJobs(activeRunId),
+        ])
+
+        if (cancelled) {
+          return
+        }
+
+        if (snapshot) {
+          applyRemoteSnapshot({
+            ...snapshot,
+            latestRunSummary: jobsPayload.latestRunSummary ?? snapshot.latestRunSummary ?? null,
+            jobs: jobsPayload.jobs.length > 0 ? jobsPayload.jobs : snapshot.jobs,
+          })
+        } else if (jobsPayload.jobs.length > 0) {
+          setAutomationJobs(jobsPayload.jobs)
+          setLatestRunSummary(jobsPayload.latestRunSummary ?? null)
+        }
+
+        const latestRun = jobsPayload.latestRunSummary
+        if (!latestRun || (latestRun.status !== "running" && latestRun.status !== "queued" && latestRun.status !== "retrying")) {
+          setActiveRunId(null)
+          setLoading(false)
+          if (latestRun) {
+            toast.success("Scan run finished", {
+              description:
+                latestRun.sentCount > 0
+                  ? `${latestRun.completedLeadCount} leads resolved and ${latestRun.sentCount} emails sent.`
+                  : `${latestRun.completedLeadCount} leads resolved${latestRun.failedJobs > 0 ? `, ${latestRun.failedJobs} need review` : ""}.`,
+            })
+          }
+          return
+        }
+
+        window.setTimeout(() => {
+          void poll()
+        }, 3500)
+      } catch {
+        if (!cancelled) {
+          window.setTimeout(() => {
+            void poll()
+          }, 5000)
+        }
+      }
+    }
+
+    void poll()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeRunId, applyRemoteSnapshot])
+
+  useEffect(() => {
     const isDark = store.theme === "dark"
     document.documentElement.classList.toggle("dark", isDark)
     document.documentElement.style.colorScheme = isDark ? "dark" : "light"
@@ -286,69 +308,25 @@ export function usePermitPulse() {
   const scanLeads = useCallback(async () => {
     setLoading(true)
     setError(null)
+    let queuedRun = false
 
     try {
       const remoteSnapshot = await fetchAutomationSnapshot()
       if (remoteSnapshot) {
-        const ingestResult = await runPermitIngestJob()
-        const ingestedLeadRefs = Array.from(
-          new Map(
-            (ingestResult.leads || [])
-              .map((lead) => {
-                const actionId = lead.permit_key || lead.id || ""
-                const snapshotId = lead.permit_key || actionId
-                return actionId ? [actionId, { actionId, snapshotId }] : null
-              })
-              .filter((entry): entry is [string, { actionId: string; snapshotId: string }] => Boolean(entry)),
-          ).values(),
-        )
+        const run = await startAutomationScan()
+        queuedRun = true
+        setActiveRunId(run.runId)
 
-        let latestSnapshot = await fetchAutomationSnapshot()
+        const latestSnapshot = await fetchAutomationSnapshot()
         if (latestSnapshot) {
           applyRemoteSnapshot(latestSnapshot)
         }
 
-        let enrichedCount = 0
-        let sentCount = 0
-        let failedCount = 0
-
-        for (const leadRef of ingestedLeadRefs) {
-          try {
-            latestSnapshot = await runLeadEnrichment(leadRef.actionId)
-            enrichedCount += 1
-
-            const refreshedLead = latestSnapshot.leads.find((lead) => lead.id === leadRef.snapshotId)
-            if (shouldAutoSendLead(refreshedLead)) {
-              try {
-                await sendLeadImmediately(leadRef.actionId)
-                sentCount += 1
-                latestSnapshot = await fetchAutomationSnapshot()
-              } catch {
-                failedCount += 1
-              }
-            }
-
-            if (latestSnapshot) {
-              applyRemoteSnapshot(latestSnapshot)
-            }
-          } catch {
-            failedCount += 1
-          }
-        }
-
-        if (!latestSnapshot) {
-          latestSnapshot = await fetchAutomationSnapshot()
-        }
-
-        if (latestSnapshot) {
-          applyRemoteSnapshot(latestSnapshot)
-        }
-
-        toast.success("Scan complete", {
+        toast.success("Scan started", {
           description:
-            ingestedLeadRefs.length > 0
-              ? `${ingestResult.ingested} leads added, ${enrichedCount} enriched, ${sentCount} emailed${failedCount > 0 ? `, ${failedCount} need review` : ""}.`
-              : `${ingestResult.scanned} permits scanned, but nothing new matched the queue.`,
+            run.queuedLeadCount > 0
+              ? `${run.queuedLeadCount} leads queued from ${run.scannedCount} scanned permits. Background resolve and send jobs are running now.`
+              : `${run.scannedCount} permits scanned, but nothing new matched the queue.`,
         })
         return
       }
@@ -394,7 +372,9 @@ export function usePermitPulse() {
       setError(message)
       toast.error("Scan failed", { description: message })
     } finally {
-      setLoading(false)
+      if (!queuedRun) {
+        setLoading(false)
+      }
     }
   }, [applyRemoteSnapshot, profile, store.filters])
 
@@ -819,10 +799,14 @@ export function usePermitPulse() {
 
   const retryJob = useCallback(async (jobId: string) => {
     try {
+      const targetJob = automationJobs.find((job) => job.id === jobId) || null
       const snapshot = await retryAutomationJob(jobId)
       applyRemoteSnapshot(snapshot)
+      if (targetJob?.runId) {
+        setActiveRunId(targetJob.runId)
+      }
       toast.success("Automation retried", {
-        description: "The worker re-ran that failed automation step and refreshed the latest state.",
+        description: "That job was re-queued and the background worker is draining it now.",
       })
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Retry failed"
@@ -830,7 +814,7 @@ export function usePermitPulse() {
         description: message,
       })
     }
-  }, [applyRemoteSnapshot])
+  }, [applyRemoteSnapshot, automationJobs])
 
   const updateProfile = useCallback((patch: Partial<TenantProfile>) => {
     setStore((currentStore) => ({
@@ -871,6 +855,7 @@ export function usePermitPulse() {
     lastScanAt: store.lastScanAt,
     sentLog,
     automationJobs,
+    latestRunSummary,
     loading,
     error,
     automationHealth,

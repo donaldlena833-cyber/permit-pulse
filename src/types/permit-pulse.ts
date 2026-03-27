@@ -15,6 +15,7 @@ export type LeadStatus =
   | "new"
   | "reviewed"
   | "researching"
+  | "email-required"
   | "enriched"
   | "outreach-ready"
   | "drafted"
@@ -256,6 +257,7 @@ export interface ChannelDecision {
   recipientType?: string
   targetRole?: string
   routeSource?: string
+  suggestedCc?: string
 }
 
 export interface OutreachHistoryItem {
@@ -315,7 +317,11 @@ export interface AutomationHealth {
 }
 
 export type AutomationJobType =
+  | "scan_run"
   | "permit_ingest"
+  | "resolve"
+  | "enrich"
+  | "draft"
   | "enrichment_batch"
   | "lead_enrichment"
   | "draft_refresh"
@@ -330,6 +336,8 @@ export type AutomationJobStatus = "queued" | "running" | "retrying" | "succeeded
 
 export interface AutomationJob {
   id: string
+  runId: string
+  parentJobId: string | null
   leadId: string | null
   jobType: AutomationJobType
   status: AutomationJobStatus
@@ -337,11 +345,33 @@ export interface AutomationJob {
   summary: string
   detail: string
   attemptCount: number
+  maxAttempts: number
   retryable: boolean
   createdAt: string
   startedAt: string | null
   finishedAt: string | null
+  nextRetryAt: string | null
+  errorCode: string
+  errorMessage: string
+  inputSnapshot: Record<string, unknown>
+  outputSnapshot: Record<string, unknown>
   metadata: Record<string, unknown>
+}
+
+export interface AutomationRunSummary {
+  runId: string
+  status: AutomationJobStatus
+  scannedCount: number
+  queuedLeadCount: number
+  completedLeadCount: number
+  sentCount: number
+  queuedJobs: number
+  runningJobs: number
+  retryingJobs: number
+  failedJobs: number
+  succeededJobs: number
+  latestSummary: string
+  updatedAt: string
 }
 
 export interface SentLogEntry {

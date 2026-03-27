@@ -171,20 +171,15 @@ export function OpportunitiesView({
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-600 dark:text-orange-300">
-                Opportunities
+                Leads
               </div>
-              <div className="mt-1 flex items-center gap-2">
-                <span className="rounded-full border border-navy-200/70 bg-cream-50/80 px-2.5 py-1 text-[11px] font-medium text-navy-700 dark:border-dark-border/70 dark:bg-dark-bg dark:text-dark-text">
-                  {visibleCount} visible
-                </span>
-                <span className="text-sm font-medium text-navy-800 dark:text-dark-text">{currentLens}</span>
-              </div>
-              <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">{operatorFocus}</div>
+              <div className="mt-1 text-sm font-medium text-navy-800 dark:text-dark-text">{currentLens}</div>
+              <div className="mt-1 text-xs text-navy-500 dark:text-dark-muted">{visibleCount} visible</div>
             </div>
             {lane === "feed" ? (
               <Button className="h-10 rounded-full px-4" onClick={() => setFiltersOpen(true)} type="button" variant="outline">
                 <Filter className="h-4 w-4" />
-                Search
+                Filter
               </Button>
             ) : null}
           </div>
@@ -233,7 +228,7 @@ export function OpportunitiesView({
                 >
                   <div>
                     <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-navy-400 dark:text-dark-muted">
-                      Active filters
+                      Queue filters
                     </div>
                     <div className="mt-1 text-sm text-navy-700 dark:text-dark-text">{mobileFilterSummary}</div>
                   </div>

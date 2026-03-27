@@ -35,7 +35,7 @@ class AppErrorBoundary extends Component<{
   }
 
   componentDidCatch(error: unknown) {
-    console.error("PermitPulse render error", error)
+    console.error("MetroGlass Leads render error", error)
   }
 
   render() {
@@ -310,6 +310,7 @@ function MetroGlassLeadsWorkspace({
     error,
     filters,
     lastScanAt,
+    latestRunSummary,
     loading,
     opportunityLane,
     outreachLeads,
@@ -480,6 +481,7 @@ function MetroGlassLeadsWorkspace({
         stats={dashboardStats}
         systemAlerts={systemAlerts}
         topLeads={topOpportunities}
+        runSummary={latestRunSummary}
       />
     )
   } else if (section === "opportunities") {

@@ -43,6 +43,18 @@ export function useMetroglassAuth() {
     }
   }, [])
 
+  useEffect(() => {
+    const handleExpired = () => {
+      clearStoredSession()
+      setSession(null)
+      setStatus("unauthenticated")
+      setError("Your session expired. Sign in again to keep using MetroGlass Leads.")
+    }
+
+    window.addEventListener("metroglass-auth-expired", handleExpired)
+    return () => window.removeEventListener("metroglass-auth-expired", handleExpired)
+  }, [])
+
   const refresh = useCallback(async () => {
     try {
       const nextSession = await ensureSession()

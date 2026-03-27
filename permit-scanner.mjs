@@ -26,7 +26,7 @@
  * - KV namespace PERMIT_PULSE — stores everything (picks, drafts, CRM, analytics)
  */
 
-import { handlePermitPulseAutomationRequest, runPermitAutomationCycle } from './worker/permit-pulse/api.mjs';
+import { drainAutomationQueue, handlePermitPulseAutomationRequest, runPermitAutomationCycle } from './worker/permit-pulse/api.mjs';
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CONSTANTS
@@ -1663,16 +1663,20 @@ async function handleGmailRoutes(request, env) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export default {
-  async scheduled(event, env) {
-    if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
-      console.log('⚡ PermitPulse automation cycle');
-      await runPermitAutomationCycle(env);
+  async scheduled(event, env, ctx) {
+    const hour = new Date().getUTCHours();
+    const isMorningScan = (hour >= 10 && hour <= 14);
+
+    if (env.SUPABASE_URL && (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY)) {
+      if (isMorningScan) {
+        console.log('⚡ PermitPulse automation cycle');
+        await runPermitAutomationCycle(env);
+      } else {
+        console.log('⚡ PermitPulse queue drain');
+      }
+      ctx.waitUntil(drainAutomationQueue(env, { limit: 24 }));
       return;
     }
-
-    const hour = new Date().getUTCHours();
-    // 12 UTC = 7am ET (morning scan), 23 UTC = 6pm ET (maintenance only)
-    const isMorningScan = (hour >= 10 && hour <= 14);
     
     if (isMorningScan) {
       console.log('⚡ PermitPulse morning scan');
@@ -1692,10 +1696,10 @@ export default {
     console.log(`   Generated ${followUpResult.generated} follow-up drafts`);
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    const automationResponse = await handlePermitPulseAutomationRequest(request, env);
+    const automationResponse = await handlePermitPulseAutomationRequest(request, env, ctx);
     if (automationResponse) return automationResponse;
 
     // CORS preflight

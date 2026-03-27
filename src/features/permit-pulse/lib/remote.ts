@@ -1,17 +1,24 @@
 import type {
   AutomationHealth,
   AutomationJob,
+  AutomationRunSummary,
   EnrichmentData,
   LeadStatus,
   PermitLead,
   SentLogEntry,
 } from "@/types/permit-pulse"
-import { getAccessToken } from "@/features/auth/lib/session"
+import { clearStoredSession, getAccessToken } from "@/features/auth/lib/session"
 
 interface AutomationSnapshot {
   leads: PermitLead[]
   sentLog: SentLogEntry[]
   jobs: AutomationJob[]
+  latestRunSummary?: AutomationRunSummary | null
+}
+
+interface AutomationJobsPayload {
+  jobs: AutomationJob[]
+  latestRunSummary?: AutomationRunSummary | null
 }
 
 export interface PermitIngestResult {
@@ -24,6 +31,12 @@ export interface PermitIngestResult {
     permit_key?: string
     address?: string
   }>
+}
+
+export interface ScanRunResult {
+  runId: string
+  scannedCount: number
+  queuedLeadCount: number
 }
 
 function isAutomationSnapshot(value: unknown): value is AutomationSnapshot {
@@ -60,6 +73,13 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
+    if (response.status === 401) {
+      clearStoredSession()
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("metroglass-auth-expired"))
+      }
+    }
+
     const message =
       payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
         ? payload.error
@@ -101,10 +121,25 @@ export async function triggerAutomationRun(): Promise<void> {
   })
 }
 
+export async function startAutomationScan(): Promise<ScanRunResult> {
+  return requestJson<ScanRunResult>("/api/v2/jobs/scan", {
+    method: "POST",
+  })
+}
+
 export async function runPermitIngestJob(): Promise<PermitIngestResult> {
   return requestJson<PermitIngestResult>("/api/v2/jobs/ingest", {
     method: "POST",
   })
+}
+
+export async function fetchAutomationJobs(runId?: string): Promise<AutomationJobsPayload> {
+  const suffix = runId ? `?runId=${encodeURIComponent(runId)}` : ""
+  return requestJson<AutomationJobsPayload>(`/api/v2/jobs${suffix}`)
+}
+
+export async function fetchLeadAutomationJobs(leadId: string): Promise<AutomationJobsPayload> {
+  return requestJson<AutomationJobsPayload>(`/api/v2/leads/${encodeURIComponent(leadId)}/jobs`)
 }
 
 export async function retryAutomationJob(jobId: string): Promise<AutomationSnapshot> {

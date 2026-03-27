@@ -86,7 +86,7 @@ export function StatusBadge({ status }: { status: LeadStatus }) {
   const tone =
     status === "outreach-ready" || status === "qualified" || status === "won"
       ? "olive"
-      : status === "contacted" || status === "drafted" || status === "follow-up-due"
+      : status === "contacted" || status === "drafted" || status === "follow-up-due" || status === "email-required"
         ? "bronze"
         : status === "lost" || status === "archived"
           ? "danger"

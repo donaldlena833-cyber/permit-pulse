@@ -134,7 +134,7 @@ export function AppShell({
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col pb-20 lg:pb-0">
+        <div className="flex min-w-0 flex-1 flex-col pb-28 lg:pb-0">
           <header className="sticky top-0 z-30 border-b border-navy-200/70 bg-cream-50/85 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8 dark:border-dark-border/70 dark:bg-dark-bg/85">
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between gap-3">
@@ -204,29 +204,31 @@ export function AppShell({
         </div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-navy-200/80 bg-white/94 px-3 py-2 backdrop-blur-xl lg:hidden dark:border-dark-border/80 dark:bg-dark-card/94">
-        <div className="grid grid-cols-4 gap-2">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon
-            const isActive = section === item.id
+      <nav className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] lg:hidden">
+        <div className="pointer-events-auto mx-auto max-w-md rounded-[28px] border border-navy-200/80 bg-white/94 p-2 shadow-[0_24px_60px_rgba(70,55,37,0.18)] backdrop-blur-xl dark:border-dark-border/80 dark:bg-dark-card/94">
+          <div className="grid grid-cols-4 gap-2">
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon
+              const isActive = section === item.id
 
-            return (
-              <button
-                key={item.id}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-[18px] px-3 py-2 text-[11px] font-medium transition-colors",
-                  isActive
-                    ? "bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-200"
-                    : "text-navy-500 dark:text-dark-muted",
-                )}
-                onClick={() => onSectionChange(item.id)}
-                type="button"
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </button>
-            )
-          })}
+              return (
+                <button
+                  key={item.id}
+                  className={cn(
+                    "flex flex-col items-center gap-1 rounded-[18px] px-3 py-2 text-[11px] font-medium transition-colors",
+                    isActive
+                      ? "bg-orange-50 text-orange-700 shadow-sm dark:bg-orange-900/20 dark:text-orange-200"
+                      : "text-navy-500 dark:text-dark-muted",
+                  )}
+                  onClick={() => onSectionChange(item.id)}
+                  type="button"
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </nav>
     </div>

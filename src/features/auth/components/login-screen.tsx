@@ -60,7 +60,7 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
           </div>
 
           <div className="rounded-[28px] border border-navy-200/70 bg-white/88 p-5 shadow-[0_24px_90px_rgba(70,55,37,0.12)] backdrop-blur-xl sm:rounded-[32px] sm:p-8 dark:border-dark-border/70 dark:bg-dark-card/92">
-            <div className="mb-5 flex items-center gap-3 rounded-full border border-orange-200 bg-orange-50/80 px-3.5 py-2 sm:hidden dark:border-orange-800/50 dark:bg-orange-900/20">
+            <div className="mb-4 flex items-center gap-3 rounded-full border border-orange-200 bg-orange-50/80 px-3.5 py-2 sm:hidden dark:border-orange-800/50 dark:bg-orange-900/20">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-500 text-xs font-semibold text-white">
                 MG
               </div>
@@ -77,11 +77,11 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
             <h2 className="mt-2 text-[1.75rem] font-semibold tracking-[-0.04em] text-navy-900 sm:mt-3 sm:text-3xl dark:text-dark-text">
               Sign in to MetroGlass Leads
             </h2>
-            <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">
+            <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted sm:block">
               Private MetroGlass Pro workspace for scanning, enrichment, and Gmail outreach.
             </p>
 
-            <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
+            <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.18em] text-navy-500 dark:text-dark-muted">
                   Email

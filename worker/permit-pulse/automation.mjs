@@ -1,8 +1,8 @@
 import {
   API_ENDPOINTS,
-  AUTO_SEND_LIMITS,
   DEFAULT_SCAN_LIMIT,
   DEFAULT_SCAN_WINDOW_DAYS,
+  getAutoSendLimits,
   HIGH_VALUE_SCORE,
   METROGLASS_PROFILE,
   MIN_RELEVANCE_THRESHOLD,
@@ -36,11 +36,13 @@ function createId() {
 }
 
 const ENRICHMENT_BATCH_LIMIT = 4;
-const SEND_BATCH_LIMIT = 4;
+const SEND_BATCH_LIMIT = 6;
 const AUTO_SEND_ENABLED = true;
 const ZEROBOUNCE_ENABLED = false;
-const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 1;
-const AUTO_SEND_EMAIL_CONTACT_LIMIT = 10;
+const AUTO_SEND_EMAIL_SCORE_THRESHOLD = 70;
+const AUTO_SEND_EMAIL_CONTACT_LIMIT = 3;
+const DEFAULT_JOB_MAX_ATTEMPTS = 3;
+const JOB_RETRY_DELAYS_MS = [30_000, 120_000, 600_000];
 const DIRECTORY_DOMAIN_DENYLIST = [
   'yelp.com',
   'angi.com',
@@ -145,19 +147,62 @@ function detectJobProvider(error, fallback = 'worker') {
   return fallback;
 }
 
+function computeNextRetryAt(attemptCount) {
+  const delay = JOB_RETRY_DELAYS_MS[Math.max(0, Math.min(attemptCount - 1, JOB_RETRY_DELAYS_MS.length - 1))];
+  return new Date(Date.now() + delay).toISOString();
+}
+
+function normalizeJobSnapshot(value, fallback = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return fallback;
+  }
+
+  return value;
+}
+
+function summarizeJobResult(result) {
+  if (!result || typeof result !== 'object') {
+    return { value: result ?? null };
+  }
+
+  return JSON.parse(JSON.stringify(result));
+}
+
+function getJobAttemptCount(job) {
+  return Number(job?.attempt_count || job?.attemptCount || 0);
+}
+
+function getJobMaxAttempts(config, job = null) {
+  return Math.max(
+    Number(config.maxAttempts || job?.max_attempts || job?.maxAttempts || DEFAULT_JOB_MAX_ATTEMPTS),
+    1,
+  );
+}
+
 async function runAutomationJob(gateway, config, work, options = {}) {
   const startedAt = new Date().toISOString();
   const existingJob = options.existingJob || null;
   let job = existingJob;
+  const maxAttempts = getJobMaxAttempts(config, existingJob);
+  const inputSnapshot = normalizeJobSnapshot(config.inputSnapshot || existingJob?.input_snapshot || existingJob?.inputSnapshot || {}, {});
 
   if (existingJob) {
+    const nextAttemptCount = Math.max(getJobAttemptCount(existingJob) + 1, 1);
     const patched = await gateway.safePatchAutomationJob(existingJob.id, {
-      status: 'retrying',
+      status: 'running',
+      run_id: config.runId || existingJob.run_id || existingJob.runId || existingJob.id,
+      parent_job_id: config.parentJobId ?? existingJob.parent_job_id ?? existingJob.parentJobId ?? null,
       provider: config.provider || existingJob.provider || 'worker',
       summary: config.summary || existingJob.summary || '',
       detail: config.detail || existingJob.detail || '',
       retryable: Boolean(config.retryable),
-      attempt_count: Math.max(Number(existingJob.attempt_count || 1) + 1, 2),
+      attempt_count: nextAttemptCount,
+      max_attempts: maxAttempts,
+      input_snapshot: inputSnapshot,
+      output_snapshot: {},
+      error_code: null,
+      error_message: null,
+      next_retry_at: null,
       started_at: startedAt,
       finished_at: null,
       metadata: {
@@ -168,14 +213,21 @@ async function runAutomationJob(gateway, config, work, options = {}) {
     });
     job = patched[0] || {
       ...existingJob,
-      status: 'retrying',
-      attempt_count: Math.max(Number(existingJob.attempt_count || 1) + 1, 2),
+      status: 'running',
+      attempt_count: nextAttemptCount,
+      max_attempts: maxAttempts,
+      input_snapshot: inputSnapshot,
+      error_code: null,
+      error_message: null,
+      next_retry_at: null,
       started_at: startedAt,
       finished_at: null,
     };
   } else {
     const inserted = await gateway.safeInsertAutomationJob({
       id: createId(),
+      run_id: config.runId || null,
+      parent_job_id: config.parentJobId || null,
       lead_id: config.leadId || null,
       job_type: config.jobType,
       status: 'running',
@@ -183,10 +235,16 @@ async function runAutomationJob(gateway, config, work, options = {}) {
       summary: config.summary,
       detail: config.detail || '',
       attempt_count: 1,
+      max_attempts: maxAttempts,
       retryable: Boolean(config.retryable),
+      input_snapshot: inputSnapshot,
+      output_snapshot: {},
+      error_code: null,
+      error_message: null,
       metadata: config.metadata || {},
       started_at: startedAt,
       finished_at: null,
+      next_retry_at: null,
     });
     job = inserted[0] || null;
   }
@@ -201,11 +259,15 @@ async function runAutomationJob(gateway, config, work, options = {}) {
     if (job?.id) {
       await gateway.safePatchAutomationJob(job.id, {
         status: 'succeeded',
+        run_id: config.runId || job.run_id || job.runId || job.id,
+        parent_job_id: config.parentJobId ?? job.parent_job_id ?? job.parentJobId ?? null,
         provider: successPayload.provider || config.provider || job.provider || 'worker',
         summary: successPayload.summary || config.summary,
         detail: successPayload.detail || config.detail || '',
         retryable: false,
         finished_at: new Date().toISOString(),
+        output_snapshot: normalizeJobSnapshot(successPayload.outputSnapshot || summarizeJobResult(result), {}),
+        next_retry_at: null,
         metadata: {
           ...(job.metadata || {}),
           ...(successPayload.metadata || {}),
@@ -216,12 +278,17 @@ async function runAutomationJob(gateway, config, work, options = {}) {
     return result;
   } catch (error) {
     if (job?.id) {
+      const attemptCount = getJobAttemptCount(job) || 1;
+      const canRetry = Boolean(config.retryable) && attemptCount < maxAttempts;
       await gateway.safePatchAutomationJob(job.id, {
-        status: 'failed',
+        status: canRetry ? 'retrying' : 'failed',
         provider: detectJobProvider(error, config.provider || job.provider || 'worker'),
         detail: summarizeError(error),
-        retryable: Boolean(config.retryable),
+        retryable: canRetry,
         finished_at: new Date().toISOString(),
+        error_code: detectJobProvider(error, config.provider || job.provider || 'worker'),
+        error_message: summarizeError(error),
+        next_retry_at: canRetry ? computeNextRetryAt(attemptCount) : null,
         metadata: {
           ...(job.metadata || {}),
           error: summarizeError(error),
@@ -231,6 +298,33 @@ async function runAutomationJob(gateway, config, work, options = {}) {
 
     throw error;
   }
+}
+
+async function queueAutomationJob(gateway, payload) {
+  const inserted = await gateway.safeInsertAutomationJob({
+    id: payload.id || createId(),
+    run_id: payload.runId || null,
+    parent_job_id: payload.parentJobId || null,
+    lead_id: payload.leadId || null,
+    job_type: payload.jobType,
+    status: payload.status || 'queued',
+    provider: payload.provider || 'worker',
+    summary: payload.summary || '',
+    detail: payload.detail || '',
+    attempt_count: payload.attemptCount || 0,
+    max_attempts: payload.maxAttempts || DEFAULT_JOB_MAX_ATTEMPTS,
+    retryable: Boolean(payload.retryable),
+    input_snapshot: normalizeJobSnapshot(payload.inputSnapshot || {}, {}),
+    output_snapshot: normalizeJobSnapshot(payload.outputSnapshot || {}, {}),
+    error_code: payload.errorCode || null,
+    error_message: payload.errorMessage || null,
+    metadata: payload.metadata || {},
+    started_at: payload.startedAt || null,
+    finished_at: payload.finishedAt || null,
+    next_retry_at: payload.nextRetryAt || null,
+  });
+
+  return inserted[0] || null;
 }
 
 function getPermitKey(permit) {
@@ -468,58 +562,33 @@ function getDraftRole(lead, companyProfile, primaryContact) {
   );
 }
 
-function getPermitReference(lead) {
-  return lead.permit_key || lead.job_filing_number || '';
-}
-
 function chooseDraftCta(lead, role, projectAngle, relevanceScore) {
-  if ((role.includes('applicant') || role.includes('gc') || role.includes('contractor')) && lead.score >= 65) {
-    return 'If drawings are available, I can turn around a quick glass takeoff and budget this week.';
+  void lead;
+  void projectAngle;
+  void relevanceScore;
+
+  if (role.includes('owner') || role.includes('applicant') || role.includes('gc')) {
+    return 'I know filings do not always show the full picture, but if any glass related work is still being lined up, I’d be happy to connect.';
   }
 
-  if (relevanceScore >= 0.85) {
-    return 'If helpful, I can send over a quick number or take a fast look at the plans this week.';
-  }
-
-  if (
-    projectAngle.includes('storefront')
-    || projectAngle.includes('partition')
-    || projectAngle.includes('shower')
-    || projectAngle.includes('mirror')
-  ) {
-    return `If that ${projectAngle} scope is still open, I can send a practical price range and next steps.`;
-  }
-
-  return 'If the glass scope is still open, I would be happy to send pricing or talk through it briefly this week.';
+  return 'I know filings do not always show the full picture, but if any glass related work is still being lined up, I’d be happy to connect.';
 }
 
 function getDraftValueLine(role, projectAngle) {
+  void projectAngle;
+
   if (role.includes('applicant') || role.includes('gc') || role.includes('contractor')) {
-    return `We handle ${projectAngle}, mirrors, storefront work, and interior glass across the city, and we keep pricing and field coordination straightforward.`;
+    return 'I’m with MetroGlass Pro. We work on custom glass installations across NYC, NJ, and CT, including mirrors, partitions, shower glass, cabinets, and similar scope.';
   }
 
-  if (role.includes('filing') || role.includes('architect') || role.includes('design')) {
-    return `We handle ${projectAngle} and related interior glass work, and we can price or coordinate quickly if the team still needs a glass installer.`;
-  }
-
-  return `We handle ${projectAngle}, mirrors, storefront work, and interior glass from pricing through install across the city.`;
+  return 'I’m with MetroGlass Pro. We work on custom glass installations across NYC, NJ, and CT, including mirrors, partitions, shower glass, cabinets, and similar scope.';
 }
 
 function buildDraftIntro(lead, projectAngle, relevanceKeyword) {
-  const projectDescription = sanitizeOutreachCopy(lead.description || lead.raw_permit?.job_description || '');
-  const trimmedDescription = projectDescription
-    ? projectDescription.charAt(0).toLowerCase() + projectDescription.slice(1, 140)
-    : '';
+  void projectAngle;
+  void relevanceKeyword;
 
-  if (trimmedDescription) {
-    return sanitizeOutreachCopy(
-      `I came across the permit for ${lead.address}, it looks like ${trimmedDescription}, and wanted to reach out in case your team still needs a glass contractor on the job.`,
-    );
-  }
-
-  return sanitizeOutreachCopy(
-    `I came across the permit for ${lead.address} and wanted to reach out in case your team still needs a glass contractor on the job.`,
-  );
+  return sanitizeOutreachCopy(`I saw the filing for ${lead.address} and wanted to reach out.`);
 }
 
 function buildLeadScore(permit) {
@@ -875,7 +944,58 @@ function isPremiumLinkedInTarget(companyProfile) {
   );
 }
 
-function scoreEmailContactForSelection(contact, companyProfile) {
+function contactMatchesKnownPerson(contact, permit = {}) {
+  const haystack = normalizeText([contact.name, contact.role, contact.email].filter(Boolean).join(' '));
+  const knownPeople = getKnownPersonTokens(permit);
+  return knownPeople.length > 0 && countTokenMatches(knownPeople, haystack) > 0;
+}
+
+function contactMatchesKnownCompany(contact, companyProfile = {}, permit = {}) {
+  const haystack = normalizeText([
+    contact.name,
+    contact.role,
+    contact.website_url,
+    contact.linkedin_url,
+    contact.source,
+  ].filter(Boolean).join(' '));
+  const knownCompanies = getKnownCompanyTokens(companyProfile, permit);
+  return knownCompanies.length > 0 && countTokenMatches(knownCompanies, haystack) > 0;
+}
+
+function isEntityAlignedEmailContact(contact, companyProfile = {}, permit = {}) {
+  if (!contact?.email) {
+    return false;
+  }
+
+  const officialDomain = normalizeText(companyProfile?.domain || rootDomain(companyProfile?.website || ''));
+  const contactDomain = emailDomain(contact.email);
+  const websiteDomain = normalizeText(rootDomain(contact.website_url || ''));
+  const freeMailbox = isFreeMailboxDomain(contactDomain);
+
+  if (!contactDomain || isBlockedEmailDomain(contactDomain)) {
+    return false;
+  }
+
+  if (officialDomain) {
+    const directDomainMatch =
+      contactDomain === officialDomain
+      || contactDomain.endsWith(`.${officialDomain}`)
+      || websiteDomain === officialDomain
+      || websiteDomain.endsWith(`.${officialDomain}`);
+
+    if (directDomainMatch) {
+      return true;
+    }
+  }
+
+  if (freeMailbox) {
+    return contactMatchesKnownPerson(contact, permit);
+  }
+
+  return contactMatchesKnownCompany(contact, companyProfile, permit);
+}
+
+function scoreEmailContactForSelection(contact, companyProfile, permit = {}) {
   if (!contact?.email) {
     return -100;
   }
@@ -885,6 +1005,7 @@ function scoreEmailContactForSelection(contact, companyProfile) {
   const websiteDomain = normalizeText(rootDomain(contact.website_url || ''));
   const genericMailbox = isGenericMailbox(contact.email);
   const freeMailbox = isFreeMailboxDomain(contactDomain);
+  const entityAligned = isEntityAlignedEmailContact(contact, companyProfile, permit);
   const officialDomainMatch = Boolean(
     officialDomain && (contactDomain === officialDomain || contactDomain.endsWith(`.${officialDomain}`)),
   );
@@ -896,7 +1017,7 @@ function scoreEmailContactForSelection(contact, companyProfile) {
     return -100;
   }
 
-  if (officialDomain && !officialDomainMatch && !websiteDomainMatch && !freeMailbox) {
+  if (!entityAligned) {
     return -100;
   }
 
@@ -910,6 +1031,7 @@ function scoreEmailContactForSelection(contact, companyProfile) {
   score += officialDomainMatch ? 16 : freeMailbox ? -2 : -18;
   score += websiteDomainMatch ? 10 : 0;
   score += genericMailbox ? -14 : 8;
+  score += entityAligned ? 12 : -24;
   score += contact.source === 'firecrawl' ? 8 : contact.source === 'manual' ? 10 : 0;
   score += contact.source === 'pattern_guess' ? -16 : 0;
   score += contact.source === 'brave_search' ? -10 : 0;
@@ -917,7 +1039,7 @@ function scoreEmailContactForSelection(contact, companyProfile) {
   return score;
 }
 
-function buildRouteCandidates({ companyProfile, contacts }) {
+function buildRouteCandidates({ companyProfile, contacts, permit }) {
   const premiumFirm = isPremiumLinkedInTarget(companyProfile);
   const candidates = [];
 
@@ -927,7 +1049,7 @@ function buildRouteCandidates({ companyProfile, contacts }) {
     const confidence = Math.round(contact.confidence || 0);
 
     if (contact.email) {
-      const emailSelectionScore = scoreEmailContactForSelection(contact, companyProfile);
+      const emailSelectionScore = scoreEmailContactForSelection(contact, companyProfile, permit);
       if (emailSelectionScore <= 0) {
         return;
       }
@@ -1036,7 +1158,7 @@ function buildChannelReason(candidate, companyProfile, permit) {
 }
 
 function buildChannelDecision({ score, contactability, companyProfile, contacts, permit }) {
-  const routeCandidates = buildRouteCandidates({ companyProfile, contacts });
+  const routeCandidates = buildRouteCandidates({ companyProfile, contacts, permit });
   const selected = routeCandidates[0];
   const alternatives = uniq(routeCandidates.slice(1).map((candidate) => candidate.channel)).filter(Boolean);
 
@@ -1057,7 +1179,7 @@ function buildChannelDecision({ score, contactability, companyProfile, contacts,
     AUTO_SEND_ENABLED &&
     selected.channel === 'email' &&
     selected.recipientType !== 'guessed' &&
-    selected.score >= 60 &&
+    selected.score >= AUTO_SEND_EMAIL_SCORE_THRESHOLD &&
     contactability.total >= 55;
 
   return {
@@ -1177,8 +1299,12 @@ function buildPriorityState(score, contactability, readiness) {
   return { priorityLabel: 'Ignore', priorityScore };
 }
 
-function resolveLeadStatus({ currentStatus, followUpDate, hasDraft, readinessLabel }) {
+function resolveLeadStatus({ currentStatus, followUpDate, hasDraft, qualityTier, readinessLabel }) {
   if (currentStatus === 'archived') {
+    return 'archived';
+  }
+
+  if (qualityTier === 'dead') {
     return 'archived';
   }
 
@@ -1190,7 +1316,11 @@ function resolveLeadStatus({ currentStatus, followUpDate, hasDraft, readinessLab
     return currentStatus;
   }
 
-  if (hasDraft && ['new', 'reviewed', 'researching', 'outreach-ready', 'drafted'].includes(currentStatus || 'new')) {
+  if (currentStatus === 'email-required' && readinessLabel !== 'Ready') {
+    return 'email-required';
+  }
+
+  if (hasDraft && ['new', 'reviewed', 'researching', 'email-required', 'outreach-ready', 'drafted'].includes(currentStatus || 'new')) {
     return 'drafted';
   }
 
@@ -1335,8 +1465,8 @@ function getBusinessHourState(now = new Date()) {
   return { insideBusinessHours, isWeekend, hour, weekday };
 }
 
-function pickPrimaryContact(contacts, companyProfile = {}) {
-  const trustedEmailContact = pickBestEmailContact(contacts, companyProfile);
+function pickPrimaryContact(contacts, companyProfile = {}, permit = {}) {
+  const trustedEmailContact = pickBestEmailContact(contacts, companyProfile, permit);
 
   return trustedEmailContact
     || contacts.find((contact) => contact.phone)
@@ -1344,24 +1474,24 @@ function pickPrimaryContact(contacts, companyProfile = {}) {
     || null;
 }
 
-function pickBestEmailContact(contacts, companyProfile = {}) {
+function pickBestEmailContact(contacts, companyProfile = {}, permit = {}) {
   const emailContacts = [...contacts]
     .filter((contact) => contact.email)
     .sort((left, right) => {
-      return scoreEmailContactForSelection(right, companyProfile) - scoreEmailContactForSelection(left, companyProfile);
+      return scoreEmailContactForSelection(right, companyProfile, permit) - scoreEmailContactForSelection(left, companyProfile, permit);
     });
 
-  return emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile) > 0) || null;
+  return emailContacts.find((contact) => scoreEmailContactForSelection(contact, companyProfile, permit) > 0) || null;
 }
 
-function getAutoSendEmailContacts(contacts, companyProfile = {}) {
+function getAutoSendEmailContacts(contacts, companyProfile = {}, permit = {}) {
   const seen = new Set();
 
   return [...contacts]
     .filter((contact) => contact.email && contact.type !== 'guessed')
     .map((contact) => ({
       ...contact,
-      autoSendScore: scoreEmailContactForSelection(contact, companyProfile),
+      autoSendScore: scoreEmailContactForSelection(contact, companyProfile, permit),
     }))
     .filter((contact) => contact.autoSendScore >= AUTO_SEND_EMAIL_SCORE_THRESHOLD)
     .sort((left, right) => {
@@ -1473,7 +1603,7 @@ function getManualSendEmailContacts(contacts, companyProfile = {}, permit = {}) 
 }
 
 function buildDraft(lead, companyProfile, contacts) {
-  const primaryContact = pickPrimaryContact(contacts, companyProfile);
+  const primaryContact = pickPrimaryContact(contacts, companyProfile, lead.raw_permit || lead);
   const address = sanitizeOutreachCopy(lead.address);
   const projectAngle = getProjectAngle(lead);
   const relevanceScore = Number(lead.score_breakdown?.relevanceScore || lead.scoreBreakdown?.relevanceScore || 0.3);
@@ -1481,36 +1611,30 @@ function buildDraft(lead, companyProfile, contacts) {
   const pluginLine = sanitizeOutreachCopy(getPluginLine(`${lead.permit_key}:${lead.score}`));
   const role = getDraftRole(lead, companyProfile, primaryContact);
   const contactName = getDraftRecipientName(primaryContact, companyProfile, lead);
-  const companyName = sanitizeOutreachCopy(companyProfile.company_name || lead.owner_business_name || lead.applicant_business_name || 'your team');
   const introLine = sanitizeOutreachCopy(buildDraftIntro(lead, projectAngle, relevanceKeyword));
   const valueLine = sanitizeOutreachCopy(getDraftValueLine(role, projectAngle));
   const cta = sanitizeOutreachCopy(chooseDraftCta(lead, role, projectAngle, relevanceScore));
-  const subject = sanitizeOutreachCopy(
-    `${address} permit, ${projectAngle.includes('custom glass') ? 'glass scope' : projectAngle}`,
-  );
+  const subject = sanitizeOutreachCopy(`${address} filing`);
   const body = [
     `Hi ${contactName},`,
     '',
     introLine,
     '',
-    `${valueLine} This looks relevant for ${companyName}.`,
-    '',
-    pluginLine,
+    valueLine,
     '',
     cta,
     '',
+    'Best,',
     'Donald',
-    'MetroGlass Pro',
-    '332 999 3846',
   ]
     .map((line) => sanitizeOutreachCopy(line))
     .join('\n');
 
   const callOpener = sanitizeOutreachCopy(
-    `Hi, this is Donald from MetroGlass Pro. I saw the permit at ${address} and wanted to check who is handling the ${projectAngle} on that job.`,
+    `Hi, this is Donald from MetroGlass Pro. I came across the filing for ${address} and wanted to reach out. Not sure if you’re the right contact for the project, but we handle storefronts, shower doors, mirrors, railings, and custom glass across NYC. If any of that scope is still open, I’d be happy to help.`,
   );
   const followUpNote = sanitizeOutreachCopy(
-    `I reached out about the permit at ${address}. If the ${projectAngle} is still open, I can send pricing or a quick takeoff.`,
+    `Following up on the filing for ${address}. If any glass scope is still open, I’d be happy to help.`,
   );
 
   return {
@@ -1591,6 +1715,7 @@ function buildDerivedLeadState({
     currentStatus: leadRow.status,
     followUpDate,
     hasDraft: promoteDrafted,
+    qualityTier,
     readinessLabel: readiness.label,
   });
   const nextAction = buildNextActionDecision({
@@ -1603,7 +1728,7 @@ function buildDerivedLeadState({
     readiness,
     status,
   });
-  const autoSendContacts = getAutoSendEmailContacts(contacts, companyProfile);
+  const autoSendContacts = getAutoSendEmailContacts(contacts, companyProfile, permit);
   const autoSendEligible =
     AUTO_SEND_ENABLED &&
     autoSendContacts.length > 0 &&
@@ -2714,7 +2839,7 @@ async function enrichLead(env, gateway, leadRow, options = {}) {
   }
 
   const dedupedContacts = dedupeContacts(contacts);
-  const primaryContact = pickPrimaryContact(dedupedContacts, company) || null;
+  const primaryContact = pickPrimaryContact(dedupedContacts, company, leadRow.raw_permit || leadRow) || null;
   dedupedContacts.forEach((contact) => {
     contact.is_primary = Boolean(primaryContact && contact.id === primaryContact.id);
   });
@@ -2830,6 +2955,7 @@ async function maybeAutoSend(env, gateway, enriched) {
   }
 
   const now = new Date();
+  const sendLimits = getAutoSendLimits(now);
   const last24Hours = new Date(now.getTime() - (24 * 60 * 60 * 1000)).toISOString();
   const lastHour = new Date(now.getTime() - (60 * 60 * 1000)).toISOString();
   const [sentToday, sentThisHour] = await Promise.all([
@@ -2837,14 +2963,14 @@ async function maybeAutoSend(env, gateway, enriched) {
     gateway.countSentSince(lastHour),
   ]);
 
-  if (sentToday >= AUTO_SEND_LIMITS.perDay || sentThisHour >= AUTO_SEND_LIMITS.perHour) {
+  if (sentToday >= sendLimits.perDay || sentThisHour >= sendLimits.perHour) {
     await gateway.patch('leads', [eq('id', lead.id)], {
-      auto_send_reason: 'Queued, but send throttle limit reached.',
+      auto_send_reason: `Queued, but send throttle limit reached for this warm-up window (${sendLimits.perDay}/day, ${sendLimits.perHour}/hour).`,
     });
     return { sent: false, reason: 'Throttle limit reached' };
   }
 
-  const emailContacts = getAutoSendEmailContacts(contacts, lead.enrichment_summary?.company || {});
+  const emailContacts = getAutoSendEmailContacts(contacts, lead.enrichment_summary?.company || {}, lead);
   if (emailContacts.length === 0) {
     await gateway.patch('leads', [eq('id', lead.id)], {
       auto_send_reason: 'No strong email route is available for auto-send.',
@@ -2859,7 +2985,7 @@ async function maybeAutoSend(env, gateway, enriched) {
   const skippedRecipients = [];
 
   for (const [index, contact] of emailContacts.entries()) {
-    if ((sentToday + sentCount) >= AUTO_SEND_LIMITS.perDay || (sentThisHour + sentCount) >= AUTO_SEND_LIMITS.perHour) {
+    if ((sentToday + sentCount) >= sendLimits.perDay || (sentThisHour + sentCount) >= sendLimits.perHour) {
       skippedRecipients.push({
         recipient: contact.email,
         reason: 'Throttle limit reached',
@@ -2938,8 +3064,8 @@ async function maybeAutoSend(env, gateway, enriched) {
       last_sent_at: sentAt,
       duplicate_guard_until: new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
       auto_send_reason: sentRecipients.length > 1
-        ? `Automatically emailed ${sentRecipients.length} strong contacts inside NYC business hours.`
-        : 'Email sent automatically inside NYC business hours.',
+        ? `Automatically emailed ${sentRecipients.length} strong contacts.`
+        : 'Email sent automatically.',
     }),
     gateway.insert('activity_log', {
       id: createId('activity'),
@@ -2961,6 +3087,7 @@ async function maybeAutoSend(env, gateway, enriched) {
     recipient: sentRecipients[0] || '',
     recipients: sentRecipients,
     outreachId: outreachDraft.id,
+    sendLimits,
   };
 }
 
@@ -2998,6 +3125,33 @@ function mapSnapshot(snapshot) {
     list.push(row);
     candidatesMap.set(row.lead_id, list);
   });
+  const mappedJobs = (snapshot.jobs || []).map((job) => ({
+    id: job.id,
+    runId: job.run_id || job.id,
+    parentJobId: job.parent_job_id || null,
+    leadId: job.lead_id || null,
+    jobType: job.job_type,
+    status: job.status,
+    provider: job.provider || 'worker',
+    summary: job.summary || '',
+    detail: job.detail || '',
+    attemptCount: job.attempt_count || 1,
+    maxAttempts: job.max_attempts || DEFAULT_JOB_MAX_ATTEMPTS,
+    retryable: Boolean(job.retryable),
+    createdAt: job.created_at,
+    startedAt: job.started_at || null,
+    finishedAt: job.finished_at || null,
+    nextRetryAt: job.next_retry_at || null,
+    errorCode: job.error_code || '',
+    errorMessage: job.error_message || '',
+    inputSnapshot: job.input_snapshot || {},
+    outputSnapshot: job.output_snapshot || {},
+    metadata: job.metadata || {},
+  }));
+  const latestRunRoot = [...mappedJobs]
+    .filter((job) => job.jobType === 'scan_run')
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0] || null;
+  const latestRunSummary = latestRunRoot ? buildRunSummary(latestRunRoot.id, snapshot.jobs || []) : null;
 
   const leads = snapshot.leads.map((lead) => {
     const permit = lead.raw_permit || {};
@@ -3287,21 +3441,8 @@ function mapSnapshot(snapshot) {
         sentAt: item.sent_at,
         status: item.status,
       })),
-    jobs: (snapshot.jobs || []).map((job) => ({
-      id: job.id,
-      leadId: job.lead_id || null,
-      jobType: job.job_type,
-      status: job.status,
-      provider: job.provider || 'worker',
-      summary: job.summary || '',
-      detail: job.detail || '',
-      attemptCount: job.attempt_count || 1,
-      retryable: Boolean(job.retryable),
-      createdAt: job.created_at,
-      startedAt: job.started_at || null,
-      finishedAt: job.finished_at || null,
-      metadata: job.metadata || {},
-    })),
+    jobs: mappedJobs,
+    latestRunSummary,
   };
 }
 
@@ -3309,6 +3450,8 @@ function normalizeStatusForUi(status) {
   switch (status) {
     case 'needs review':
       return 'reviewed';
+    case 'email-required':
+      return 'email-required';
     case 'outreach-ready':
       return 'outreach-ready';
     default:
@@ -3336,18 +3479,9 @@ function mapActivityType(eventType) {
 
 export async function runPermitAutomationCycle(env) {
   const gateway = createSupabaseGateway(env);
-  const ingestResult = await runPermitIngestInternal(env, gateway);
-  const enrichmentResult = await runEnrichmentBatchInternal(env, gateway, ingestResult.leads, {
-    limit: Math.max(ENRICHMENT_BATCH_LIMIT, Math.min(ingestResult.leads?.length || ENRICHMENT_BATCH_LIMIT, 12)),
+  return startScanRunInternal(env, gateway, {
+    trigger: 'legacy_run',
   });
-
-  return {
-    scanned: ingestResult.scanned,
-    ingested: ingestResult.ingested,
-    enriched: enrichmentResult.enriched,
-    sent: enrichmentResult.sent,
-    generatedDrafts: enrichmentResult.enriched,
-  };
 }
 
 function needsAutomationPass(lead) {
@@ -3356,7 +3490,7 @@ function needsAutomationPass(lead) {
   }
 
   return (
-    ['new', 'reviewed', 'researching'].includes(lead.status) ||
+    ['new', 'reviewed', 'researching', 'email-required'].includes(lead.status) ||
     (lead.contactability_score || 0) < 60 ||
     lead.outreach_readiness_label !== 'Ready'
   );
@@ -3367,10 +3501,15 @@ async function runPermitIngestInternal(env, gateway, options = {}) {
     gateway,
     {
       jobType: 'permit_ingest',
+      runId: options.runId || null,
+      parentJobId: options.parentJobId || null,
       provider: 'dob',
       summary: 'Scanning NYC DOB permits',
       detail: 'Pulling fresh permits, scoring fit, and upserting lead rows.',
       retryable: true,
+      inputSnapshot: {
+        source: options.source || 'worker',
+      },
       onSuccess: (result) => ({
         summary:
           result.ingested > 0
@@ -3423,6 +3562,186 @@ async function runPermitIngestInternal(env, gateway, options = {}) {
     },
     options,
   );
+}
+
+function buildRunSummary(runId, jobs = []) {
+  const relevantJobs = jobs.filter((job) => (job.run_id || job.runId || job.id) === runId);
+  const rootJob = relevantJobs.find((job) => job.id === runId) || null;
+  const childJobs = relevantJobs.filter((job) => job.id !== runId);
+  const statusCounts = childJobs.reduce((accumulator, job) => {
+    accumulator[job.status] = (accumulator[job.status] || 0) + 1;
+    return accumulator;
+  }, {});
+  const sentCount = childJobs.filter((job) => job.job_type === 'send' && job.status === 'succeeded').length;
+  const completedLeadCount = new Set(
+    childJobs
+      .filter((job) => job.job_type === 'resolve' && job.status === 'succeeded' && job.lead_id)
+      .map((job) => job.lead_id),
+  ).size;
+  const queuedLeadCount = Number(rootJob?.metadata?.queuedLeadCount || rootJob?.output_snapshot?.queuedLeadCount || 0);
+  const scannedCount = Number(rootJob?.metadata?.scannedCount || rootJob?.output_snapshot?.scannedCount || 0);
+
+  return {
+    runId,
+    status: rootJob?.status || 'queued',
+    scannedCount,
+    queuedLeadCount,
+    completedLeadCount,
+    sentCount,
+    queuedJobs: Number(statusCounts.queued || 0),
+    runningJobs: Number(statusCounts.running || 0),
+    retryingJobs: Number(statusCounts.retrying || 0),
+    failedJobs: Number(statusCounts.failed || 0),
+    succeededJobs: Number(statusCounts.succeeded || 0),
+    latestSummary: rootJob?.summary || childJobs[0]?.summary || 'Scan queued',
+    updatedAt: rootJob?.updated_at || rootJob?.finished_at || rootJob?.created_at || new Date().toISOString(),
+  };
+}
+
+async function finalizeAutomationRun(gateway, runId) {
+  if (!runId) {
+    return null;
+  }
+
+  const rootJob = await gateway.getAutomationJobById(runId);
+  if (!rootJob) {
+    return null;
+  }
+
+  const childJobs = await gateway.getRunChildren(runId, { excludeJobId: runId, pageLimit: 500 });
+  const summary = buildRunSummary(runId, [rootJob, ...childJobs]);
+  const pendingCount = summary.queuedJobs + summary.runningJobs + summary.retryingJobs;
+  const status = pendingCount > 0 ? 'running' : summary.failedJobs > 0 ? 'failed' : 'succeeded';
+  const finishedAt = pendingCount > 0 ? null : new Date().toISOString();
+  const nextSummary =
+    status === 'running'
+      ? `Scan queued ${summary.queuedLeadCount} leads, ${summary.completedLeadCount} resolved so far.`
+      : status === 'failed'
+        ? `Scan finished with ${summary.failedJobs} failed jobs.`
+        : summary.sentCount > 0
+          ? `Scan completed, ${summary.completedLeadCount} leads resolved and ${summary.sentCount} emails sent.`
+          : `Scan completed, ${summary.completedLeadCount} leads resolved.`;
+
+  await gateway.safePatchAutomationJob(runId, {
+    status,
+    summary: nextSummary,
+    detail:
+      status === 'running'
+        ? 'Background ingest, resolve, draft, and send jobs are still processing.'
+        : status === 'failed'
+          ? 'One or more background jobs failed. Review the run ledger and retry what matters.'
+          : 'All currently queued background jobs finished.',
+    finished_at: finishedAt,
+    output_snapshot: summary,
+    metadata: {
+      ...(rootJob.metadata || {}),
+      scannedCount: summary.scannedCount,
+      queuedLeadCount: summary.queuedLeadCount,
+      completedLeadCount: summary.completedLeadCount,
+      sentCount: summary.sentCount,
+    },
+  });
+
+  return {
+    ...summary,
+    status,
+    latestSummary: nextSummary,
+    updatedAt: finishedAt || new Date().toISOString(),
+  };
+}
+
+async function startScanRunInternal(env, gateway, options = {}) {
+  const runId = options.runId || createId();
+  const startedAt = new Date().toISOString();
+
+  await queueAutomationJob(gateway, {
+    id: runId,
+    runId,
+    jobType: 'scan_run',
+    status: 'running',
+    provider: 'worker',
+    summary: 'Starting background scan',
+    detail: 'Pulling permits and queueing resolve, draft, and send jobs in the background.',
+    retryable: false,
+    maxAttempts: 1,
+    metadata: {
+      trigger: options.trigger || 'manual',
+    },
+    inputSnapshot: {
+      trigger: options.trigger || 'manual',
+    },
+    startedAt,
+  });
+
+  try {
+    const ingestResult = await runPermitIngestInternal(env, gateway, {
+      runId,
+      parentJobId: runId,
+      source: options.trigger || 'manual',
+    });
+
+    const queueTargets = ingestResult.leads || [];
+    await Promise.all(
+      queueTargets.map((lead) =>
+        queueAutomationJob(gateway, {
+          runId,
+          parentJobId: runId,
+          leadId: lead.id,
+          jobType: 'resolve',
+          provider: 'worker',
+          summary: `Resolve ${lead.address}`,
+          detail: 'Resolve company, people, contact routes, and draft readiness for this lead.',
+          retryable: true,
+          maxAttempts: DEFAULT_JOB_MAX_ATTEMPTS,
+          inputSnapshot: {
+            leadId: lead.id,
+            permitKey: lead.permit_key,
+            address: lead.address,
+          },
+        }),
+      ),
+    );
+
+    await gateway.safePatchAutomationJob(runId, {
+      summary:
+        queueTargets.length > 0
+          ? `Queued ${queueTargets.length} leads from ${ingestResult.scanned} scanned permits.`
+          : `Scanned ${ingestResult.scanned} permits, but nothing new matched the queue.`,
+      detail:
+        queueTargets.length > 0
+          ? 'Background resolve, draft, and send jobs are now draining.'
+          : 'The scan completed without queueing any new lead work.',
+      metadata: {
+        trigger: options.trigger || 'manual',
+        scannedCount: ingestResult.scanned,
+        ingested: ingestResult.ingested,
+        queuedLeadCount: queueTargets.length,
+        duplicatesCollapsed: ingestResult.duplicatesCollapsed || 0,
+      },
+      output_snapshot: {
+        scannedCount: ingestResult.scanned,
+        queuedLeadCount: queueTargets.length,
+      },
+      finished_at: queueTargets.length > 0 ? null : new Date().toISOString(),
+      status: queueTargets.length > 0 ? 'running' : 'succeeded',
+    });
+
+    return {
+      runId,
+      scannedCount: ingestResult.scanned,
+      queuedLeadCount: queueTargets.length,
+    };
+  } catch (error) {
+    await gateway.safePatchAutomationJob(runId, {
+      status: 'failed',
+      summary: 'Scan run failed before queueing',
+      detail: summarizeError(error),
+      error_code: detectJobProvider(error, 'worker'),
+      error_message: summarizeError(error),
+      finished_at: new Date().toISOString(),
+    });
+    throw error;
+  }
 }
 
 async function runEnrichmentBatchInternal(env, gateway, candidateLeads = [], options = {}) {
@@ -3514,6 +3833,189 @@ async function runEnrichmentBatchInternal(env, gateway, candidateLeads = [], opt
     },
     options,
   );
+}
+
+function shouldQueueSendAfterResolve(enriched) {
+  const lead = enriched?.lead || {};
+  const company = enriched?.companyProfile || lead.enrichment_summary?.company || {};
+  const contacts = enriched?.contacts || [];
+  const latestDraft = enriched?.outreachDraft || {};
+  const emailContacts = getAutoSendEmailContacts(contacts, company, lead.raw_permit || lead);
+
+  return Boolean(
+    AUTO_SEND_ENABLED &&
+    lead.auto_send_eligible &&
+    emailContacts.length > 0 &&
+    latestDraft.subject &&
+    latestDraft.draft,
+  );
+}
+
+async function processQueuedAutomationJob(env, gateway, job) {
+  switch (job.job_type) {
+    case 'resolve': {
+      if (!job.lead_id) {
+        throw new Error('Resolve job is missing its lead reference');
+      }
+
+      await runAutomationJob(
+        gateway,
+        {
+          jobType: 'resolve',
+          runId: job.run_id || null,
+          parentJobId: job.parent_job_id || null,
+          provider: 'worker',
+          leadId: job.lead_id,
+          summary: job.summary || 'Resolving lead',
+          detail: job.detail || 'Refreshing company, person, contact, and draft state.',
+          retryable: true,
+          maxAttempts: DEFAULT_JOB_MAX_ATTEMPTS,
+          inputSnapshot: job.input_snapshot || job.inputSnapshot || {},
+          onSuccess: (result) => ({
+            summary: `Resolved ${result.lead.address}`,
+            detail: result.lead.auto_send_eligible
+              ? 'Lead resolved cleanly and is ready for guarded auto-send.'
+              : 'Lead resolved cleanly and is waiting on a stronger route or manual review.',
+            outputSnapshot: {
+              permitKey: result.lead.permit_key,
+              address: result.lead.address,
+              company: result.companyProfile?.company_name || '',
+              route: result.lead.best_channel || '',
+              autoSendEligible: Boolean(result.lead.auto_send_eligible),
+            },
+          }),
+        },
+        async () => {
+          const leadRow = await gateway.getLeadById(job.lead_id);
+          if (!leadRow) {
+            throw new Error('Lead not found');
+          }
+
+          const enriched = await enrichLead(env, gateway, leadRow, { force: true });
+
+          await queueAutomationJob(gateway, {
+            runId: job.run_id || null,
+            parentJobId: job.id,
+            leadId: job.lead_id,
+            jobType: 'enrich',
+            status: 'succeeded',
+            provider: 'worker',
+            summary: `Enriched ${enriched.lead.address}`,
+            detail: 'Company, contacts, and trust state were refreshed.',
+            retryable: false,
+            maxAttempts: 1,
+            inputSnapshot: job.input_snapshot || job.inputSnapshot || {},
+            outputSnapshot: {
+              company: enriched.companyProfile?.company_name || '',
+              route: enriched.lead.best_channel || '',
+              routeConfidence: enriched.lead.enrichment_summary?.channelDecision?.routeConfidence || 0,
+            },
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+          });
+
+          await queueAutomationJob(gateway, {
+            runId: job.run_id || null,
+            parentJobId: job.id,
+            leadId: job.lead_id,
+            jobType: 'draft',
+            status: 'succeeded',
+            provider: 'worker',
+            summary: `Draft prepared for ${enriched.lead.address}`,
+            detail: 'One best outreach draft, phone opener, and follow-up note were refreshed.',
+            retryable: false,
+            maxAttempts: 1,
+            inputSnapshot: {
+              channel: enriched.lead.best_channel || '',
+            },
+            outputSnapshot: {
+              recipient: enriched.outreachDraft?.recipient || '',
+              subject: enriched.outreachDraft?.subject || '',
+            },
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+          });
+
+          if (shouldQueueSendAfterResolve(enriched)) {
+            await queueAutomationJob(gateway, {
+              runId: job.run_id || null,
+              parentJobId: job.id,
+              leadId: job.lead_id,
+              jobType: 'send',
+              provider: 'gmail',
+              summary: `Send ${enriched.lead.address}`,
+              detail: 'Deliver guarded outreach to the strongest aligned email routes.',
+              retryable: true,
+              maxAttempts: DEFAULT_JOB_MAX_ATTEMPTS,
+              inputSnapshot: {
+                address: enriched.lead.address,
+                permitKey: enriched.lead.permit_key,
+              },
+            });
+          }
+
+          return enriched;
+        },
+        { existingJob: job },
+      );
+      break;
+    }
+    case 'send':
+      if (!job.lead_id) {
+        throw new Error('Send job is missing its lead reference');
+      }
+      await sendLeadNowInternal(env, gateway, job.lead_id, { existingJob: job, mode: 'auto' });
+      break;
+    case 'lead_enrichment':
+      if (!job.lead_id) {
+        throw new Error('Enrichment job is missing its lead reference');
+      }
+      await enrichLeadNowInternal(env, gateway, job.lead_id, { existingJob: job });
+      break;
+    case 'draft_refresh':
+      if (!job.lead_id) {
+        throw new Error('Draft job is missing its lead reference');
+      }
+      await refreshLeadDraftNowInternal(env, gateway, job.lead_id, { existingJob: job });
+      break;
+    default:
+      throw new Error(`Unsupported queued job type: ${job.job_type}`);
+  }
+
+  if (job.run_id) {
+    await finalizeAutomationRun(gateway, job.run_id);
+  }
+}
+
+async function drainAutomationQueueInternal(env, gateway, options = {}) {
+  const maxJobs = options.limit || SEND_BATCH_LIMIT + ENRICHMENT_BATCH_LIMIT;
+  const nowIso = new Date().toISOString();
+  const jobs = await gateway.getRunnableAutomationJobs(nowIso, maxJobs);
+  const touchedRuns = new Set();
+
+  for (const job of jobs) {
+    if (!job || job.job_type === 'scan_run' || job.job_type === 'permit_ingest') {
+      continue;
+    }
+
+    try {
+      await processQueuedAutomationJob(env, gateway, job);
+    } catch {
+      // Job state is already patched inside runAutomationJob.
+    }
+
+    if (job.run_id) {
+      touchedRuns.add(job.run_id);
+    }
+  }
+
+  for (const runId of touchedRuns) {
+    await finalizeAutomationRun(gateway, runId);
+  }
+
+  return {
+    processed: jobs.length,
+  };
 }
 
 export async function runPermitIngest(env) {
@@ -3778,6 +4280,56 @@ export async function getPermitAutomationSnapshot(env) {
   const gateway = createSupabaseGateway(env);
   const snapshot = await gateway.getQueueSnapshot();
   return mapSnapshot(snapshot);
+}
+
+export async function getAutomationJobs(env, options = {}) {
+  const gateway = createSupabaseGateway(env);
+  const leadRow = options.leadId ? await loadLeadForAction(gateway, options.leadId) : null;
+  const jobs = await gateway.getAutomationJobs({
+    runId: options.runId || null,
+    leadId: leadRow?.id || null,
+    pageLimit: options.pageLimit || 500,
+  });
+  const latestRunRoot = [...jobs]
+    .filter((job) => job.job_type === 'scan_run')
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())[0] || null;
+
+  return {
+    jobs: jobs.map((job) => ({
+      id: job.id,
+      runId: job.run_id || job.id,
+      parentJobId: job.parent_job_id || null,
+      leadId: job.lead_id || null,
+      jobType: job.job_type,
+      status: job.status,
+      provider: job.provider || 'worker',
+      summary: job.summary || '',
+      detail: job.detail || '',
+      attemptCount: job.attempt_count || 1,
+      maxAttempts: job.max_attempts || DEFAULT_JOB_MAX_ATTEMPTS,
+      retryable: Boolean(job.retryable),
+      createdAt: job.created_at,
+      startedAt: job.started_at || null,
+      finishedAt: job.finished_at || null,
+      nextRetryAt: job.next_retry_at || null,
+      errorCode: job.error_code || '',
+      errorMessage: job.error_message || '',
+      inputSnapshot: job.input_snapshot || {},
+      outputSnapshot: job.output_snapshot || {},
+      metadata: job.metadata || {},
+    })),
+    latestRunSummary: latestRunRoot ? buildRunSummary(latestRunRoot.id, jobs) : null,
+  };
+}
+
+export async function startScanRun(env, options = {}) {
+  const gateway = createSupabaseGateway(env);
+  return startScanRunInternal(env, gateway, options);
+}
+
+export async function drainAutomationQueue(env, options = {}) {
+  const gateway = createSupabaseGateway(env);
+  return drainAutomationQueueInternal(env, gateway, options);
 }
 
 async function enrichLeadNowInternal(env, gateway, leadId, options = {}) {
@@ -4186,7 +4738,9 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         throw new Error('No draft available to send');
       }
 
-      const emailContacts = getAutoSendEmailContacts(contacts, lead.companyProfile || {});
+      const emailContacts = options.mode === 'auto'
+        ? getAutoSendEmailContacts(contacts, lead.companyProfile || {}, lead)
+        : getManualSendEmailContacts(contacts, lead.companyProfile || {}, lead);
       if (emailContacts.length === 0) {
         throw new Error('No email available');
       }
@@ -4260,9 +4814,13 @@ async function sendLeadNowInternal(env, gateway, leadId, options = {}) {
         last_contacted_at: sentAt,
         last_sent_at: sentAt,
         duplicate_guard_until: new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString(),
-        auto_send_reason: sentRecipients.length > 1
-          ? `Operator sent email to ${sentRecipients.length} contacts.`
-          : 'Email sent manually by operator.',
+        auto_send_reason: options.mode === 'auto'
+          ? sentRecipients.length > 1
+            ? `Automatically emailed ${sentRecipients.length} guarded contacts.`
+            : 'Email sent automatically.'
+          : sentRecipients.length > 1
+            ? `Operator sent email to ${sentRecipients.length} contacts.`
+            : 'Email sent manually by operator.',
       });
 
       const latestLead = (await gateway.getLeadById(leadRow.id)) || leadRow;
@@ -4299,37 +4857,13 @@ export async function retryAutomationJob(env, jobId) {
     throw new Error('This job is not retryable');
   }
 
-  switch (job.job_type) {
-    case 'permit_ingest':
-      await runPermitIngestInternal(env, gateway, { existingJob: job });
-      break;
-    case 'enrichment_batch':
-      await runEnrichmentBatchInternal(env, gateway, [], {
-        limit: ENRICHMENT_BATCH_LIMIT,
-        existingJob: job,
-      });
-      break;
-    case 'lead_enrichment':
-      if (!job.lead_id) {
-        throw new Error('The failed enrichment job is missing its lead reference');
-      }
-      await enrichLeadNowInternal(env, gateway, job.lead_id, { existingJob: job });
-      break;
-    case 'draft_refresh':
-      if (!job.lead_id) {
-        throw new Error('The failed draft job is missing its lead reference');
-      }
-      await refreshLeadDraftNowInternal(env, gateway, job.lead_id, { existingJob: job });
-      break;
-    case 'send':
-      if (!job.lead_id) {
-        throw new Error('The failed send job is missing its lead reference');
-      }
-      await sendLeadNowInternal(env, gateway, job.lead_id, { existingJob: job });
-      break;
-    default:
-      throw new Error('Retry is not supported for this job type yet');
-  }
+  await gateway.safePatchAutomationJob(job.id, {
+    status: 'queued',
+    detail: job.detail || '',
+    next_retry_at: null,
+    error_code: null,
+    error_message: null,
+  });
 
   return getPermitAutomationSnapshot(env);
 }

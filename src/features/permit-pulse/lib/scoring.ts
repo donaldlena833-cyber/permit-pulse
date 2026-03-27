@@ -1,4 +1,3 @@
-import { OUTREACH_PLUGIN_LINES } from "@/features/permit-pulse/data/plugin-lines"
 import {
   type AutomationSummary,
   type ChannelDecision,
@@ -47,10 +46,6 @@ function clamp(value: number, min = 0, max = 100): number {
 
 function uniq<T>(values: T[]): T[] {
   return Array.from(new Set(values))
-}
-
-function hashValue(value: string): number {
-  return Array.from(value).reduce((total, character) => total + character.charCodeAt(0), 0)
 }
 
 const PERMIT_RELEVANCE_RULES = [
@@ -1036,26 +1031,6 @@ export function buildLeadFromPermit(
   }
 }
 
-function getPrimaryProjectPhrase(projectTags: ProjectTag[]): string {
-  if (projectTags.includes("storefront")) {
-    return "storefront or entry glass scope"
-  }
-
-  if (projectTags.includes("partitions")) {
-    return "glass partition work"
-  }
-
-  if (projectTags.includes("mirror")) {
-    return "mirror package"
-  }
-
-  if (projectTags.includes("shower")) {
-    return "shower glass scope"
-  }
-
-  return "glass scope"
-}
-
 function getDraftRecipientName(lead: PermitLead): string {
   return (
     lead.enrichment.contactPersonName ||
@@ -1088,67 +1063,47 @@ function getDraftRole(lead: PermitLead): string {
 }
 
 function chooseDraftCta(lead: PermitLead, role: string): string {
-  if (lead.relevanceScore >= 0.85 && role.includes("gc")) {
-    return `Happy to do a free glass takeoff for ${getPermitAddress(lead)} if plans are already moving.`
-  }
-
-  if (lead.relevanceScore >= 0.8) {
-    return `I can put together a quick estimate for the glass scope at ${getPermitAddress(lead)} if that would help.`
-  }
+  void lead
 
   if (role.includes("owner")) {
-    return "Would it be useful if I sent over a few practical options and a quick budget range?"
+    return "I know filings do not always show the full picture, but if any glass related work is still being lined up, I’d be happy to connect."
   }
 
-  return "Would 10 minutes this week be useful to compare the glass options for this project?"
+  return "I know filings do not always show the full picture, but if any glass related work is still being lined up, I’d be happy to connect."
 }
 
 function buildDraftIntro(lead: PermitLead): string {
-  const permitReference = lead.job_filing_number ? ` on permit ${lead.job_filing_number}` : ""
-
-  if (lead.relevanceKeyword) {
-    return `I came across the DOB filing for ${getPermitAddress(lead)}${permitReference}. The scope reads like a possible fit for ${lead.serviceAngle}, especially with ${lead.relevanceKeyword} in the permit wording.`
-  }
-
-  return `I came across the DOB filing for ${getPermitAddress(lead)}${permitReference}. The scope looks like a possible fit for ${lead.serviceAngle}.`
+  return `I saw the filing for ${getPermitAddress(lead)} and wanted to reach out.`
 }
 
 export function generateDraftFromLead(lead: PermitLead): OutreachDraft {
   const address = getPermitAddress(lead)
-  const projectPhrase = lead.serviceAngle || getPrimaryProjectPhrase(lead.projectTags)
   const target = getDraftRecipientName(lead)
   const introTarget = target === "—" ? "your team" : target
   const role = getDraftRole(lead)
-  const pluginLine = OUTREACH_PLUGIN_LINES[hashValue(lead.id) % OUTREACH_PLUGIN_LINES.length]
-  const subject = sanitizeOutreachCopy(`${address}, ${projectPhrase}`)
+  const subject = sanitizeOutreachCopy(`${address} filing`)
   const introLine = sanitizeOutreachCopy(buildDraftIntro(lead))
-  const valueLine =
-    role.includes("gc")
-      ? `MetroGlass Pro handles ${projectPhrase} for active contractors across NYC, with a straightforward estimating and install process.`
-      : role.includes("filing")
-        ? `MetroGlass Pro handles ${projectPhrase} across NYC, and I wanted to reach the right team if glass scope is still open.`
-        : `MetroGlass Pro handles ${projectPhrase} across NYC, especially for renovation work where clean execution and quick coordination matter.`
+  const valueLine = sanitizeOutreachCopy(
+    "I’m with MetroGlass Pro. We work on custom glass installations across NYC, NJ, and CT, including mirrors, partitions, shower glass, cabinets, and similar scope.",
+  )
   const cta = sanitizeOutreachCopy(chooseDraftCta(lead, role))
   const shortEmail = [
     `Hi ${introTarget},`,
     "",
     introLine,
     "",
-    sanitizeOutreachCopy(valueLine),
-    "",
-    sanitizeOutreachCopy(pluginLine),
+    valueLine,
     "",
     cta,
     "",
+    "Best,",
     "Donald",
-    "MetroGlass Pro",
-    "332 999 3846",
   ].join("\n")
   const callOpener = sanitizeOutreachCopy(
-    `Hi, this is Donald from MetroGlass Pro. I saw the permit for ${address} and wanted to check who is handling the ${projectPhrase} on that job.`,
+    `Hi, this is Donald from MetroGlass Pro. I came across the filing for ${address} and wanted to reach out. Not sure if you’re the right contact for the project, but we handle storefronts, shower doors, mirrors, railings, and custom glass across NYC. If any of that scope is still open, I’d be happy to help.`,
   )
   const followUpNote = sanitizeOutreachCopy(
-    `Following up on the permit for ${address}. If the ${projectPhrase} is still open, I can send over a quick number.`,
+    `Following up on the filing for ${address}. If any glass scope is still open, I’d be happy to help.`,
   )
 
   return {
