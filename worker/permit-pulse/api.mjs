@@ -116,6 +116,27 @@ function presentRun(run) {
   };
 }
 
+async function enrichLeadBatch(env, leadIds = [], actorId = null) {
+  const uniqueLeadIds = [...new Set(
+    (Array.isArray(leadIds) ? leadIds : [])
+      .map((leadId) => String(leadId || '').trim())
+      .filter(Boolean),
+  )].slice(0, 25);
+
+  for (const leadId of uniqueLeadIds) {
+    try {
+      await enrichLead(env, leadId, {
+        triggerType: 'retry',
+        triggeredBy: actorId,
+      });
+    } catch (error) {
+      console.error(`Batch enrich failed for lead ${leadId}`, error);
+    }
+  }
+
+  return uniqueLeadIds.length;
+}
+
 async function getTodayPayload(env) {
   const db = createSupabaseClient(env);
   const config = await getAppConfig(db);
@@ -373,6 +394,26 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     if (url.pathname === '/api/leads/send-ready' && request.method === 'POST') {
       const config = await getAppConfig(db);
       return json(await sendReadyLeads(env, db, null, config));
+    }
+
+    if (url.pathname === '/api/leads/enrich-batch' && request.method === 'POST') {
+      const body = await parseBody(request);
+      const leadIds = Array.isArray(body.lead_ids) ? body.lead_ids : [];
+      const acceptedCount = [...new Set(leadIds.map((leadId) => String(leadId || '').trim()).filter(Boolean))].slice(0, 25).length;
+
+      if (acceptedCount === 0) {
+        return json({ started: false, accepted: 0 });
+      }
+
+      const task = enrichLeadBatch(env, leadIds, user.email || null);
+
+      if (ctx?.waitUntil) {
+        ctx.waitUntil(task);
+        return json({ started: true, accepted: acceptedCount });
+      }
+
+      await task;
+      return json({ started: true, accepted: acceptedCount });
     }
 
     if (url.pathname === '/api/leads' && request.method === 'GET') {

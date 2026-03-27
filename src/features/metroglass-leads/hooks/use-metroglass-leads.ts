@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import {
   addManualLeadEmail,
   archiveLead,
+  enrichLeadBatch,
   enrichLeadNow,
   fetchConfig,
   fetchHealth,
@@ -180,10 +181,30 @@ export function useMetroglassLeads() {
     }
   }, [refreshToday])
 
+  const runBatchAction = useCallback(async (actionId: string, work: () => Promise<string>) => {
+    setActionLeadId(actionId)
+    try {
+      const successMessage = await work()
+      toast.success(successMessage)
+      await Promise.all([refreshToday(), refreshLeads(), refreshSelectedLead(), refreshSystem()])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Action failed")
+    } finally {
+      setActionLeadId(null)
+    }
+  }, [refreshLeads, refreshSelectedLead, refreshSystem, refreshToday])
+
   const actions = useMemo(() => ({
     scan,
     sendAllReady: () => runAction(null, async () => { await sendAllReady() }, "Ready leads sent"),
     enrichLead: (leadId: string) => runAction(leadId, async () => { await enrichLeadNow(leadId) }, "Lead enrichment started"),
+    enrichMany: (leadIds: string[]) => runBatchAction("enrich-batch", async () => {
+      const result = await enrichLeadBatch(leadIds)
+      if (!result.started || result.accepted === 0) {
+        throw new Error("Choose at least one lead to enrich")
+      }
+      return `Started enrichment for ${result.accepted} lead${result.accepted === 1 ? "" : "s"}`
+    }),
     sendLead: (leadId: string) => runAction(leadId, async () => { await sendLeadNow(leadId) }, "Email sent"),
     archiveLead: (leadId: string) => runAction(leadId, async () => { await archiveLead(leadId) }, "Lead archived"),
     emailRequired: (leadId: string) => runAction(leadId, async () => { await markLeadEmailRequired(leadId) }, "Moved to Email Required"),
@@ -236,7 +257,7 @@ export function useMetroglassLeads() {
         toast.error(error instanceof Error ? error.message : "Settings update failed")
       }
     },
-  }), [runAction, scan])
+  }), [runAction, runBatchAction, scan])
 
   return {
     tab,

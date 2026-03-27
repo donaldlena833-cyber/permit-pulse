@@ -1,4 +1,4 @@
-import { LoaderCircle, Mail, PhoneCall, RefreshCw, SendHorizonal } from "lucide-react"
+import { LoaderCircle, Mail, PhoneCall, RefreshCw, SendHorizonal, Sparkles } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -11,6 +11,7 @@ interface TodayScreenProps {
   actionLeadId: string | null
   onOpenLead: (lead: LeadRow) => void
   onScan: () => void
+  onEnrichNew: (leadIds: string[]) => void
   onSendAllReady: () => void
   onSendFollowUp: (leadId: string, step: number) => void
   onLogPhoneFollowUp: (leadId: string, step: number) => void
@@ -80,6 +81,7 @@ export function TodayScreen({
   actionLeadId,
   onOpenLead,
   onScan,
+  onEnrichNew,
   onSendAllReady,
   onSendFollowUp,
   onLogPhoneFollowUp,
@@ -88,7 +90,9 @@ export function TodayScreen({
   const run = today?.current_run ?? today?.last_run ?? null
   const runCounters = run?.counters
   const readyCount = today?.counts.ready ?? 0
+  const newLeadIds = (today?.new_leads ?? []).map((lead) => lead.id)
   const bulkSendDisabled = readyCount === 0 || actionLeadId === "scan"
+  const bulkEnrichDisabled = newLeadIds.length === 0 || actionLeadId === "scan" || actionLeadId === "enrich-batch"
   const sendNeedsSoftTone = readyCount === 0 || Boolean(today?.warm_up.enabled)
   const bulkSendLabel = readyCount === 0
     ? "No ready leads yet"
@@ -175,6 +179,16 @@ export function TodayScreen({
             <div className="flex flex-col gap-3 sm:flex-row">
               <Button className="h-11 flex-1 rounded-full bg-[#1A1A1A] text-white hover:bg-[#111111]" onClick={onScan} type="button">
                 {actionLeadId === "scan" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Run scan now"}
+              </Button>
+              <Button
+                className="h-11 flex-1 rounded-full border border-[#D4691A] bg-white text-[#D4691A] hover:bg-[#FFF5ED]"
+                disabled={bulkEnrichDisabled}
+                onClick={() => onEnrichNew(newLeadIds)}
+                type="button"
+                variant="outline"
+              >
+                {actionLeadId === "enrich-batch" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {newLeadIds.length > 0 ? `Enrich new (${newLeadIds.length})` : "No new leads to enrich"}
               </Button>
               <Button
                 className={`h-11 flex-1 rounded-full ${

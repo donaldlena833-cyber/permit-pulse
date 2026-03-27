@@ -1,6 +1,8 @@
-import { ArrowUpRight, Globe, Mail, Phone, Sparkles } from "lucide-react"
+import { useMemo, useState } from "react"
+import { ArrowUpRight, CheckSquare, Globe, Mail, Phone, Sparkles } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { formatLeadStatus, formatScore } from "@/features/metroglass-leads/lib/format"
 import type { LeadRow } from "@/features/metroglass-leads/types/api"
 
@@ -10,6 +12,7 @@ interface LeadsScreenProps {
   onFilterChange: (filter: string) => void
   onOpenLead: (lead: LeadRow) => void
   onEnrich: (leadId: string) => void
+  onEnrichMany: (leadIds: string[]) => void
   actionLeadId: string | null
 }
 
@@ -55,7 +58,30 @@ function emailTone(lead: LeadRow) {
   return "text-[#7A6A59]"
 }
 
-export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnrich, actionLeadId }: LeadsScreenProps) {
+export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnrich, onEnrichMany, actionLeadId }: LeadsScreenProps) {
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([])
+  const visibleSelectedLeadIds = useMemo(
+    () => selectedLeadIds.filter((leadId) => leads.some((lead) => lead.id === leadId)),
+    [leads, selectedLeadIds],
+  )
+  const selectedCount = visibleSelectedLeadIds.length
+  const allVisibleSelected = useMemo(
+    () => leads.length > 0 && leads.every((lead) => visibleSelectedLeadIds.includes(lead.id)),
+    [leads, visibleSelectedLeadIds],
+  )
+
+  const toggleLead = (leadId: string, checked: boolean) => {
+    setSelectedLeadIds((current) => (
+      checked
+        ? Array.from(new Set([...current, leadId]))
+        : current.filter((currentLeadId) => currentLeadId !== leadId)
+    ))
+  }
+
+  const toggleAllVisible = (checked: boolean) => {
+    setSelectedLeadIds(checked ? leads.map((lead) => lead.id) : [])
+  }
+
   return (
     <div className="space-y-5 pb-32">
       <section className="overflow-hidden rounded-[28px] border border-[#E5D7C8] bg-[linear-gradient(160deg,#fffaf3,#fffdf9_56%,#f1e7da)] px-4 py-5 shadow-[0_22px_48px_rgba(26,26,26,0.07)] sm:px-5">
@@ -86,12 +112,46 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
                   ? "border-[#1A1A1A] bg-[#1A1A1A] text-white shadow-[0_10px_22px_rgba(26,26,26,0.18)]"
                   : "border-[#D6C6B6] bg-white/90 text-[#5F564C] hover:bg-white"
               }`}
-              onClick={() => onFilterChange(value)}
+              onClick={() => {
+                setSelectedLeadIds([])
+                onFilterChange(value)
+              }}
               type="button"
             >
               {formatLeadStatus(value)}
             </button>
           ))}
+        </div>
+      </section>
+
+      <section className="rounded-[24px] border border-[#E5D7C8] bg-[rgba(255,255,255,0.88)] px-4 py-4 shadow-[0_16px_36px_rgba(26,26,26,0.05)]">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-[#8B7D6B]">Batch enrich</div>
+            <div className="mt-1 text-sm text-[#5F564C]">
+              Select only the leads you want to re-run. I do not recommend a blind enrich-everything button.
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]"
+              onClick={() => toggleAllVisible(!allVisibleSelected)}
+              type="button"
+              variant="outline"
+            >
+              <CheckSquare className="h-4 w-4" />
+              {allVisibleSelected ? "Clear visible" : "Select visible"}
+            </Button>
+            <Button
+              className="h-10 rounded-full bg-[#D4691A] px-4 text-white hover:bg-[#BA5A12]"
+              disabled={selectedCount === 0 || actionLeadId === "enrich-batch"}
+              onClick={() => onEnrichMany(visibleSelectedLeadIds)}
+              type="button"
+            >
+              {actionLeadId === "enrich-batch" ? "Working" : `Enrich selected${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+            </Button>
+          </div>
         </div>
       </section>
 
@@ -102,6 +162,13 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
             key={lead.id}
           >
             <div className="flex items-start justify-between gap-3">
+              <div className="pt-1">
+                <Checkbox
+                  checked={selectedLeadIds.includes(lead.id)}
+                  className="h-5 w-5 rounded-[6px] border-[#D2C2B1] data-[state=checked]:border-[#1A1A1A] data-[state=checked]:bg-[#1A1A1A]"
+                  onCheckedChange={(checked) => toggleLead(lead.id, Boolean(checked))}
+                />
+              </div>
               <button className="min-w-0 flex-1 text-left" onClick={() => onOpenLead(lead)} type="button">
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="text-[15px] font-semibold tracking-[-0.02em] text-[#1A1A1A]">

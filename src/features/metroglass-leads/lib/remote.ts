@@ -77,6 +77,16 @@ export function enrichLeadNow(leadId: string) {
   )
 }
 
+export function enrichLeadBatch(leadIds: string[]) {
+  return requestJson<{ started: boolean; accepted: number }>("/api/leads/enrich-batch", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ lead_ids: leadIds }),
+  })
+}
+
 export function sendAllReady() {
   return requestJson<{ attempted: number; succeeded: number; failed: number; remaining: number }>(
     "/api/leads/send-ready",
