@@ -73,32 +73,35 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(212,105,26,0.12),transparent_22%),linear-gradient(180deg,#efe4d5,#eadfce_36%,#efe7dc)] text-[#1A1A1A]">
       <header className="sticky top-0 z-20 border-b border-[#D9CCBE] bg-[rgba(239,228,213,0.88)] backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-4">
-          <div className="min-w-0">
-            <div className="text-[11px] uppercase tracking-[0.24em] text-[#D4691A]">MetroGlassPro</div>
-            <div className="mt-1 font-['Instrument_Serif'] text-3xl leading-none sm:text-[2.4rem]">Leads</div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
-                {today?.counts.new ?? 0} new
-              </div>
-              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
-                {today?.counts.review ?? 0} review
-              </div>
-              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
-                {today?.counts.email_required ?? 0} email required
-              </div>
-              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
-                {today?.counts.ready ?? 0} ready
-              </div>
-              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
-                Worker {health?.ok ? "healthy" : "offline"}
-              </div>
+        <div className="mx-auto max-w-6xl px-4 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-[#D4691A]">MetroGlassPro</div>
+              <div className="mt-1 font-['Instrument_Serif'] text-[2rem] leading-none sm:text-[2.4rem]">Lead desk</div>
+              <div className="mt-2 text-sm text-[#5F564C]">Operator-first permit outreach</div>
             </div>
+            <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => void onLogout()} type="button" variant="outline">
+              Log out
+            </Button>
           </div>
 
-          <Button className="h-11 rounded-full border border-[#D6C6B6] bg-white px-5 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => void onLogout()} type="button" variant="outline">
-            Log out
-          </Button>
+          <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+              {today?.counts.new ?? 0} new
+            </div>
+            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+              {today?.counts.review ?? 0} review
+            </div>
+            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+              {today?.counts.email_required ?? 0} email required
+            </div>
+            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+              {today?.counts.ready ?? 0} ready
+            </div>
+            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+              Worker {health?.ok ? "healthy" : "offline"}
+            </div>
+          </div>
         </div>
       </header>
 

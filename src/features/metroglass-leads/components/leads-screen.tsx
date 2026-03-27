@@ -1,5 +1,6 @@
+import { ArrowUpRight, Globe, Mail, Phone, Sparkles } from "lucide-react"
+
 import { Button } from "@/components/ui/button"
-import { Panel } from "@/features/metroglass-leads/components/panel"
 import { formatLeadStatus, formatScore } from "@/features/metroglass-leads/lib/format"
 import type { LeadRow } from "@/features/metroglass-leads/types/api"
 
@@ -14,100 +15,216 @@ interface LeadsScreenProps {
 
 const FILTERS = ["all", "new", "ready", "review", "email_required", "sent", "archived"]
 
+function statusTone(status: string) {
+  if (status === "ready") return "border-[#C6E1D3] bg-[#F3FBF7] text-[#2D6A4F]"
+  if (status === "email_required") return "border-[#E2D4C5] bg-[#F8F1E8] text-[#6B5A48]"
+  if (status === "review") return "border-[#E9D7BE] bg-[#FFF7ED] text-[#9A6A2C]"
+  if (status === "sent") return "border-[#D3D8E8] bg-[#F5F7FC] text-[#44557A]"
+  if (status === "archived") return "border-[#E0DED9] bg-[#F7F7F5] text-[#6F6A63]"
+  return "border-[#F0D8C1] bg-[#FFF2E5] text-[#9A5A12]"
+}
+
+function routeSummary(lead: LeadRow) {
+  if (lead.contact_email) {
+    return lead.contact_email
+  }
+  if (lead.status === "email_required") {
+    return "Needs manual email research"
+  }
+  if (lead.status === "review") {
+    return "System found evidence but no approved route"
+  }
+  return "No verified email selected"
+}
+
+function websiteLabel(value: string | null | undefined) {
+  if (!value) {
+    return "No website"
+  }
+
+  try {
+    return new URL(value.startsWith("http") ? value : `https://${value}`).hostname.replace(/^www\./, "")
+  } catch {
+    return value.replace(/^https?:\/\//, "").replace(/^www\./, "")
+  }
+}
+
+function emailTone(lead: LeadRow) {
+  if (lead.contact_email) return "text-[#1A1A1A]"
+  if (lead.status === "email_required") return "text-[#6B5A48]"
+  return "text-[#7A6A59]"
+}
+
 export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnrich, actionLeadId }: LeadsScreenProps) {
   return (
     <div className="space-y-5 pb-32">
-      <Panel className="overflow-hidden bg-[linear-gradient(145deg,#fff9f2,#ffffff_52%,#f5ebde)]">
-        <div className="text-[11px] uppercase tracking-[0.24em] text-[#8B7D6B]">Lead queue</div>
-        <h1 className="mt-3 font-['Instrument_Serif'] text-4xl text-[#1A1A1A] sm:text-5xl">Review with control</h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5F564C]">
-          Open a lead, pick the right recipient yourself when the system is unsure, and keep weak evidence from hijacking the route.
-        </p>
+      <section className="overflow-hidden rounded-[28px] border border-[#E5D7C8] bg-[linear-gradient(160deg,#fffaf3,#fffdf9_56%,#f1e7da)] px-4 py-5 shadow-[0_22px_48px_rgba(26,26,26,0.07)] sm:px-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-[#D4691A]">Lead queue</div>
+            <h1 className="mt-2 font-['Instrument_Serif'] text-[2rem] leading-none text-[#1A1A1A] sm:text-[2.6rem]">
+              Review with control
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5F564C]">
+              Work the queue like an operator, not a dashboard. Pick the right route, park dead ends honestly, and keep the list tight enough to scan fast from your phone.
+            </p>
+          </div>
+
+          <div className="rounded-[18px] border border-[#E8DACA] bg-white/80 px-4 py-3 text-right">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Showing</div>
+            <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{leads.length}</div>
+            <div className="mt-1 text-xs text-[#6E645A]">{formatLeadStatus(filter)}</div>
+          </div>
+        </div>
+
         <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
           {FILTERS.map((value) => (
-            <Button
+            <button
               key={value}
-              className={`h-10 rounded-full px-4 ${filter === value ? "bg-[#1A1A1A] text-white hover:bg-[#1A1A1A]" : "border border-[#D6C6B6] bg-white text-[#5F564C] hover:bg-[#F7F0E8]"}`}
+              className={`whitespace-nowrap rounded-full border px-4 py-2 text-sm font-medium transition ${
+                filter === value
+                  ? "border-[#1A1A1A] bg-[#1A1A1A] text-white shadow-[0_10px_22px_rgba(26,26,26,0.18)]"
+                  : "border-[#D6C6B6] bg-white/90 text-[#5F564C] hover:bg-white"
+              }`}
               onClick={() => onFilterChange(value)}
               type="button"
-              variant="outline"
             >
               {formatLeadStatus(value)}
-            </Button>
+            </button>
           ))}
         </div>
-      </Panel>
+      </section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {leads.map((lead) => (
-          <Panel className="transition hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(26,26,26,0.12)]" key={lead.id}>
-            <button className="block w-full text-left" onClick={() => onOpenLead(lead)} type="button">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-semibold tracking-[-0.03em] text-[#1A1A1A]">{lead.company_name || "Unnamed lead"}</div>
-                  <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
+      <section className="overflow-hidden rounded-[26px] border border-[#E5D7C8] bg-[rgba(255,255,255,0.9)] shadow-[0_18px_40px_rgba(26,26,26,0.06)]">
+        {leads.map((lead, index) => (
+          <article
+            className={`group px-4 py-4 transition hover:bg-[#FFFCF8] sm:px-5 ${index !== leads.length - 1 ? "border-b border-[#EEE4D7]" : ""}`}
+            key={lead.id}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <button className="min-w-0 flex-1 text-left" onClick={() => onOpenLead(lead)} type="button">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="text-[15px] font-semibold tracking-[-0.02em] text-[#1A1A1A]">
+                    {lead.company_name || lead.applicant_name || lead.address}
+                  </div>
+                  <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.16em] ${statusTone(lead.status)}`}>
+                    {formatLeadStatus(lead.status)}
+                  </span>
+                  {lead.contact_email ? (
+                    <span className="rounded-full border border-[#E1D6C9] bg-[#FAF5EE] px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[#6C6156]">
+                      Trust {Math.round(lead.contact_email_trust || 0)}
+                    </span>
+                  ) : null}
                 </div>
-                <div className="rounded-full border border-[#E4D5C5] bg-[#FBF5EC] px-3 py-1 text-xs font-medium text-[#6B5A48]">
-                  {formatLeadStatus(lead.status)}
+
+                <div className="mt-2 text-sm text-[#5F564C]">{lead.address}</div>
+                <div className="mt-2 text-sm leading-6 text-[#6A5F54]">
+                  {lead.work_description || "No work description on file"}
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full border border-[#E4D8CA] bg-white px-3 py-1 text-[#7A6F63]">
+                    Relevance {formatScore(lead.relevance_score)}{lead.relevance_keyword ? ` • ${lead.relevance_keyword}` : ""}
+                  </span>
+                  <span className={`rounded-full border border-[#E4D8CA] bg-white px-3 py-1 ${emailTone(lead)}`}>
+                    {routeSummary(lead)}
+                  </span>
+                  <span className="rounded-full border border-[#E4D8CA] bg-white px-3 py-1 text-[#7A6F63]">
+                    {lead.contact_phone || "No phone"}
+                  </span>
+                  <span className="rounded-full border border-[#E4D8CA] bg-white px-3 py-1 text-[#7A6F63]">
+                    {websiteLabel(lead.company_website)}
+                  </span>
+                </div>
+              </button>
+
+              <div className="shrink-0">
+                <Button
+                  className="h-9 rounded-full border border-[#D6C6B6] bg-white px-3 text-[#5F564C] hover:bg-[#F7F0E8]"
+                  onClick={() => onOpenLead(lead)}
+                  type="button"
+                  variant="outline"
+                >
+                  <ArrowUpRight className="h-4 w-4" />
+                  Open
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+              <div className="rounded-[18px] bg-[#FCF7F1] px-4 py-3">
+                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">
+                  <Mail className="h-3.5 w-3.5" />
+                  Active route
+                </div>
+                <div className="mt-2 break-all text-sm font-medium text-[#1A1A1A]">
+                  {lead.contact_email || "No verified route chosen"}
+                </div>
+                <div className="mt-1 text-xs text-[#7A6F63]">
+                  {lead.fallback_email ? `Fallback: ${lead.fallback_email}` : "No alternate route stored"}
                 </div>
               </div>
 
-              <div className="mt-4 text-sm text-[#5F564C]">
-                Relevance: {formatScore(lead.relevance_score)}{lead.relevance_keyword ? ` (${lead.relevance_keyword})` : ""}
+              <div className="grid gap-3 sm:grid-cols-3 sm:gap-2">
+                <div className="rounded-[18px] bg-[#FCF7F1] px-4 py-3">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">
+                    <Phone className="h-3.5 w-3.5" />
+                    Phone
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-[#1A1A1A]">{lead.contact_phone || "Missing"}</div>
+                </div>
+                <div className="rounded-[18px] bg-[#FCF7F1] px-4 py-3">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">
+                    <Globe className="h-3.5 w-3.5" />
+                    Website
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-[#1A1A1A]">{websiteLabel(lead.company_website)}</div>
+                </div>
+                <div className="rounded-[18px] bg-[#FCF7F1] px-4 py-3">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Next step
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-[#1A1A1A]">
+                    {lead.status === "new"
+                      ? "Enrich"
+                      : lead.status === "email_required"
+                        ? "Research email"
+                        : lead.status === "review"
+                          ? "Pick route"
+                          : lead.status === "ready"
+                            ? "Send or inspect"
+                            : "Open"}
+                  </div>
+                </div>
               </div>
-              <div className="mt-4 grid gap-3 text-sm text-[#5F564C] sm:grid-cols-2">
-                <div className="rounded-[16px] border border-[#EEE4D7] bg-[#FFFCF8] px-3 py-3">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Primary</div>
-                  <div className="mt-2 font-medium text-[#1A1A1A]">{lead.contact_email || "None chosen"}</div>
-                  {lead.contact_email ? <div className="mt-1 text-xs">Trust {Math.round(lead.contact_email_trust || 0)}</div> : null}
-                </div>
-                <div className="rounded-[16px] border border-[#EEE4D7] bg-[#FFFCF8] px-3 py-3">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Fallback</div>
-                  <div className="mt-2 font-medium text-[#1A1A1A]">{lead.fallback_email || "No alternate"}</div>
-                  {lead.fallback_email ? <div className="mt-1 text-xs">Trust {Math.round(lead.fallback_email_trust || 0)}</div> : null}
-                </div>
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2 text-xs text-[#8B7D6B]">
-                <div className="rounded-full border border-[#E7DACA] bg-white px-3 py-1">
-                  {lead.contact_phone || "No phone"}
-                </div>
-                <div className="rounded-full border border-[#E7DACA] bg-white px-3 py-1">
-                  {lead.company_website || "No website"}
-                </div>
-              </div>
-            </button>
+            </div>
+
             {lead.status === "new" ? (
               <div className="mt-4 flex gap-2">
                 <Button
-                  className="h-9 rounded-[8px] bg-[#D4691A] px-3 text-white hover:bg-[#BA5A12]"
+                  className="h-10 rounded-full bg-[#D4691A] px-4 text-white hover:bg-[#BA5A12]"
                   disabled={actionLeadId === lead.id}
                   onClick={() => onEnrich(lead.id)}
                   type="button"
                 >
                   {actionLeadId === lead.id ? "Working" : "Enrich"}
                 </Button>
-                <Button
-                  className="h-9 rounded-[8px] border border-[#D6C6B6] bg-white px-3 text-[#5F564C] hover:bg-[#F7F0E8]"
-                  onClick={() => onOpenLead(lead)}
-                  type="button"
-                  variant="outline"
-                >
-                  Open
-                </Button>
               </div>
             ) : null}
-          </Panel>
+          </article>
         ))}
+
         {!leads.length ? (
-          <Panel className="lg:col-span-2">
-            <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Queue clear</div>
+          <div className="px-5 py-10">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-[#8B7D6B]">Queue clear</div>
             <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">Nothing in {formatLeadStatus(filter)} right now</div>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[#5F564C]">
               Try another filter, run a fresh scan, or move blocked leads into Email Required from the drawer so they do not get buried in general review.
             </p>
-          </Panel>
+          </div>
         ) : null}
-      </div>
+      </section>
     </div>
   )
 }
