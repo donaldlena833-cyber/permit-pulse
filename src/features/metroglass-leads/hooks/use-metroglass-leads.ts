@@ -13,6 +13,7 @@ import {
   fetchSystem,
   fetchToday,
   logPhoneFollowUp,
+  markLeadEmailRequired,
   markOutcome,
   refreshDraft,
   selectLeadEmail,
@@ -184,6 +185,7 @@ export function useMetroglassLeads() {
     enrichLead: (leadId: string) => runAction(leadId, async () => { await enrichLeadNow(leadId) }, "Lead enrichment started"),
     sendLead: (leadId: string) => runAction(leadId, async () => { await sendLeadNow(leadId) }, "Email sent"),
     archiveLead: (leadId: string) => runAction(leadId, async () => { await archiveLead(leadId) }, "Lead archived"),
+    emailRequired: (leadId: string) => runAction(leadId, async () => { await markLeadEmailRequired(leadId) }, "Moved to Email Required"),
     vouchLead: (leadId: string) => runAction(leadId, async () => { await vouchLead(leadId) }, "Email vouched"),
     markBounced: (leadId: string) => runAction(leadId, async () => {
       await markOutcome(leadId, { outcome: "bounced", bounce_type: "hard" })

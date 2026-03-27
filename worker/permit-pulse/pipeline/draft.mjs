@@ -43,15 +43,13 @@ export function chooseDraftCta(lead) {
 
 export function buildInitialDraft(lead) {
   const firstName = String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
-  const cta = chooseDraftCta(lead);
-  const service = serviceFromLead(lead);
-  const subject = lead.address ? `Glass scope at ${lead.address}` : 'MetroGlass Pro glass support';
+  const address = lead.address || 'your project';
+  const subject = lead.address ? `Quick note on ${lead.address}` : 'Quick note from MetroGlass Pro';
   const lines = [
     `Hi ${firstName},`,
-    `I saw the permit filed for ${lead.address || 'your project'} and wanted to reach out from MetroGlass Pro.`,
-    `We handle ${service}, mirrors, partitions, cabinets, and related installation work across NYC, NJ, and CT.`,
-    cta.sentence,
-    'If this is still being lined up, I would be glad to help.',
+    `I saw the filing for ${address} and wanted to reach out.`,
+    "I'm with MetroGlass Pro. We work on custom glass installations across NYC, NJ, and CT, including mirrors, partitions, shower glass, cabinets, and similar scope.",
+    "I know filings do not always show the full picture, but if any glass related work is still being lined up, I'd be happy to connect.",
     'Best,',
     'Donald',
   ];
@@ -59,7 +57,7 @@ export function buildInitialDraft(lead) {
   return {
     subject,
     body: lines.join('\n\n'),
-    cta_type: cta.type,
+    cta_type: 'soft_intro',
   };
 }
 

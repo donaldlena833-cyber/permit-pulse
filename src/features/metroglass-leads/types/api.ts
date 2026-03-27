@@ -1,4 +1,4 @@
-export type LeadStatus = "new" | "ready" | "review" | "sent" | "archived"
+export type LeadStatus = "new" | "ready" | "review" | "email_required" | "sent" | "archived"
 export type QualityTier = "hot" | "warm" | "cold"
 export type AppTab = "today" | "leads" | "settings"
 
@@ -170,10 +170,12 @@ export interface TodayPayload {
     new: number
     ready: number
     review: number
+    email_required: number
   }
   new_leads: LeadRow[]
   ready: LeadRow[]
   review: LeadRow[]
+  email_required: LeadRow[]
   follow_ups_due: Array<{
     id: string
     lead_id: string

@@ -4,6 +4,8 @@ import { eq } from '../lib/supabase.mjs';
 import { getDomainFromEmail, getLocalPart, looksLikeEmail, nowIso, uniq } from '../lib/utils.mjs';
 import { cancelFollowUps } from './follow-up.mjs';
 
+export const EMAIL_REQUIRED_MARKER = '[email_required]';
+
 function sortEmailCandidates(candidates) {
   return [...candidates].sort((left, right) => {
     const trustDelta = Number(right?.trust_score || 0) - Number(left?.trust_score || 0);
@@ -17,6 +19,19 @@ function sortEmailCandidates(candidates) {
 
 function buildOperatorReasons(existingReasons = [], reason) {
   return uniq([reason, ...(Array.isArray(existingReasons) ? existingReasons : [])]);
+}
+
+export function isLeadMarkedEmailRequired(operatorNotes = '') {
+  return String(operatorNotes || '').includes(EMAIL_REQUIRED_MARKER);
+}
+
+export function withEmailRequiredMarker(operatorNotes = '') {
+  const cleaned = withoutEmailRequiredMarker(operatorNotes);
+  return cleaned ? `${EMAIL_REQUIRED_MARKER}\n${cleaned}` : EMAIL_REQUIRED_MARKER;
+}
+
+export function withoutEmailRequiredMarker(operatorNotes = '') {
+  return String(operatorNotes || '').replace(EMAIL_REQUIRED_MARKER, '').replace(/^\s+/, '').trim();
 }
 
 async function applyOperatorRoute(db, lead, primaryCandidate, actorId = null, eventType = 'operator_email_selected', detail = {}) {
@@ -51,6 +66,7 @@ async function applyOperatorRoute(db, lead, primaryCandidate, actorId = null, ev
     fallback_email_trust: Number(fallbackCandidate?.trust_score || 0),
     active_email_role: 'primary',
     operator_vouched: true,
+    operator_notes: withoutEmailRequiredMarker(lead.operator_notes),
     status: 'ready',
     updated_at: nowIso(),
   });
@@ -338,6 +354,7 @@ export async function switchLeadToFallback(db, leadId, actorId = null) {
 
   await db.update('v2_leads', [`id=eq.${leadId}`], {
     active_email_role: 'fallback',
+    operator_notes: withoutEmailRequiredMarker(lead.operator_notes),
     status: 'ready',
     updated_at: new Date().toISOString(),
   });
@@ -389,5 +406,35 @@ export async function vouchLeadEmail(db, leadId, actorId = null) {
 
   return {
     success: true,
+  };
+}
+
+export async function markLeadEmailRequired(db, leadId, actorId = null) {
+  const lead = await db.single('v2_leads', {
+    filters: [eq('id', leadId)],
+  });
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
+
+  await db.update('v2_leads', [`id=eq.${leadId}`], {
+    status: 'review',
+    operator_notes: withEmailRequiredMarker(lead.operator_notes),
+    updated_at: nowIso(),
+  });
+
+  await appendLeadEvent(db, {
+    lead_id: leadId,
+    event_type: 'operator_email_required',
+    actor_type: actorId ? 'operator' : 'system',
+    actor_id: actorId,
+    detail: {
+      previous_status: lead.status,
+    },
+  });
+
+  return {
+    success: true,
+    status: 'email_required',
   };
 }

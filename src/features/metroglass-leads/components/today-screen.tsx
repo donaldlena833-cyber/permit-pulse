@@ -3,7 +3,7 @@ import { LoaderCircle, Mail, PhoneCall, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Panel } from "@/features/metroglass-leads/components/panel"
-import { formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
+import { formatLeadStatus, formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
 import type { LeadRow, TodayPayload } from "@/features/metroglass-leads/types/api"
 
 interface TodayScreenProps {
@@ -45,7 +45,7 @@ export function TodayScreen({
           {today?.daily_cap.sent ?? 0} / {today?.daily_cap.cap ?? 20} sent today. The dashboard below is organized around what needs a decision right now, not just what exists in the database.
         </p>
         <Progress className="mt-4 h-2.5 bg-[#F1E6D9]" value={progress} />
-        <div className="mt-5 grid grid-cols-3 gap-3">
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-[16px] bg-white/85 px-4 py-4">
             <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">New</div>
             <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.new ?? 0}</div>
@@ -53,6 +53,10 @@ export function TodayScreen({
           <div className="rounded-[16px] bg-white/85 px-4 py-4">
             <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Review</div>
             <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.review ?? 0}</div>
+          </div>
+          <div className="rounded-[16px] bg-white/85 px-4 py-4">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Email required</div>
+            <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.email_required ?? 0}</div>
           </div>
           <div className="rounded-[16px] bg-white/85 px-4 py-4">
             <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Ready</div>
@@ -102,10 +106,10 @@ export function TodayScreen({
               {actionLeadId === null ? "Send all ready" : "Working"}
             </Button>
           </div>
-          <div className="mt-4 text-sm leading-6 text-[#5F564C]">
-            Use the lead drawer to override email choices, switch to phone or text, and keep manual control when the trust system is lagging behind reality.
-          </div>
-        </Panel>
+        <div className="mt-4 text-sm leading-6 text-[#5F564C]">
+          Use the lead drawer to override email choices, move dead-end leads into Email Required, or launch a text from your phone when email is not ready.
+        </div>
+      </Panel>
       </div>
 
       <Panel>
@@ -118,7 +122,7 @@ export function TodayScreen({
                 <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.applicant_name || lead.address}</div>
                 <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
                 <div className="mt-2 text-xs text-[#8B7D6B]">
-                  Relevance {leadSummary(lead)} | Status {lead.status}
+                  Relevance {leadSummary(lead)} | Status {formatLeadStatus(lead.status)}
                 </div>
               </button>
               <div className="mt-3 flex gap-2">
@@ -190,6 +194,40 @@ export function TodayScreen({
               </div>
             </button>
           ))}
+          {!(today?.review ?? []).length ? (
+            <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
+              No plain review leads right now.
+            </div>
+          ) : null}
+        </div>
+      </Panel>
+
+      <Panel className="bg-[linear-gradient(180deg,#fffdfa,#f8efe4)]">
+        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Email required</div>
+        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.email_required ?? 0} leads waiting on a verified address</div>
+        <div className="mt-2 max-w-2xl text-sm leading-6 text-[#5F564C]">
+          These are the leads you intentionally parked because enrichment did not surface a usable email. Open any of them to add a verified address manually or keep working from text/phone.
+        </div>
+        <div className="mt-4 space-y-3">
+          {(today?.email_required ?? []).slice(0, 6).map((lead) => (
+            <button
+              key={lead.id}
+              className="w-full rounded-[16px] border border-[#EEE4D7] px-4 py-4 text-left transition hover:border-[#D4691A]"
+              onClick={() => onOpenLead(lead)}
+              type="button"
+            >
+              <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.address}</div>
+              <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
+              <div className="mt-2 text-xs text-[#8B7D6B]">
+                Relevance {leadSummary(lead)} | No verified email chosen yet
+              </div>
+            </button>
+          ))}
+          {!(today?.email_required ?? []).length ? (
+            <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
+              Nothing is parked in Email Required right now.
+            </div>
+          ) : null}
         </div>
       </Panel>
 

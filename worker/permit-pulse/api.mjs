@@ -1,5 +1,5 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
-import { createSupabaseClient, eq, order } from './lib/supabase.mjs';
+import { createSupabaseClient, eq, ilike, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
@@ -8,6 +8,9 @@ import { logPhoneFollowUp, sendFollowUp, skipFollowUp } from './pipeline/follow-
 import {
   addManualLeadEmail,
   chooseLeadEmailCandidate,
+  EMAIL_REQUIRED_MARKER,
+  isLeadMarkedEmailRequired,
+  markLeadEmailRequired,
   markLeadOutcome,
   switchLeadToFallback,
   vouchLeadEmail,
@@ -81,6 +84,19 @@ function isSendApproved(candidate) {
   return Boolean(candidate?.is_auto_sendable || candidate?.is_manual_sendable);
 }
 
+function presentLead(lead) {
+  if (!lead) {
+    return lead;
+  }
+
+  return {
+    ...lead,
+    status: lead.status === 'review' && isLeadMarkedEmailRequired(lead.operator_notes)
+      ? 'email_required'
+      : lead.status,
+  };
+}
+
 async function getTodayPayload(env) {
   const db = createSupabaseClient(env);
   const config = await getAppConfig(db);
@@ -99,7 +115,7 @@ async function getTodayPayload(env) {
     db.select('v2_leads', {
       filters: [eq('status', 'review')],
       ordering: [order('updated_at', 'desc')],
-      limit: 20,
+      limit: 40,
     }),
     db.select('v2_follow_ups', {
       filters: [eq('status', 'pending')],
@@ -125,6 +141,8 @@ async function getTodayPayload(env) {
   });
 
   const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 5) : Number(config.daily_send_cap || 20);
+  const emailRequiredLeads = reviewLeads.filter((lead) => isLeadMarkedEmailRequired(lead.operator_notes));
+  const plainReviewLeads = reviewLeads.filter((lead) => !isLeadMarkedEmailRequired(lead.operator_notes));
 
   return {
     greeting: `Good ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(new Date()) < 12 ? 'morning' : 'afternoon'}, Donald`,
@@ -168,11 +186,13 @@ async function getTodayPayload(env) {
     counts: {
       new: newLeads.length,
       ready: readyLeads.length,
-      review: reviewLeads.length,
+      review: plainReviewLeads.length,
+      email_required: emailRequiredLeads.length,
     },
-    new_leads: newLeads,
-    ready: readyLeads,
-    review: reviewLeads,
+    new_leads: newLeads.map(presentLead),
+    ready: readyLeads.map(presentLead),
+    review: plainReviewLeads.map(presentLead),
+    email_required: emailRequiredLeads.map(presentLead),
     follow_ups_due: followUps.map((item) => ({
       id: item.id,
       lead_id: item.lead_id,
@@ -238,7 +258,7 @@ async function getLeadDetail(env, leadId) {
     || null;
 
   return {
-    lead,
+    lead: presentLead(lead),
     contacts: {
       phone: lead.contact_phone || '',
       primary,
@@ -270,7 +290,12 @@ async function listLeads(env, requestUrl) {
   const status = requestUrl.searchParams.get('status');
 
   const filters = [];
-  if (status && status !== 'all') {
+  if (status === 'email_required') {
+    filters.push(eq('status', 'review'));
+    filters.push(ilike('operator_notes', `%${EMAIL_REQUIRED_MARKER}%`));
+  } else if (status === 'review') {
+    filters.push(eq('status', 'review'));
+  } else if (status && status !== 'all') {
     filters.push(eq('status', status));
   }
 
@@ -280,7 +305,14 @@ async function listLeads(env, requestUrl) {
     limit: page * limit,
   });
 
-  const sorted = [...leads]
+  const presented = leads.map(presentLead);
+  const filtered = status === 'review'
+    ? presented.filter((lead) => lead.status === 'review')
+    : status === 'email_required'
+      ? presented.filter((lead) => lead.status === 'email_required')
+      : presented;
+
+  const sorted = [...filtered]
     .sort((left, right) => {
       const tierDelta = tierOrder(left.quality_tier) - tierOrder(right.quality_tier);
       if (tierDelta !== 0) return tierDelta;
@@ -395,6 +427,11 @@ export async function handlePermitPulseRequest(request, env, ctx) {
         updated_at: new Date().toISOString(),
       });
       return json({ success: true });
+    }
+
+    const emailRequiredMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/email-required$/);
+    if (emailRequiredMatch && request.method === 'POST') {
+      return json(await markLeadEmailRequired(db, decodeURIComponent(emailRequiredMatch[1]), user.email || null));
     }
 
     const vouchMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/vouch$/);

@@ -17,7 +17,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { formatDate, formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
+import { formatDate, formatLeadStatus, formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
 import type { EmailCandidate, LeadDetailResponse } from "@/features/metroglass-leads/types/api"
 
 interface LeadDetailViewProps {
@@ -28,6 +28,7 @@ interface LeadDetailViewProps {
   onEnrich: (leadId: string) => void
   onSend: (leadId: string) => void
   onArchive: (leadId: string) => void
+  onEmailRequired: (leadId: string) => void
   onVouch: (leadId: string) => void
   onBounced: (leadId: string) => void
   onReplied: (leadId: string) => void
@@ -59,10 +60,9 @@ function normalizeSmsPhone(value: string | null | undefined) {
 }
 
 function buildTextDraft(detail: LeadDetailResponse) {
-  const scope = detail.lead.relevance_keyword || detail.lead.work_description || "glass scope"
   const address = detail.lead.address || "your project"
 
-  return `Hi, this is Donald with MetroGlass Pro. Are you the right person for the ${scope} scope at ${address}? We handle storefronts, shower doors, mirrors, railings, and custom glass across NYC. Happy to quote if it is still open.`
+  return `Hi, this is Donald from MetroGlass Pro. I came across the filing for ${address} and wanted to reach out. Not sure if you're the right contact for the project, but we handle storefronts, shower doors, mirrors, railings, and custom glass across NYC. If any of that scope is still open, I'd be happy to help.`
 }
 
 function buildSmsHref(phone: string | null | undefined, draft: string) {
@@ -193,6 +193,7 @@ export function LeadDetailView({
   onEnrich,
   onSend,
   onArchive,
+  onEmailRequired,
   onVouch,
   onBounced,
   onReplied,
@@ -238,6 +239,8 @@ export function LeadDetailView({
     ? approvedFallback || fallback || approvedPrimary || primary
     : approvedPrimary || primary || approvedFallback || fallback
   const operatorNeedsDecision = !approvedPrimary && discoveredEmails.length > 0
+  const isEmailRequired = detail.lead.status === "email_required"
+  const canParkForEmail = !approvedPrimary && detail.lead.status !== "sent" && detail.lead.status !== "archived"
   const primaryActionLabel = detail.lead.status === "sent"
     ? "Sent"
     : canSend(detail)
@@ -271,7 +274,7 @@ export function LeadDetailView({
 
               <div className="rounded-[20px] border border-[#E7D7C2] bg-white/80 px-4 py-3 text-sm text-[#4F463D]">
                 <div className="text-[11px] uppercase tracking-[0.2em] text-[#8B7D6B]">Current status</div>
-                <div className="mt-1 text-lg font-semibold capitalize text-[#151515]">{detail.lead.status}</div>
+                <div className="mt-1 text-lg font-semibold text-[#151515]">{formatLeadStatus(detail.lead.status)}</div>
                 <div className="mt-1">Updated {formatRelativeTime(detail.lead.updated_at)}</div>
               </div>
             </div>
@@ -302,7 +305,7 @@ export function LeadDetailView({
               <div className="rounded-[18px] border border-[#E7D7C2] bg-white/85 p-4">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Decision state</div>
                 <div className="mt-2 text-sm font-semibold text-[#161616]">
-                  {approvedPrimary ? "System approved route" : selectedRoute ? "Operator review needed" : "No route yet"}
+                  {approvedPrimary ? "System approved route" : isEmailRequired ? "Waiting on manual email research" : selectedRoute ? "Operator review needed" : "No route yet"}
                 </div>
               </div>
             </div>
@@ -331,6 +334,8 @@ export function LeadDetailView({
                 <div className="mt-2 text-sm text-[#5F564C]">
                   {approvedPrimary
                     ? "Ready to send from the app."
+                    : isEmailRequired
+                      ? "Parked until you verify the right address yourself."
                     : selectedRoute
                       ? "Stored as the active review route."
                       : "Choose a found email or enter one yourself."}
@@ -410,6 +415,25 @@ export function LeadDetailView({
                     </div>
                   ) : null}
                 </div>
+
+                <div className="rounded-[22px] border border-[#E4D5C6] bg-[linear-gradient(180deg,#fffaf4,#f4ebe0)] p-4">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">
+                    <MessageSquare className="h-4 w-4" />
+                    Manual hold
+                  </div>
+                  <div className="mt-3 text-sm leading-6 text-[#5F564C]">
+                    Move this lead into a dedicated Email Required list when enrichment did not produce a usable address and you want to research it later yourself.
+                  </div>
+                  <Button
+                    className="mt-4 h-11 w-full rounded-full border border-[#D6C6B6] bg-white px-5 text-[#5F564C] hover:bg-[#F7F0E8]"
+                    disabled={working || !canParkForEmail || isEmailRequired}
+                    onClick={() => onEmailRequired(detail.lead.id)}
+                    type="button"
+                    variant="outline"
+                  >
+                    {isEmailRequired ? "Already in Email Required" : "Move to Email Required"}
+                  </Button>
+                </div>
               </div>
             </div>
           </section>
@@ -424,7 +448,7 @@ export function LeadDetailView({
                   </div>
                   <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#161616]">Manual texting from your phone</h3>
                   <p className="mt-2 text-sm leading-6 text-[#5F564C]">
-                    Keep a short SMS draft ready, then tap through to your phone’s Messages app.
+                    Keep a short SMS draft ready, then tap through to your phone's Messages app.
                   </p>
                 </div>
                 {detail.contacts.phone ? (
@@ -712,18 +736,26 @@ export function LeadDetailView({
               <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onArchive(detail.lead.id)} variant="outline">
                 Archive
               </Button>
-              <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onSwitchFallback(detail.lead.id)} variant="outline">
-                Switch route
-              </Button>
-              <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onVouch(detail.lead.id)} variant="outline">
-                Vouch
-              </Button>
-              <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onBounced(detail.lead.id)} variant="outline">
-                Bounced
-              </Button>
-              <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onReplied(detail.lead.id)} variant="outline">
-                Replied
-              </Button>
+              {detail.lead.fallback_email ? (
+                <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onSwitchFallback(detail.lead.id)} variant="outline">
+                  Switch route
+                </Button>
+              ) : null}
+              {detail.lead.contact_email ? (
+                <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onVouch(detail.lead.id)} variant="outline">
+                  Vouch
+                </Button>
+              ) : null}
+              {detail.lead.status === "sent" ? (
+                <>
+                  <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onBounced(detail.lead.id)} variant="outline">
+                    Bounced
+                  </Button>
+                  <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onReplied(detail.lead.id)} variant="outline">
+                    Replied
+                  </Button>
+                </>
+              ) : null}
               <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onWon(detail.lead.id)} variant="outline">
                 Won
               </Button>

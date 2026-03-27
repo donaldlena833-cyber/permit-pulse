@@ -85,6 +85,9 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
                 {today?.counts.review ?? 0} review
               </div>
               <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                {today?.counts.email_required ?? 0} email required
+              </div>
+              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
                 {today?.counts.ready ?? 0} ready
               </div>
               <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
@@ -151,6 +154,7 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onBounced={(leadId) => void actions.markBounced(leadId)}
         onClose={closeLead}
         onEnrich={(leadId) => void actions.enrichLead(leadId)}
+        onEmailRequired={(leadId) => void actions.emailRequired(leadId)}
         onChooseEmail={(leadId, candidateId) => void actions.chooseEmail(leadId, candidateId)}
         onAddManualEmail={(leadId, payload) => void actions.addManualEmail(leadId, payload)}
         onLogPhoneFollowUp={(leadId, step, notes) => void actions.logPhoneFollowUp(leadId, step, notes)}

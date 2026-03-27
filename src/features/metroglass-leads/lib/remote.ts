@@ -90,6 +90,12 @@ export function archiveLead(leadId: string) {
   })
 }
 
+export function markLeadEmailRequired(leadId: string) {
+  return requestJson<{ success: boolean; status: string }>(`/api/leads/${encodeURIComponent(leadId)}/email-required`, {
+    method: "POST",
+  })
+}
+
 export function vouchLead(leadId: string) {
   return requestJson<{ success: boolean }>(`/api/leads/${encodeURIComponent(leadId)}/vouch`, {
     method: "POST",

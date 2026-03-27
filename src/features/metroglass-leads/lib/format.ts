@@ -26,3 +26,9 @@ export function formatDate(value: string | null | undefined): string {
 export function formatScore(value: number | null | undefined): string {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : "0.00"
 }
+
+export function formatLeadStatus(value: string | null | undefined): string {
+  if (!value) return "Unknown"
+  if (value === "email_required") return "Email Required"
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+}

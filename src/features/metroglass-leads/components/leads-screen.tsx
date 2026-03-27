@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button"
 import { Panel } from "@/features/metroglass-leads/components/panel"
-import { formatScore } from "@/features/metroglass-leads/lib/format"
+import { formatLeadStatus, formatScore } from "@/features/metroglass-leads/lib/format"
 import type { LeadRow } from "@/features/metroglass-leads/types/api"
 
 interface LeadsScreenProps {
@@ -12,7 +12,7 @@ interface LeadsScreenProps {
   actionLeadId: string | null
 }
 
-const FILTERS = ["all", "new", "ready", "review", "sent", "archived"]
+const FILTERS = ["all", "new", "ready", "review", "email_required", "sent", "archived"]
 
 export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnrich, actionLeadId }: LeadsScreenProps) {
   return (
@@ -32,7 +32,7 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
               type="button"
               variant="outline"
             >
-              {value[0].toUpperCase() + value.slice(1)}
+              {formatLeadStatus(value)}
             </Button>
           ))}
         </div>
@@ -47,8 +47,8 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
                   <div className="font-semibold tracking-[-0.03em] text-[#1A1A1A]">{lead.company_name || "Unnamed lead"}</div>
                   <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
                 </div>
-                <div className="rounded-full border border-[#E4D5C5] bg-[#FBF5EC] px-3 py-1 text-xs font-medium capitalize text-[#6B5A48]">
-                  {lead.status}
+                <div className="rounded-full border border-[#E4D5C5] bg-[#FBF5EC] px-3 py-1 text-xs font-medium text-[#6B5A48]">
+                  {formatLeadStatus(lead.status)}
                 </div>
               </div>
 
@@ -65,6 +65,14 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
                   <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Fallback</div>
                   <div className="mt-2 font-medium text-[#1A1A1A]">{lead.fallback_email || "No alternate"}</div>
                   {lead.fallback_email ? <div className="mt-1 text-xs">Trust {Math.round(lead.fallback_email_trust || 0)}</div> : null}
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs text-[#8B7D6B]">
+                <div className="rounded-full border border-[#E7DACA] bg-white px-3 py-1">
+                  {lead.contact_phone || "No phone"}
+                </div>
+                <div className="rounded-full border border-[#E7DACA] bg-white px-3 py-1">
+                  {lead.company_website || "No website"}
                 </div>
               </div>
             </button>
@@ -90,6 +98,15 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
             ) : null}
           </Panel>
         ))}
+        {!leads.length ? (
+          <Panel className="lg:col-span-2">
+            <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Queue clear</div>
+            <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">Nothing in {formatLeadStatus(filter)} right now</div>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[#5F564C]">
+              Try another filter, run a fresh scan, or move blocked leads into Email Required from the drawer so they do not get buried in general review.
+            </p>
+          </Panel>
+        ) : null}
       </div>
     </div>
   )
