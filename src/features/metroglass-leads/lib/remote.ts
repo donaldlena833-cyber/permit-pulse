@@ -145,6 +145,19 @@ export function addManualLeadEmail(leadId: string, payload: { email: string; not
   )
 }
 
+export function updateLeadNotes(leadId: string, operator_notes: string) {
+  return requestJson<{ id: string; operator_notes: string | null; updated_at: string }>(
+    `/api/leads/${encodeURIComponent(leadId)}/notes`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ operator_notes }),
+    },
+  )
+}
+
 export function refreshDraft(leadId: string) {
   return requestJson<{ subject: string; body: string; cta_type: string }>(
     `/api/leads/${encodeURIComponent(leadId)}/draft/refresh`,

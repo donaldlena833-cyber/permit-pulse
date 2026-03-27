@@ -25,6 +25,7 @@ import {
   triggerScan,
   updateConfig,
   updateDraft,
+  updateLeadNotes,
   vouchLead,
 } from "@/features/metroglass-leads/lib/remote"
 import type {
@@ -208,6 +209,9 @@ export function useMetroglassLeads() {
     addManualEmail: (leadId: string, payload: { email: string; note?: string }) => runAction(leadId, async () => {
       await addManualLeadEmail(leadId, payload)
     }, "Manual email saved"),
+    saveNotes: (leadId: string, operatorNotes: string) => runAction(leadId, async () => {
+      await updateLeadNotes(leadId, operatorNotes)
+    }, "Notes saved"),
     refreshDraft: (leadId: string) => runAction(leadId, async () => {
       await refreshDraft(leadId)
     }, "Draft refreshed"),

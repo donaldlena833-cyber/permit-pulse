@@ -119,7 +119,13 @@ export async function selectLeadRoute(db, runId, leadId) {
   }
 
   const qualityTier = computeQualityTier(lead, approvedPrimary || discoveredPrimary);
-  const nextStatus = approvedPrimary?.is_auto_sendable ? 'ready' : 'review';
+  const nextStatus = approvedPrimary?.is_auto_sendable
+    ? 'ready'
+    : discoveredPrimary?.email_address
+      ? 'review'
+      : lead.status === 'email_required'
+        ? 'email_required'
+        : 'review';
   const projectedLead = {
     contact_name: discoveredPrimary?.person_name || lead.applicant_name || lead.owner_name || '',
     contact_role: discoveredPrimary?.person_role || (lead.applicant_name ? 'gc_applicant' : lead.owner_name ? 'owner' : 'unknown'),
@@ -129,7 +135,7 @@ export async function selectLeadRoute(db, runId, leadId) {
     fallback_email_trust: Number(discoveredFallback?.trust_score || 0),
     active_email_role: 'primary',
     quality_tier: qualityTier,
-    status: discoveredPrimary?.email_address ? nextStatus : 'review',
+    status: nextStatus,
     updated_at: new Date().toISOString(),
   };
 

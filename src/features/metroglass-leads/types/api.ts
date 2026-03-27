@@ -138,9 +138,16 @@ export interface LeadDetailResponse {
 
 export interface RunCounters {
   permits_found?: number
+  permits_skipped_low_relevance?: number
+  permits_deduplicated?: number
   leads_created?: number
+  leads_enriched?: number
   leads_ready?: number
   leads_review?: number
+  drafts_generated?: number
+  sends_attempted?: number
+  sends_succeeded?: number
+  sends_failed?: number
 }
 
 export interface AutomationRun {
@@ -208,6 +215,8 @@ export interface HealthPayload {
 export interface ConfigPayload {
   daily_send_cap: number
   min_relevance_threshold: number
+  scan_window_days: number
+  scan_limit_per_source: number
   auto_send_trust_threshold: number
   manual_send_trust_threshold: number
   follow_up_enabled: boolean

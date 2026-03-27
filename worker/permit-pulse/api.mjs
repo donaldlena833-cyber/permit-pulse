@@ -1,5 +1,5 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
-import { createSupabaseClient, eq, ilike, order } from './lib/supabase.mjs';
+import { createSupabaseClient, eq, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
@@ -8,11 +8,10 @@ import { logPhoneFollowUp, sendFollowUp, skipFollowUp } from './pipeline/follow-
 import {
   addManualLeadEmail,
   chooseLeadEmailCandidate,
-  EMAIL_REQUIRED_MARKER,
-  isLeadMarkedEmailRequired,
   markLeadEmailRequired,
   markLeadOutcome,
   switchLeadToFallback,
+  updateLeadNotes,
   vouchLeadEmail,
 } from './pipeline/outcomes.mjs';
 
@@ -84,16 +83,36 @@ function isSendApproved(candidate) {
   return Boolean(candidate?.is_auto_sendable || candidate?.is_manual_sendable);
 }
 
-function presentLead(lead) {
-  if (!lead) {
-    return lead;
+function buildRunCounters(run) {
+  return {
+    permits_found: Number(run?.permits_found || 0),
+    permits_skipped_low_relevance: Number(run?.permits_skipped_low_relevance || 0),
+    permits_deduplicated: Number(run?.permits_deduplicated || 0),
+    leads_created: Number(run?.leads_created || 0),
+    leads_enriched: Number(run?.leads_enriched || 0),
+    leads_ready: Number(run?.leads_ready || 0),
+    leads_review: Number(run?.leads_review || 0),
+    drafts_generated: Number(run?.drafts_generated || 0),
+    sends_attempted: Number(run?.sends_attempted || 0),
+    sends_succeeded: Number(run?.sends_succeeded || 0),
+    sends_failed: Number(run?.sends_failed || 0),
+  };
+}
+
+function presentRun(run) {
+  if (!run) {
+    return null;
   }
 
+  const counters = buildRunCounters(run);
   return {
-    ...lead,
-    status: lead.status === 'review' && isLeadMarkedEmailRequired(lead.operator_notes)
-      ? 'email_required'
-      : lead.status,
+    id: run.id,
+    status: run.status,
+    current_stage: run.current_stage,
+    started_at: run.started_at,
+    completed_at: run.completed_at || null,
+    counters,
+    summary: counters,
   };
 }
 
@@ -101,7 +120,7 @@ async function getTodayPayload(env) {
   const db = createSupabaseClient(env);
   const config = await getAppConfig(db);
   const { currentRun, lastRun } = await getLatestRuns(env);
-  const [newLeads, readyLeads, reviewLeads, followUps, sentOutcomes] = await Promise.all([
+  const [newLeads, readyLeads, reviewLeads, emailRequiredLeads, followUps, sentOutcomes] = await Promise.all([
     db.select('v2_leads', {
       filters: [eq('status', 'new')],
       ordering: [order('updated_at', 'desc')],
@@ -115,7 +134,12 @@ async function getTodayPayload(env) {
     db.select('v2_leads', {
       filters: [eq('status', 'review')],
       ordering: [order('updated_at', 'desc')],
-      limit: 40,
+      limit: 20,
+    }),
+    db.select('v2_leads', {
+      filters: [eq('status', 'email_required')],
+      ordering: [order('updated_at', 'desc')],
+      limit: 20,
     }),
     db.select('v2_follow_ups', {
       filters: [eq('status', 'pending')],
@@ -141,8 +165,6 @@ async function getTodayPayload(env) {
   });
 
   const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 5) : Number(config.daily_send_cap || 20);
-  const emailRequiredLeads = reviewLeads.filter((lead) => isLeadMarkedEmailRequired(lead.operator_notes));
-  const plainReviewLeads = reviewLeads.filter((lead) => !isLeadMarkedEmailRequired(lead.operator_notes));
 
   return {
     greeting: `Good ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(new Date()) < 12 ? 'morning' : 'afternoon'}, Donald`,
@@ -155,44 +177,18 @@ async function getTodayPayload(env) {
       enabled: Boolean(config.warm_up_mode),
       cap: Number(config.warm_up_daily_cap || 5),
     },
-    current_run: currentRun
-      ? {
-          id: currentRun.id,
-          status: currentRun.status,
-          current_stage: currentRun.current_stage,
-          started_at: currentRun.started_at,
-          counters: {
-            permits_found: currentRun.permits_found,
-            leads_created: currentRun.leads_created,
-            leads_ready: currentRun.leads_ready,
-            leads_review: currentRun.leads_review,
-          },
-        }
-      : null,
-    last_run: lastRun
-      ? {
-          id: lastRun.id,
-          status: lastRun.status,
-          summary: {
-            permits_found: lastRun.permits_found,
-            leads_created: lastRun.leads_created,
-            leads_ready: lastRun.leads_ready,
-            leads_review: lastRun.leads_review,
-            sends_succeeded: lastRun.sends_succeeded,
-          },
-          completed_at: lastRun.completed_at,
-        }
-      : null,
+    current_run: presentRun(currentRun),
+    last_run: presentRun(lastRun),
     counts: {
       new: newLeads.length,
       ready: readyLeads.length,
-      review: plainReviewLeads.length,
+      review: reviewLeads.length,
       email_required: emailRequiredLeads.length,
     },
-    new_leads: newLeads.map(presentLead),
-    ready: readyLeads.map(presentLead),
-    review: plainReviewLeads.map(presentLead),
-    email_required: emailRequiredLeads.map(presentLead),
+    new_leads: newLeads,
+    ready: readyLeads,
+    review: reviewLeads,
+    email_required: emailRequiredLeads,
     follow_ups_due: followUps.map((item) => ({
       id: item.id,
       lead_id: item.lead_id,
@@ -258,7 +254,7 @@ async function getLeadDetail(env, leadId) {
     || null;
 
   return {
-    lead: presentLead(lead),
+    lead,
     contacts: {
       phone: lead.contact_phone || '',
       primary,
@@ -290,12 +286,7 @@ async function listLeads(env, requestUrl) {
   const status = requestUrl.searchParams.get('status');
 
   const filters = [];
-  if (status === 'email_required') {
-    filters.push(eq('status', 'review'));
-    filters.push(ilike('operator_notes', `%${EMAIL_REQUIRED_MARKER}%`));
-  } else if (status === 'review') {
-    filters.push(eq('status', 'review'));
-  } else if (status && status !== 'all') {
+  if (status && status !== 'all') {
     filters.push(eq('status', status));
   }
 
@@ -305,14 +296,7 @@ async function listLeads(env, requestUrl) {
     limit: page * limit,
   });
 
-  const presented = leads.map(presentLead);
-  const filtered = status === 'review'
-    ? presented.filter((lead) => lead.status === 'review')
-    : status === 'email_required'
-      ? presented.filter((lead) => lead.status === 'email_required')
-      : presented;
-
-  const sorted = [...filtered]
+  const sorted = [...leads]
     .sort((left, right) => {
       const tierDelta = tierOrder(left.quality_tier) - tierOrder(right.quality_tier);
       if (tierDelta !== 0) return tierDelta;
@@ -398,7 +382,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (runMatch && request.method === 'GET') {
       const run = await getRunById(env, decodeURIComponent(runMatch[1]));
-      return json(run || { error: 'Run not found' }, run ? 200 : 404);
+      return json(run ? presentRun(run) : { error: 'Run not found' }, run ? 200 : 404);
     }
 
     const leadMatch = url.pathname.match(/^\/api\/leads\/([^/]+)$/);
@@ -432,6 +416,17 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const emailRequiredMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/email-required$/);
     if (emailRequiredMatch && request.method === 'POST') {
       return json(await markLeadEmailRequired(db, decodeURIComponent(emailRequiredMatch[1]), user.email || null));
+    }
+
+    const notesMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/notes$/);
+    if (notesMatch && request.method === 'PUT') {
+      const body = await parseBody(request);
+      return json(await updateLeadNotes(
+        db,
+        decodeURIComponent(notesMatch[1]),
+        body.operator_notes || '',
+        user.email || null,
+      ));
     }
 
     const vouchMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/vouch$/);
@@ -552,7 +547,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
         total_leads: totalLeads.length,
         recent_failures: recentFailures,
         domain_health: domainHealth,
-        recent_runs: runs,
+        recent_runs: runs.map(presentRun),
       });
     }
 

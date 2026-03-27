@@ -7,9 +7,11 @@ import {
   ExternalLink,
   LoaderCircle,
   Mail,
+  MapPin,
   MessageSquare,
   Phone,
   Plus,
+  Search,
   Sparkles,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -37,6 +39,7 @@ interface LeadDetailViewProps {
   onSwitchFallback: (leadId: string) => void
   onChooseEmail: (leadId: string, candidateId: string) => void
   onAddManualEmail: (leadId: string, payload: { email: string; note?: string }) => void
+  onSaveNotes: (leadId: string, notes: string) => void
   onRefreshDraft: (leadId: string) => void
   onSaveDraft: (leadId: string, draft: { subject: string; body: string }) => void
   onSendFollowUp: (leadId: string, step: number) => void
@@ -59,6 +62,39 @@ function normalizeSmsPhone(value: string | null | undefined) {
   return digits
 }
 
+function normalizeWebsiteUrl(value: string | null | undefined) {
+  const trimmed = String(value || "").trim()
+  if (!trimmed) {
+    return ""
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed
+  }
+  return `https://${trimmed}`
+}
+
+function buildResearchQuery(detail: LeadDetailResponse) {
+  return [
+    detail.lead.company_name,
+    detail.lead.applicant_name,
+    detail.lead.address,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" ")
+}
+
+function buildSearchHref(detail: LeadDetailResponse) {
+  const query = buildResearchQuery(detail)
+  return query ? `https://www.google.com/search?q=${encodeURIComponent(query)}` : ""
+}
+
+function buildMapsHref(detail: LeadDetailResponse) {
+  const query = buildResearchQuery(detail)
+  return query ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}` : ""
+}
+
 function buildTextDraft(detail: LeadDetailResponse) {
   const address = detail.lead.address || "your project"
 
@@ -70,7 +106,7 @@ function buildSmsHref(phone: string | null | undefined, draft: string) {
   if (!digits) {
     return "#"
   }
-  return `sms:${digits}?&body=${encodeURIComponent(draft)}`
+  return `sms:${digits}?body=${encodeURIComponent(draft)}`
 }
 
 function candidateSurfaceTone(candidate: EmailCandidate, primaryId?: string | null, approvedId?: string | null) {
@@ -93,6 +129,24 @@ function surfaceLabel(candidate: EmailCandidate) {
   return candidate.provenance_source || "source"
 }
 
+function resolveCompanyWebsite(detail: LeadDetailResponse) {
+  const direct = normalizeWebsiteUrl(detail.lead.company_website)
+  if (direct) {
+    return direct
+  }
+
+  const companyCandidate = detail.candidates.companies.find((candidate) => candidate.is_chosen && candidate.website)
+    || detail.candidates.companies.find((candidate) => candidate.website)
+
+  return normalizeWebsiteUrl(companyCandidate?.website)
+}
+
+function resolveProvenanceUrl(selectedRoute: EmailCandidate | null, discoveredEmails: EmailCandidate[]) {
+  return selectedRoute?.provenance_url
+    || discoveredEmails.find((candidate) => candidate.provenance_url)?.provenance_url
+    || ""
+}
+
 function ContactCard({
   candidate,
   isCurrentRoute,
@@ -107,7 +161,9 @@ function ContactCard({
   onChoose?: () => void
 }) {
   return (
-    <div className={`rounded-[20px] border p-4 shadow-[0_16px_34px_rgba(26,26,26,0.06)] ${candidateSurfaceTone(candidate, isCurrentRoute ? candidate.id : null, isApprovedRoute ? candidate.id : null)}`}>
+    <div
+      className={`rounded-[20px] border p-4 shadow-[0_16px_34px_rgba(26,26,26,0.06)] ${candidateSurfaceTone(candidate, isCurrentRoute ? candidate.id : null, isApprovedRoute ? candidate.id : null)}`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">
@@ -202,6 +258,7 @@ export function LeadDetailView({
   onSwitchFallback,
   onChooseEmail,
   onAddManualEmail,
+  onSaveNotes,
   onRefreshDraft,
   onSaveDraft,
   onSendFollowUp,
@@ -216,6 +273,8 @@ export function LeadDetailView({
   const [manualEmail, setManualEmail] = useState("")
   const [manualNote, setManualNote] = useState("")
   const [textDraft, setTextDraft] = useState(() => (detail ? buildTextDraft(detail) : ""))
+  const [notes, setNotes] = useState(() => detail?.lead.operator_notes || "")
+  const [notesDirty, setNotesDirty] = useState(false)
 
   const discoveredEmails = useMemo(() => detail?.contacts.discovered_emails ?? [], [detail])
   const primary = detail?.contacts.primary ?? null
@@ -234,7 +293,6 @@ export function LeadDetailView({
         subject: detail.draft.subject || "",
         body: detail.draft.body || "",
       }
-  const smsHref = buildSmsHref(detail.contacts.phone, textDraft)
   const selectedRoute = detail.lead.active_email_role === "fallback"
     ? approvedFallback || fallback || approvedPrimary || primary
     : approvedPrimary || primary || approvedFallback || fallback
@@ -245,9 +303,42 @@ export function LeadDetailView({
     ? "Sent"
     : canSend(detail)
       ? "Send email"
-      : discoveredEmails.length > 0 || detail.contacts.phone
-        ? "Refresh discovery"
-        : "Enrich now"
+      : isEmailRequired
+        ? "Enrich again"
+        : discoveredEmails.length > 0 || detail.contacts.phone
+          ? "Refresh discovery"
+          : "Enrich now"
+  const smsHref = buildSmsHref(detail.contacts.phone, textDraft)
+  const companyWebsite = resolveCompanyWebsite(detail)
+  const provenanceUrl = resolveProvenanceUrl(selectedRoute, discoveredEmails)
+  const searchHref = buildSearchHref(detail)
+  const mapsHref = buildMapsHref(detail)
+  const researchActions = [
+    {
+      label: "Company website",
+      href: companyWebsite,
+      helper: companyWebsite ? "Open the selected company site" : "No website resolved yet",
+      icon: ExternalLink,
+    },
+    {
+      label: "Provenance page",
+      href: provenanceUrl,
+      helper: provenanceUrl ? "Jump to the page where the route was found" : "No provenance URL stored yet",
+      icon: Mail,
+    },
+    {
+      label: "Google search",
+      href: searchHref,
+      helper: searchHref ? "Search company and address together" : "No search query available yet",
+      icon: Search,
+    },
+    {
+      label: "Maps search",
+      href: mapsHref,
+      helper: mapsHref ? "Open a quick location + business lookup" : "No maps query available yet",
+      icon: MapPin,
+    },
+  ]
 
   return (
     <div className="fixed inset-0 z-50 bg-[rgba(16,15,12,0.58)] backdrop-blur-sm">
@@ -305,7 +396,142 @@ export function LeadDetailView({
               <div className="rounded-[18px] border border-[#E7D7C2] bg-white/85 p-4">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Decision state</div>
                 <div className="mt-2 text-sm font-semibold text-[#161616]">
-                  {approvedPrimary ? "System approved route" : isEmailRequired ? "Waiting on manual email research" : selectedRoute ? "Operator review needed" : "No route yet"}
+                  {approvedPrimary
+                    ? "System approved route"
+                    : isEmailRequired
+                      ? "Waiting on manual email research"
+                      : selectedRoute
+                        ? "Operator review needed"
+                        : "No route yet"}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-[24px] border border-[#E4D6C7] bg-white/95 p-5 shadow-[0_16px_36px_rgba(26,26,26,0.08)]">
+            <div className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-[#E7D7C2] bg-[#FFF7ED] px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-[#9A5A12]">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Research desk
+                </div>
+                <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#161616]">
+                  Move blocked leads forward without leaving the drawer
+                </h3>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-[#5F564C]">
+                  Open the site, jump to provenance, search the company, or use Maps. Once you verify the right email, choose it below or add your own and the lead returns to a real route.
+                </p>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  {researchActions.map((action) => {
+                    const Icon = action.icon
+                    return action.href ? (
+                      <a
+                        key={action.label}
+                        className="rounded-[18px] border border-[#E6D8C9] bg-[#FFFCF8] px-4 py-4 text-left transition hover:border-[#D4691A] hover:bg-white"
+                        href={action.href}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold text-[#1A1A1A]">{action.label}</div>
+                            <div className="mt-1 text-sm leading-6 text-[#5F564C]">{action.helper}</div>
+                          </div>
+                          <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[#8B7D6B]" />
+                        </div>
+                      </a>
+                    ) : (
+                      <div
+                        key={action.label}
+                        className="rounded-[18px] border border-dashed border-[#E2D4C6] bg-[#FBF6EF] px-4 py-4 text-left"
+                      >
+                        <div className="text-sm font-semibold text-[#1A1A1A]">{action.label}</div>
+                        <div className="mt-1 text-sm leading-6 text-[#6B5A48]">{action.helper}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="mt-4 rounded-[20px] border border-[#E6D8C9] bg-[#FBF5EC] p-4">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Evidence snapshot</div>
+                  <div className="mt-3 space-y-3 text-sm text-[#5F564C]">
+                    <div>
+                      <span className="font-medium text-[#1A1A1A]">Chosen route:</span> {selectedRoute?.email_address || "Nothing selected yet"}
+                    </div>
+                    <div>
+                      <span className="font-medium text-[#1A1A1A]">Current provenance:</span>{" "}
+                      {selectedRoute?.provenance_url || "No provenance URL attached to the active route"}
+                    </div>
+                    <div>
+                      <span className="font-medium text-[#1A1A1A]">Website:</span> {companyWebsite || "No company website resolved"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="rounded-[22px] border border-[#E4D5C6] bg-[linear-gradient(180deg,#fffaf4,#f8efe4)] p-4">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">
+                    <MessageSquare className="h-4 w-4" />
+                    Research notes
+                  </div>
+                  <div className="mt-3 text-sm leading-6 text-[#5F564C]">
+                    Save what you found so the lead stays understandable after you come back later.
+                  </div>
+                  <Textarea
+                    className="mt-4 min-h-[180px] rounded-[16px] border-[#DCCDBE] bg-white/90"
+                    onChange={(event) => {
+                      setNotes(event.target.value)
+                      setNotesDirty(true)
+                    }}
+                    placeholder="Verified phone owner, found estimator on contact page, GC is actually using a DBA, etc."
+                    value={notes}
+                  />
+                  <Button
+                    className="mt-4 h-11 w-full rounded-full bg-[#1A1A1A] text-white hover:bg-[#111111]"
+                    disabled={working || !notesDirty}
+                    onClick={() => onSaveNotes(detail.lead.id, notes)}
+                    type="button"
+                  >
+                    {working ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Save notes"}
+                  </Button>
+                </div>
+
+                <div className="rounded-[22px] border border-[#E4D5C6] bg-[#FCF7F1] p-4">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Blocked lead actions</div>
+                  <div className="mt-3 text-sm leading-6 text-[#5F564C]">
+                    Use these when the route is still unresolved and you want to keep the queue honest.
+                  </div>
+                  <div className="mt-4 flex flex-col gap-2">
+                    <Button
+                      className="h-11 rounded-full border border-[#D6C6B6] bg-white px-5 text-[#5F564C] hover:bg-[#F7F0E8]"
+                      disabled={working || !canParkForEmail || isEmailRequired}
+                      onClick={() => onEmailRequired(detail.lead.id)}
+                      type="button"
+                      variant="outline"
+                    >
+                      {isEmailRequired ? "Already in Email Required" : "Move to Email Required"}
+                    </Button>
+                    <Button
+                      className="h-11 rounded-full border border-[#D6C6B6] bg-white px-5 text-[#5F564C] hover:bg-[#F7F0E8]"
+                      disabled={working}
+                      onClick={() => onEnrich(detail.lead.id)}
+                      type="button"
+                      variant="outline"
+                    >
+                      Enrich again
+                    </Button>
+                    <Button
+                      className="h-11 rounded-full border border-[#D6C6B6] bg-white px-5 text-[#5F564C] hover:bg-[#F7F0E8]"
+                      disabled={working}
+                      onClick={() => onArchive(detail.lead.id)}
+                      type="button"
+                      variant="outline"
+                    >
+                      Archive
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -322,7 +548,7 @@ export function LeadDetailView({
                   {operatorNeedsDecision ? "System found emails, but you make the call" : "Current send route"}
                 </h3>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-[#5F564C]">
-                  Pick one of the discovered emails, add your own, or keep the current route. Once you choose, the lead becomes send-ready with your selection.
+                  Pick one of the discovered emails, add your own, or keep the current route. Your choice turns a low-confidence lead into an operator-approved route.
                 </p>
               </div>
 
@@ -336,9 +562,9 @@ export function LeadDetailView({
                     ? "Ready to send from the app."
                     : isEmailRequired
                       ? "Parked until you verify the right address yourself."
-                    : selectedRoute
-                      ? "Stored as the active review route."
-                      : "Choose a found email or enter one yourself."}
+                      : selectedRoute
+                        ? "Stored as the active review route."
+                        : "Choose a found email or enter one yourself."}
                 </div>
               </div>
             </div>
@@ -368,7 +594,7 @@ export function LeadDetailView({
                     Add your own
                   </div>
                   <div className="mt-3 text-sm leading-6 text-[#5F564C]">
-                    If you verified an email outside the app, store it here and use it as the active route.
+                    If you verified an email outside the app, store it here and make it the active route immediately.
                   </div>
                   <div className="mt-4 space-y-3">
                     <Input
@@ -402,7 +628,7 @@ export function LeadDetailView({
                     Why it is blocked
                   </div>
                   <div className="mt-3 text-sm leading-6 text-[#5F564C]">
-                    The system keeps low-trust emails in review until it has enough proof. This panel lets you override that when you already know the contact is real.
+                    Low-trust or generic-looking emails stay out of send-ready until there is enough evidence or you approve the route yourself.
                   </div>
                   {selectedRoute?.trust_reasons?.length ? (
                     <div className="mt-4 rounded-[16px] border border-[#E8D8C7] bg-white/80 p-3">
@@ -414,25 +640,6 @@ export function LeadDetailView({
                       </div>
                     </div>
                   ) : null}
-                </div>
-
-                <div className="rounded-[22px] border border-[#E4D5C6] bg-[linear-gradient(180deg,#fffaf4,#f4ebe0)] p-4">
-                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">
-                    <MessageSquare className="h-4 w-4" />
-                    Manual hold
-                  </div>
-                  <div className="mt-3 text-sm leading-6 text-[#5F564C]">
-                    Move this lead into a dedicated Email Required list when enrichment did not produce a usable address and you want to research it later yourself.
-                  </div>
-                  <Button
-                    className="mt-4 h-11 w-full rounded-full border border-[#D6C6B6] bg-white px-5 text-[#5F564C] hover:bg-[#F7F0E8]"
-                    disabled={working || !canParkForEmail || isEmailRequired}
-                    onClick={() => onEmailRequired(detail.lead.id)}
-                    type="button"
-                    variant="outline"
-                  >
-                    {isEmailRequired ? "Already in Email Required" : "Move to Email Required"}
-                  </Button>
                 </div>
               </div>
             </div>
@@ -448,7 +655,7 @@ export function LeadDetailView({
                   </div>
                   <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#161616]">Manual texting from your phone</h3>
                   <p className="mt-2 text-sm leading-6 text-[#5F564C]">
-                    Keep a short SMS draft ready, then tap through to your phone's Messages app.
+                    Keep the SMS short and ready, then tap through to your phone's Messages app with the number and body prefilled.
                   </p>
                 </div>
                 {detail.contacts.phone ? (
@@ -462,7 +669,7 @@ export function LeadDetailView({
               {detail.contacts.phone ? (
                 <>
                   <Textarea
-                    className="mt-4 min-h-[180px] rounded-[18px] border-[#DCCDBE] bg-[#FFFCF8] text-sm leading-6"
+                    className="mt-4 min-h-[170px] rounded-[18px] border-[#DCCDBE] bg-[#FFFCF8] text-sm leading-6"
                     onChange={(event) => setTextDraft(event.target.value)}
                     value={textDraft}
                   />
@@ -503,7 +710,7 @@ export function LeadDetailView({
                   </div>
                   <h3 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[#161616]">What happens if you hit send</h3>
                   <p className="mt-2 text-sm leading-6 text-[#5F564C]">
-                    The app uses the active route shown here. If the wrong email is selected, change it above before sending.
+                    The app uses the active route shown here. If it is wrong, change it above before sending.
                   </p>
                 </div>
               </div>
@@ -576,11 +783,11 @@ export function LeadDetailView({
               </div>
             </div>
 
-            <div className="mt-5 grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+            <div className="mt-5 grid gap-4">
               <label className="grid gap-2 text-sm text-[#5F564C]">
                 Subject
-                <Textarea
-                  className="min-h-[120px] rounded-[18px] border-[#DCCDBE] bg-[#FFFCF8]"
+                <Input
+                  className="h-12 rounded-[16px] border-[#DCCDBE] bg-[#FFFCF8]"
                   onChange={(event) => {
                     setDraftDirty(true)
                     setDraft({ ...visibleDraft, subject: event.target.value })
@@ -687,8 +894,8 @@ export function LeadDetailView({
                       <Button
                         className="h-10 rounded-full border border-[#D4691A] bg-white px-4 text-[#D4691A] hover:bg-[#FFF5ED]"
                         onClick={() => {
-                          const notes = window.prompt("Phone outcome notes", followUp.outcome_notes || "") ?? ""
-                          onLogPhoneFollowUp(detail.lead.id, followUp.step_number, notes)
+                          const notesValue = window.prompt("Phone outcome notes", followUp.outcome_notes || "") ?? ""
+                          onLogPhoneFollowUp(detail.lead.id, followUp.step_number, notesValue)
                         }}
                         variant="outline"
                       >
@@ -733,9 +940,6 @@ export function LeadDetailView({
               {working ? <LoaderCircle className="h-4 w-4 animate-spin" /> : primaryActionLabel}
             </Button>
             <div className="flex flex-wrap gap-2">
-              <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onArchive(detail.lead.id)} variant="outline">
-                Archive
-              </Button>
               {detail.lead.fallback_email ? (
                 <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onSwitchFallback(detail.lead.id)} variant="outline">
                   Switch route

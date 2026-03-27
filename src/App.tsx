@@ -112,7 +112,6 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         {!loading && tab === "today" ? (
           <TodayScreen
             actionLeadId={actionLeadId}
-            onEnrich={(leadId) => void actions.enrichLead(leadId)}
             onLogPhoneFollowUp={(leadId, step) => {
               const notes = window.prompt("Phone outcome notes", "") ?? ""
               void actions.logPhoneFollowUp(leadId, step, notes)
@@ -161,6 +160,7 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onLost={(leadId) => void actions.markLost(leadId)}
         onRefreshDraft={(leadId) => void actions.refreshDraft(leadId)}
         onReplied={(leadId) => void actions.markReplied(leadId)}
+        onSaveNotes={(leadId, notes) => void actions.saveNotes(leadId, notes)}
         onSaveDraft={(leadId, draft) => void actions.saveDraft(leadId, draft)}
         onSend={(leadId) => void actions.sendLead(leadId)}
         onSendFollowUp={(leadId, step) => void actions.sendFollowUp(leadId, step)}

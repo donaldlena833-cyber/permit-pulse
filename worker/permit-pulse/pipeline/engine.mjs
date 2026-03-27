@@ -39,11 +39,11 @@ async function processLeadStages(env, db, runId, leadId, counters) {
   counters.leads_enriched += 1;
   if (routedLead?.status === 'ready') {
     counters.leads_ready += 1;
-  } else if (routedLead?.status === 'review') {
+  } else if (['review', 'email_required'].includes(routedLead?.status)) {
     counters.leads_review += 1;
   }
 
-  if (!routedLead || !['ready', 'review'].includes(routedLead.status)) {
+  if (!routedLead || !['ready', 'review', 'email_required'].includes(routedLead.status)) {
     return;
   }
 
