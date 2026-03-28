@@ -7,7 +7,7 @@ interface PanelProps {
 
 export function Panel({ children, className = "" }: PanelProps) {
   return (
-    <section className={`rounded-[24px] border border-[#E5D7C8] bg-[rgba(255,255,255,0.94)] p-5 shadow-[0_22px_46px_rgba(26,26,26,0.08)] backdrop-blur-sm ${className}`}>
+    <section className={`rounded-[26px] border border-[#E7DACC] bg-[rgba(255,252,247,0.88)] p-5 shadow-[0_18px_36px_rgba(26,26,26,0.06)] backdrop-blur-md ${className}`}>
       {children}
     </section>
   )

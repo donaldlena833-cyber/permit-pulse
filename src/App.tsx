@@ -25,22 +25,23 @@ function AppTabs({
 
   return (
     <nav className="fixed bottom-4 left-0 right-0 z-30 px-3">
-      <div className="mx-auto grid max-w-[560px] grid-cols-3 gap-2 rounded-[22px] border border-[#D9CCBE] bg-[rgba(255,248,240,0.94)] p-2 shadow-[0_18px_40px_rgba(26,26,26,0.12)] backdrop-blur-xl">
+      <div className="mx-auto grid max-w-[560px] grid-cols-3 gap-1.5 rounded-[24px] border border-[#D9CCBE] bg-[rgba(255,249,242,0.94)] p-1.5 shadow-[0_20px_46px_rgba(26,26,26,0.14)] backdrop-blur-2xl">
         {items.map((item) => {
           const Icon = item.icon
           const active = tab === item.id
           return (
             <button
               key={item.id}
-              className={`flex min-h-[54px] flex-col items-center justify-center rounded-[16px] text-xs font-medium transition ${
+              className={`flex min-h-[56px] flex-col items-center justify-center rounded-[18px] text-xs font-medium tracking-[-0.01em] transition-all duration-200 ${
                 active
-                  ? "bg-[#1A1A1A] text-white shadow-[0_12px_24px_rgba(26,26,26,0.18)]"
-                  : "bg-white/80 text-[#5F564C] hover:bg-white"
+                  ? "bg-[#1A1A1A] text-white shadow-[0_14px_30px_rgba(26,26,26,0.22)]"
+                  : "bg-transparent text-[#5F564C] hover:bg-white/88 hover:text-[#1A1A1A]"
               }`}
               onClick={() => onChange(item.id)}
               type="button"
             >
-              <Icon className="mb-1 h-4 w-4" />
+              <Icon className={`mb-1 h-4 w-4 transition-transform duration-200 ${active ? "-translate-y-[1px]" : ""}`} />
+              <span className={`h-1 w-1 rounded-full transition ${active ? "bg-white/90" : "bg-transparent"}`} />
               {item.label}
             </button>
           )
@@ -72,33 +73,33 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(212,105,26,0.12),transparent_22%),linear-gradient(180deg,#efe4d5,#eadfce_36%,#efe7dc)] text-[#1A1A1A]">
-      <header className="sticky top-0 z-20 border-b border-[#D9CCBE] bg-[rgba(239,228,213,0.88)] backdrop-blur-xl">
-        <div className="mx-auto max-w-6xl px-4 py-4">
+      <header className="sticky top-0 z-20 border-b border-[#D9CCBE] bg-[rgba(239,228,213,0.84)] backdrop-blur-xl">
+        <div className="mx-auto max-w-6xl px-4 py-3.5">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <div className="text-[11px] uppercase tracking-[0.24em] text-[#D4691A]">MetroGlassPro</div>
-              <div className="mt-1 font-['Instrument_Serif'] text-[2rem] leading-none sm:text-[2.4rem]">Lead desk</div>
-              <div className="mt-2 text-sm text-[#5F564C]">Operator-first permit outreach</div>
+              <div className="mt-1 font-['Instrument_Serif'] text-[1.8rem] leading-none sm:text-[2.25rem]">Lead desk</div>
+              <div className="mt-1.5 text-sm text-[#5F564C]">Operator-first permit outreach</div>
             </div>
-            <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => void onLogout()} type="button" variant="outline">
+            <Button className="h-10 rounded-full px-4" onClick={() => void onLogout()} type="button" variant="outline">
               Log out
             </Button>
           </div>
 
-          <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            <div className="rounded-full border border-[#D9CCBE] bg-white/78 px-3 py-1.5 text-[11px] text-[#5F564C]">
               {today?.counts.new ?? 0} new
             </div>
-            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+            <div className="rounded-full border border-[#D9CCBE] bg-white/78 px-3 py-1.5 text-[11px] text-[#5F564C]">
               {today?.counts.review ?? 0} review
             </div>
-            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+            <div className="rounded-full border border-[#D9CCBE] bg-white/78 px-3 py-1.5 text-[11px] text-[#5F564C]">
               {today?.counts.email_required ?? 0} email required
             </div>
-            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+            <div className="rounded-full border border-[#D9CCBE] bg-white/78 px-3 py-1.5 text-[11px] text-[#5F564C]">
               {today?.counts.ready ?? 0} ready
             </div>
-            <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+            <div className="rounded-full border border-[#D9CCBE] bg-white/78 px-3 py-1.5 text-[11px] text-[#5F564C]">
               Worker {health?.ok ? "healthy" : "offline"}
             </div>
           </div>
