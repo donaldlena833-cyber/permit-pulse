@@ -1,8 +1,11 @@
 const DEFAULT_FOLLOW_UP_SEQUENCE = ['email:0', 'email:4', 'email:8', 'email:14'];
 const LEGACY_FOLLOW_UP_SEQUENCE = ['email:0', 'email:4', 'phone:7', 'email:14'];
+const RECOMMENDED_DAILY_SEND_CAP = 80;
+const LEGACY_DAILY_SEND_CAP = 20;
+const LEGACY_WARM_UP_DAILY_CAP = 5;
 
 const DEFAULT_CONFIG = {
-  daily_send_cap: 20,
+  daily_send_cap: RECOMMENDED_DAILY_SEND_CAP,
   min_relevance_threshold: 0.15,
   scan_window_days: 14,
   scan_limit_per_source: 0,
@@ -12,7 +15,7 @@ const DEFAULT_CONFIG = {
   follow_up_sequence: DEFAULT_FOLLOW_UP_SEQUENCE,
   active_sources: ['nyc_dob'],
   warm_up_mode: false,
-  warm_up_daily_cap: 5,
+  warm_up_daily_cap: RECOMMENDED_DAILY_SEND_CAP,
 };
 
 function normalizeFollowUpSequence(value) {
@@ -75,6 +78,14 @@ export async function getAppConfig(db) {
 
   for (const row of rows) {
     mapped[row.key] = parseValue(row.value);
+  }
+
+  if (Number(mapped.daily_send_cap || 0) === LEGACY_DAILY_SEND_CAP) {
+    mapped.daily_send_cap = RECOMMENDED_DAILY_SEND_CAP;
+  }
+
+  if (Number(mapped.warm_up_daily_cap || 0) === LEGACY_WARM_UP_DAILY_CAP) {
+    mapped.warm_up_daily_cap = RECOMMENDED_DAILY_SEND_CAP;
   }
 
   mapped.follow_up_sequence = normalizeFollowUpSequence(mapped.follow_up_sequence);

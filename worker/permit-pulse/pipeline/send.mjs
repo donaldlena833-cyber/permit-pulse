@@ -5,10 +5,22 @@ import { inferEmailPattern, nowIso } from '../lib/utils.mjs';
 import { scheduleFollowUps } from './follow-up.mjs';
 import { generateLeadDraft } from './draft.mjs';
 
+const MAX_EMAILS_PER_DAY = 80;
+const MIN_SEND_DELAY_MS = 8000;
+const MAX_SEND_DELAY_MS = 20000;
+
 function tierRank(tier) {
   if (tier === 'hot') return 0;
   if (tier === 'warm') return 1;
   return 2;
+}
+
+function randomSendDelayMs() {
+  return MIN_SEND_DELAY_MS + Math.floor(Math.random() * (MAX_SEND_DELAY_MS - MIN_SEND_DELAY_MS));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function startOfDayIso() {
@@ -111,7 +123,10 @@ export async function sendLead(env, db, leadId, options = {}) {
 
 export async function sendReadyLeads(env, db, runId, config) {
   const sentToday = await countSentToday(db);
-  const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 5) : Number(config.daily_send_cap || 20);
+  const configuredCap = config.warm_up_mode
+    ? Number(config.warm_up_daily_cap || MAX_EMAILS_PER_DAY)
+    : Number(config.daily_send_cap || MAX_EMAILS_PER_DAY);
+  const cap = Math.min(configuredCap, MAX_EMAILS_PER_DAY);
   const remaining = Math.max(cap - sentToday, 0);
 
   if (remaining <= 0) {
@@ -142,7 +157,7 @@ export async function sendReadyLeads(env, db, runId, config) {
   let succeeded = 0;
   let failed = 0;
 
-  for (const lead of prioritizedLeads) {
+  for (const [index, lead] of prioritizedLeads.entries()) {
     try {
       await sendLead(env, db, lead.id, {
         runId,
@@ -151,6 +166,10 @@ export async function sendReadyLeads(env, db, runId, config) {
       succeeded += 1;
     } catch {
       failed += 1;
+    }
+
+    if (index < prioritizedLeads.length - 1) {
+      await sleep(randomSendDelayMs());
     }
   }
 
