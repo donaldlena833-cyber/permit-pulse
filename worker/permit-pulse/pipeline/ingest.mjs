@@ -14,6 +14,9 @@ const SOURCES = {
   nyc_dob: nycDob,
 };
 
+const RESIDENTIAL_GLASS_SCOPE_REGEX = /\b(shower|enclosure|partition|frameless|bathroom|kitchen|plumbing|renovation|interior remodel|glass door|mirror|cabinet glass|cabinet)\b/;
+const COMMERCIAL_GLASS_EXCLUSION_REGEX = /\b(storefront|awning|facade|exterior|commercial|glazing|retail|office|restaurant|hotel|lobby|gym|fitness|pool|curtain wall)\b/;
+
 export const GLASS_RELEVANCE = {
   bathroom: 1.0,
   shower: 1.0,
@@ -80,6 +83,17 @@ export function scorePermitRelevance(workDescription) {
   }
 
   const lower = normalizeText(workDescription);
+  const residentialBoostMatch = lower.match(RESIDENTIAL_GLASS_SCOPE_REGEX);
+  const exclusionMatch = lower.match(COMMERCIAL_GLASS_EXCLUSION_REGEX);
+
+  if (exclusionMatch) {
+    return {
+      score: 0,
+      keyword: exclusionMatch[0],
+      matchType: 'negative',
+    };
+  }
+
   const directHits = countKeywordHits(lower, DIRECT_KEYWORDS);
   const inferredHits = countKeywordHits(lower, INFERRED_KEYWORDS);
   const negativeHits = countKeywordHits(lower, NEGATIVE_KEYWORDS);
@@ -90,6 +104,12 @@ export function scorePermitRelevance(workDescription) {
   let best = matchedRule?.score || 0;
   let keyword = matchedRule?.keyword || null;
   let matchType = matchedRule ? 'rule' : 'none';
+
+  if (residentialBoostMatch) {
+    best = Math.max(best, 0.95);
+    keyword = keyword || residentialBoostMatch[0];
+    matchType = matchedRule ? matchType : 'direct';
+  }
 
   if (directHits.length >= 2) {
     best = Math.max(best, 0.9);

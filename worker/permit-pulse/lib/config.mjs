@@ -1,3 +1,6 @@
+const DEFAULT_FOLLOW_UP_SEQUENCE = ['email:0', 'email:4', 'email:8', 'email:14'];
+const LEGACY_FOLLOW_UP_SEQUENCE = ['email:0', 'email:4', 'phone:7', 'email:14'];
+
 const DEFAULT_CONFIG = {
   daily_send_cap: 20,
   min_relevance_threshold: 0.15,
@@ -6,11 +9,30 @@ const DEFAULT_CONFIG = {
   auto_send_trust_threshold: 50,
   manual_send_trust_threshold: 25,
   follow_up_enabled: true,
-  follow_up_sequence: ['email:0', 'email:4', 'phone:7', 'email:14'],
+  follow_up_sequence: DEFAULT_FOLLOW_UP_SEQUENCE,
   active_sources: ['nyc_dob'],
   warm_up_mode: false,
   warm_up_daily_cap: 5,
 };
+
+function normalizeFollowUpSequence(value) {
+  const sequence = Array.isArray(value)
+    ? value.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  if (sequence.length === 0) {
+    return [...DEFAULT_FOLLOW_UP_SEQUENCE];
+  }
+
+  if (
+    JSON.stringify(sequence) === JSON.stringify(LEGACY_FOLLOW_UP_SEQUENCE)
+    || sequence.some((item) => item.startsWith('phone:'))
+  ) {
+    return [...DEFAULT_FOLLOW_UP_SEQUENCE];
+  }
+
+  return sequence;
+}
 
 function parseValue(value) {
   if (Array.isArray(value) || typeof value === 'number' || typeof value === 'boolean' || value === null) {
@@ -55,7 +77,12 @@ export async function getAppConfig(db) {
     mapped[row.key] = parseValue(row.value);
   }
 
+  mapped.follow_up_sequence = normalizeFollowUpSequence(mapped.follow_up_sequence);
+
   return mapped;
 }
 
-export const APP_CONFIG_DEFAULTS = DEFAULT_CONFIG;
+export const APP_CONFIG_DEFAULTS = {
+  ...DEFAULT_CONFIG,
+  follow_up_sequence: [...DEFAULT_FOLLOW_UP_SEQUENCE],
+};

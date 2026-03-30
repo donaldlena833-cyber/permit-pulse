@@ -1,91 +1,160 @@
 import { appendLeadEvent } from '../lib/events.mjs';
 import { eq } from '../lib/supabase.mjs';
 
-function serviceFromLead(lead) {
-  const keyword = String(lead.relevance_keyword || '').toLowerCase();
-  if (keyword.includes('shower') || keyword.includes('bath')) return 'shower enclosure';
-  if (keyword.includes('mirror')) return 'mirror wall';
-  if (keyword.includes('partition')) return 'glass partition';
-  if (keyword.includes('railing')) return 'glass railing';
-  return 'glass scope';
+function truncateText(value, maxLength = 120) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return '';
+  }
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength - 3).trim()}...`;
 }
 
-export function chooseDraftCta(lead) {
-  const relevance = Number(lead.relevance_score || 0);
-  const service = serviceFromLead(lead);
+function greetingName(lead) {
+  const first = String(lead.contact_name || '').trim().split(/\s+/)[0];
+  return first || 'team';
+}
 
-  if (relevance >= 0.8) {
-    return {
-      type: 'pricing',
-      sentence: `I put together a quick estimate for the ${service} at ${lead.address}.`,
-    };
+function cleanDescription(lead) {
+  return truncateText(lead.work_description || lead.description || 'renovation scope', 120).replace(/[.]+$/g, '');
+}
+
+function workType(lead) {
+  const rawType = String(lead.permit_type || '').trim();
+  if (rawType && rawType.toLowerCase() !== 'general construction') {
+    return rawType;
   }
 
-  if (lead.contact_role === 'gc_applicant') {
-    return {
-      type: 'takeoff',
-      sentence: 'Happy to do a free glass takeoff from plans if you send them over.',
-    };
+  const keyword = String(lead.relevance_keyword || '').trim();
+  if (keyword) {
+    return keyword
+      .split(/\s+/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
   }
 
-  if (relevance >= 0.6) {
-    return {
-      type: 'similar_project',
-      sentence: `We just finished a similar ${service} project nearby.`,
-    };
+  return rawType || 'General Construction';
+}
+
+function formatUsd(value) {
+  const numeric = Number(String(value || '').replace(/[^0-9.]/g, ''));
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return '';
   }
 
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  }).format(numeric);
+}
+
+function estimatedCost(lead) {
+  return (
+    formatUsd(lead.estimated_cost)
+    || formatUsd(lead.estimated_job_cost)
+    || formatUsd(lead.job_cost)
+    || formatUsd(lead.cost)
+    || formatUsd(lead.estimated_job_costs)
+  );
+}
+
+function projectSummaryLine(lead) {
+  const address = lead.address || 'your project';
+  const summary = `Saw the DOB filing for ${address} - ${workType(lead)} / ${cleanDescription(lead)}`;
+  const cost = estimatedCost(lead);
+  return cost ? `${summary} (est. ${cost}).` : `${summary}.`;
+}
+
+function signatureLines(includePhone = true) {
+  const lines = [
+    'Best,',
+    'Donald Lena',
+    'MetroGlass Pro',
+  ];
+
+  if (includePhone) {
+    lines.push('(332) 999-3846');
+  }
+
+  return lines;
+}
+
+export function chooseDraftCta() {
   return {
-    type: 'quick_call',
-    sentence: `Would 10 minutes work this week to walk through glass options for ${lead.address}?`,
-  };
+    type: 'visualize_render',
+    sentence: 'Happy to pull field measurements and send tailored render options the same day.',
+  }
 }
 
 export function buildInitialDraft(lead) {
-  const firstName = String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
   const address = lead.address || 'your project';
-  const subject = lead.address ? `Quick note on ${lead.address}` : 'Quick note from MetroGlass Pro';
+  const subject = `3D render option for glass on ${address}?`;
   const lines = [
-    `Hi ${firstName},`,
-    `I saw the filing for ${address} and wanted to reach out.`,
-    "I'm with MetroGlass Pro. We work on custom glass installations across NYC, NJ, and CT, including mirrors, partitions, shower glass, cabinets, and similar scope.",
-    "I know filings do not always show the full picture, but if any glass related work is still being lined up, I'd be happy to connect.",
-    'Best,',
-    'Donald',
+    `Hi ${greetingName(lead)},`,
+    projectSummaryLine(lead),
+    "We're MetroGlass Pro, Manhattan licensed & insured specialists in precision indoor residential glass: frameless showers, partitions, mirrors, and cabinets.",
+    'What sets us apart: we generate rapid 3D renders before any glass is cut so you + the client can see the final look instantly and lock it in. I attached our one-pager with real examples (takes us ~5 minutes once we have measurements).',
+    'If any glass scope is still open on this bathroom/kitchen/renovation job, I can pull field measurements and send you 2-3 tailored render options same day, no cost, no pressure.',
+    'Would love to connect.',
+    ...signatureLines(true),
   ];
 
   return {
     subject,
     body: lines.join('\n\n'),
-    cta_type: 'soft_intro',
+    cta_type: 'visualize_render',
   };
 }
 
 export function buildFollowUpDraft(lead, stepNumber) {
-  const firstName = String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
-  const service = serviceFromLead(lead);
+  const address = lead.address || 'your project';
+  const greeting = `Hi ${greetingName(lead)},`;
+  const projectLine = `Just following up on my note about the ${address} filing - ${workType(lead)} / ${cleanDescription(lead)}.`;
 
   if (stepNumber === 2) {
     return {
-      subject: lead.draft_subject || `Following up on ${lead.address || 'your project'}`,
+      subject: `Quick follow-up on glass for ${address}?`,
       body: [
-        `Hi ${firstName},`,
-        `Wanted to follow up on my note about the ${service} at ${lead.address || 'your project'}.`,
-        'If it helps, we can turn around a quick number or review plans without a long handoff.',
-        'Best,',
-        'Donald',
+        greeting,
+        projectLine,
+        'Still happy to pull field measurements and send you 2-3 3D render options same day so you and the client can visualize the frameless shower / partition / mirror exactly how it will look.',
+        'No cost, no pressure, takes us ~5 minutes.',
+        "Any upcoming projects you'd like me to quote on?",
+        ...signatureLines(true),
+      ].join('\n\n'),
+    };
+  }
+
+  if (stepNumber === 3) {
+    return {
+      subject: `One more note on ${address} glass scope?`,
+      body: [
+        greeting,
+        `Last quick note on the ${address} job.`,
+        'We specialize in precision indoor residential glass (frameless showers, partitions, mirrors, cabinets) and our Visualize renders have helped architects close clients faster on similar Manhattan bathroom/kitchen renos.',
+        'If glass is still in play, I can get you render options today.',
+        'Open to a quick call or just reply with "yes" and I will schedule the measure.',
+        'Thanks,',
+        'Donald Lena',
+        'MetroGlass Pro',
+        '(332) 999-3846',
       ].join('\n\n'),
     };
   }
 
   return {
-    subject: lead.draft_subject || `Final follow up for ${lead.address || 'your project'}`,
+    subject: `${address} glass - still open?`,
     body: [
-      `Hi ${firstName},`,
-      'Just wanted to make sure this did not get buried.',
-      `If the glass scope for ${lead.address || 'the project'} is still open, I would be happy to help.`,
-      'Best,',
-      'Donald',
+      greeting,
+      `Last follow-up on the ${address} filing.`,
+      'If any glass scope is still open, reply with "yes" and I will send render options today.',
+      'Otherwise, no worries, best of luck with the project.',
+      ...signatureLines(false),
     ].join('\n\n'),
   };
 }
