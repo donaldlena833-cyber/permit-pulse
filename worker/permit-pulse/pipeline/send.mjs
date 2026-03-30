@@ -8,6 +8,7 @@ import { generateLeadDraft } from './draft.mjs';
 const MAX_EMAILS_PER_DAY = 80;
 const MIN_SEND_DELAY_MS = 8000;
 const MAX_SEND_DELAY_MS = 20000;
+const DEFAULT_EMAIL_ONLY_FOLLOW_UP_SEQUENCE = ['email:0', 'email:4', 'email:8', 'email:14'];
 
 function tierRank(tier) {
   if (tier === 'hot') return 0;
@@ -111,7 +112,12 @@ export async function sendLead(env, db, leadId, options = {}) {
   });
 
   if (!options.stepNumber) {
-    await scheduleFollowUps(db, leadId, options.followUpSequence || ['email:0', 'email:4', 'phone:7', 'email:14'], nowIso());
+    await scheduleFollowUps(
+      db,
+      leadId,
+      options.followUpSequence || DEFAULT_EMAIL_ONLY_FOLLOW_UP_SEQUENCE,
+      nowIso(),
+    );
   }
 
   return {
