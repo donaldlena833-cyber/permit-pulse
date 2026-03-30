@@ -61,18 +61,25 @@ function workType(lead) {
   return rawType || 'General Construction';
 }
 
-function buildShortSnippet(lead) {
-  const loweredType = String(workType(lead) || 'renovation').toLowerCase();
-  const loweredDescription = String(cleanDescription(lead) || '').toLowerCase();
-  let shortSnippet = loweredDescription
-    ? `${toTitleCase(loweredType)} — ${toTitleCase(loweredDescription)}`
-    : toTitleCase(loweredType);
+function buildShortHook(lead) {
+  const workTypeWords = String(workType(lead) || 'renovation')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
 
-  if (shortSnippet.length > 65) {
-    shortSnippet = `${shortSnippet.substring(0, 62).trim()}...`;
-  }
+  const descriptionWords = String(lead.work_description || lead.description || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 4);
 
-  return shortSnippet;
+  const hook = [...workTypeWords, ...descriptionWords]
+    .slice(0, 8)
+    .join(' ')
+    .trim();
+
+  return hook || 'renovation';
 }
 
 function signatureLines(includePhone = true) {
@@ -99,24 +106,28 @@ export function chooseDraftCta() {
 export function buildInitialDraft(lead) {
   const address = cleanAddress(lead);
   const subject = `3D render for glass on ${address}?`;
-  const lines = [
+  const body = [
     `Hi ${greetingName(lead)},`,
-    `Saw the DOB filing for ${address} — ${buildShortSnippet(lead)}.`,
-    'We’re MetroGlass Pro — Manhattan licensed & insured specialists in precision indoor residential glass: frameless showers, partitions, mirrors, and cabinets.',
-    'What sets us apart: we generate rapid 3D renders before any glass is cut so you + the client can see the final look instantly and lock it in. I attached our one-pager with real examples (takes us ~5 minutes once we have measurements).',
-    'If any glass scope is still open on this job, I can pull field measurements and send you 2-3 tailored render options same day — no cost, no pressure.',
+    '',
+    `Saw the DOB filing for ${address} ${buildShortHook(lead)}.`,
+    '',
+    'We’re MetroGlass Pro, Manhattan licensed & insured specialists in precision indoor residential glass: frameless showers, partitions, mirrors, and cabinets.',
+    '',
+    'What sets us apart: we generate rapid 3D renders before any glass is cut so you and the client can see the final look instantly.',
+    '',
+    'If any glass scope is still open I can pull measurements and send you 2-3 render options same day, no cost, no pressure.',
+    '',
     'Would a 15-minute call this week work?',
+    '',
     'Best,',
     'Donald Lena',
     'MetroGlass Pro',
     '(332) 999-3846',
-    'operations@metroglasspro.com',
-    'metroglasspro.com',
-  ];
+  ].join('\n');
 
   return {
     subject,
-    body: lines.join('\n\n'),
+    body,
     cta_type: 'visualize_render',
   };
 }
