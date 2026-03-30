@@ -19,15 +19,14 @@ async function fetchAccessToken(env) {
 }
 
 function encodeBase64Url(value) {
-  let encoded;
+  const bytes = typeof TextEncoder !== 'undefined'
+    ? new TextEncoder().encode(String(value || ''))
+    : Uint8Array.from(Buffer.from(String(value || ''), 'utf8'));
 
-  if (typeof btoa === 'function') {
-    encoded = btoa(value);
-  } else {
-    encoded = Buffer.from(value).toString('base64');
-  }
-
-  return encoded.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  return encodeBase64Bytes(bytes)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
 }
 
 function encodeBase64Bytes(bytes) {
