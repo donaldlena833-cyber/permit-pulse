@@ -19,15 +19,11 @@ async function fetchAccessToken(env) {
 }
 
 function encodeBase64Url(value) {
-  let encoded;
-
-  if (typeof btoa === 'function') {
-    encoded = btoa(value);
-  } else {
-    encoded = Buffer.from(value).toString('base64');
-  }
-
-  return encoded.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  const bytes = new TextEncoder().encode(String(value));
+  return encodeBase64Bytes(bytes)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
 }
 
 function encodeBase64Bytes(bytes) {

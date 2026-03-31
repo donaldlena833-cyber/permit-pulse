@@ -91,6 +91,16 @@ function isSendApproved(candidate) {
   return Boolean(candidate?.is_auto_sendable || candidate?.is_manual_sendable);
 }
 
+function isBenignSystemFailure(job) {
+  const message = String(job?.error_message || '');
+
+  return message.includes('idx_v2_leads_permit_key')
+    || message.includes('POST v2_lead_events failed: 502')
+    || message.includes('POST v2_lead_events failed: 503')
+    || message.includes('POST v2_lead_events failed: 504')
+    || message.includes('v2_leads_status_check');
+}
+
 function presentLead(lead) {
   if (!lead) {
     return lead;
@@ -580,11 +590,11 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/api/system' && request.method === 'GET') {
-      const [recentFailures, totalLeads, domainHealth, runs] = await Promise.all([
+      const [recentFailureRows, totalLeads, domainHealth, runs] = await Promise.all([
         db.select('v2_lead_jobs', {
           filters: [eq('status', 'failed')],
           ordering: [order('created_at', 'desc')],
-          limit: 5,
+          limit: 25,
         }),
         db.select('v2_leads', { columns: 'id' }),
         db.select('v2_domain_health', { columns: 'domain,health_score,checked_at', limit: 20 }),
@@ -593,6 +603,9 @@ export async function handlePermitPulseRequest(request, env, ctx) {
           limit: 5,
         }),
       ]);
+      const recentFailures = recentFailureRows
+        .filter((failure) => !isBenignSystemFailure(failure))
+        .slice(0, 5);
 
       return json({
         worker: {

@@ -34,6 +34,32 @@ export function withoutEmailRequiredMarker(operatorNotes = '') {
   return String(operatorNotes || '').replace(EMAIL_REQUIRED_MARKER, '').replace(/^\s+/, '').trim();
 }
 
+function isEmailRequiredConstraintError(error) {
+  const message = String(error instanceof Error ? error.message : error || '');
+  return message.includes('v2_leads_status_check') && message.includes('email_required');
+}
+
+async function updateLeadStatusWithEmailRequiredFallback(db, leadId, payload, fallbackOperatorNotes = '') {
+  try {
+    await db.update('v2_leads', [`id=eq.${leadId}`], payload);
+    return payload;
+  } catch (error) {
+    if (payload.status !== 'email_required' || !isEmailRequiredConstraintError(error)) {
+      throw error;
+    }
+
+    const legacyPayload = {
+      ...payload,
+      status: 'review',
+      operator_notes: withEmailRequiredMarker(fallbackOperatorNotes),
+      updated_at: nowIso(),
+    };
+
+    await db.update('v2_leads', [`id=eq.${leadId}`], legacyPayload);
+    return legacyPayload;
+  }
+}
+
 async function applyOperatorRoute(db, lead, primaryCandidate, actorId = null, eventType = 'operator_email_selected', detail = {}) {
   const candidates = await db.select('v2_email_candidates', {
     filters: [eq('lead_id', lead.id), eq('is_current', true)],
@@ -417,11 +443,11 @@ export async function markLeadEmailRequired(db, leadId, actorId = null) {
     throw new Error('Lead not found');
   }
 
-  await db.update('v2_leads', [`id=eq.${leadId}`], {
+  const persisted = await updateLeadStatusWithEmailRequiredFallback(db, leadId, {
     status: 'email_required',
     operator_notes: withoutEmailRequiredMarker(lead.operator_notes),
     updated_at: nowIso(),
-  });
+  }, lead.operator_notes);
 
   await appendLeadEvent(db, {
     lead_id: leadId,
@@ -435,6 +461,6 @@ export async function markLeadEmailRequired(db, leadId, actorId = null) {
 
   return {
     success: true,
-    status: 'email_required',
+    status: persisted.status === 'review' ? 'email_required' : persisted.status,
   };
 }

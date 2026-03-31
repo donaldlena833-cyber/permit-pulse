@@ -196,6 +196,12 @@ async function recordDuplicatePermit(db, leadId, permit, relevance) {
   });
 }
 
+function isDuplicatePermitInsertError(error) {
+  const message = String(error instanceof Error ? error.message : error || '');
+  return message.includes('23505')
+    && message.includes('idx_v2_leads_permit_key');
+}
+
 async function ingestPermit(db, runId, permit, minThreshold) {
   const permitKey = buildPermitKey(permit.source, permit.permit_number);
   const relevance = scorePermitRelevance(permit);
@@ -225,24 +231,54 @@ async function ingestPermit(db, runId, permit, minThreshold) {
     return { duplicate: true, leadId: duplicateLead.id, relevance };
   }
 
-  const [lead] = await db.insert('v2_leads', {
-    permit_number: permit.permit_number,
-    permit_key: permitKey,
-    source: permit.source,
-    address: normalizeWhitespace(permit.address),
-    borough_or_municipality: permit.borough_or_municipality,
-    state: permit.state || 'NY',
-    work_description: permit.work_description,
-    filing_date: permit.filing_date,
-    permit_type: permit.permit_type,
-    applicant_name: cleanCompanyName(permit.applicant_name),
-    owner_name: cleanCompanyName(permit.owner_name),
-    relevance_score: relevance.score,
-    relevance_keyword: relevance.keyword,
-    quality_tier: deriveQualityTier(relevance.score),
-    status: 'new',
-    updated_at: nowIso(),
-  });
+  let lead;
+  try {
+    [lead] = await db.insert('v2_leads', {
+      permit_number: permit.permit_number,
+      permit_key: permitKey,
+      source: permit.source,
+      address: normalizeWhitespace(permit.address),
+      borough_or_municipality: permit.borough_or_municipality,
+      state: permit.state || 'NY',
+      work_description: permit.work_description,
+      filing_date: permit.filing_date,
+      permit_type: permit.permit_type,
+      applicant_name: cleanCompanyName(permit.applicant_name),
+      owner_name: cleanCompanyName(permit.owner_name),
+      relevance_score: relevance.score,
+      relevance_keyword: relevance.keyword,
+      quality_tier: deriveQualityTier(relevance.score),
+      status: 'new',
+      updated_at: nowIso(),
+    });
+  } catch (error) {
+    if (!isDuplicatePermitInsertError(error)) {
+      throw error;
+    }
+
+    const racedDuplicate = await findDuplicateLead(
+      db,
+      permitKey,
+      normalizeWhitespace(permit.address),
+      cleanCompanyName(permit.applicant_name),
+    );
+
+    if (!racedDuplicate) {
+      throw error;
+    }
+
+    await recordDuplicatePermit(db, racedDuplicate.id, permit, relevance);
+    await appendLeadEvent(db, {
+      lead_id: racedDuplicate.id,
+      run_id: runId,
+      event_type: 'duplicate_collapsed',
+      detail: {
+        permit_number: permit.permit_number,
+        permit_key: permitKey,
+      },
+    });
+    return { duplicate: true, leadId: racedDuplicate.id, relevance };
+  }
 
   await appendLeadEvent(db, {
     lead_id: lead.id,

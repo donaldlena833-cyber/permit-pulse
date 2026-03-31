@@ -3,6 +3,8 @@ import { isGenericInbox, normalizeEmail } from '../lib/email.mjs';
 import { eq, order } from '../lib/supabase.mjs';
 import { daysSince } from '../lib/utils.mjs';
 
+const EMAIL_REQUIRED_MARKER = '[email_required]';
+
 function computeQualityTier(lead, primaryCandidate) {
   const relevanceScore = Number(lead.relevance_score || 0);
   const trust = Number(primaryCandidate?.trust_score || 0);
@@ -55,6 +57,41 @@ function pickPreferredPublished(candidates) {
     || ordered[0]
     || null
   );
+}
+
+function withoutEmailRequiredMarker(operatorNotes = '') {
+  return String(operatorNotes || '').replace(EMAIL_REQUIRED_MARKER, '').replace(/^\s+/, '').trim();
+}
+
+function withEmailRequiredMarker(operatorNotes = '') {
+  const cleaned = withoutEmailRequiredMarker(operatorNotes);
+  return cleaned ? `${EMAIL_REQUIRED_MARKER}\n${cleaned}` : EMAIL_REQUIRED_MARKER;
+}
+
+function isEmailRequiredConstraintError(error) {
+  const message = String(error instanceof Error ? error.message : error || '');
+  return message.includes('v2_leads_status_check') && message.includes('email_required');
+}
+
+async function updateLeadRoute(db, leadId, lead, projectedLead) {
+  try {
+    await db.update('v2_leads', [`id=eq.${leadId}`], projectedLead);
+    return projectedLead;
+  } catch (error) {
+    if (projectedLead.status !== 'email_required' || !isEmailRequiredConstraintError(error)) {
+      throw error;
+    }
+
+    const legacyProjectedLead = {
+      ...projectedLead,
+      status: 'review',
+      operator_notes: withEmailRequiredMarker(lead.operator_notes),
+      updated_at: new Date().toISOString(),
+    };
+
+    await db.update('v2_leads', [`id=eq.${leadId}`], legacyProjectedLead);
+    return legacyProjectedLead;
+  }
 }
 
 export async function selectLeadRoute(db, runId, leadId) {
@@ -139,10 +176,11 @@ export async function selectLeadRoute(db, runId, leadId) {
     active_email_role: 'primary',
     quality_tier: qualityTier,
     status: nextStatus,
+    operator_notes: withoutEmailRequiredMarker(lead.operator_notes),
     updated_at: new Date().toISOString(),
   };
 
-  await db.update('v2_leads', [`id=eq.${leadId}`], projectedLead);
+  const persistedLead = await updateLeadRoute(db, leadId, lead, projectedLead);
 
   await appendLeadEvent(db, {
     lead_id: leadId,
@@ -161,13 +199,13 @@ export async function selectLeadRoute(db, runId, leadId) {
     run_id: runId,
     event_type: 'status_changed',
     detail: {
-      status: projectedLead.status,
+      status: persistedLead.status,
       quality_tier: qualityTier,
     },
   });
 
   return {
     ...lead,
-    ...projectedLead,
+    ...persistedLead,
   };
 }
