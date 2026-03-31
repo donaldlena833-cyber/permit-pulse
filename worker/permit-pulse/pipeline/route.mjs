@@ -165,7 +165,7 @@ export async function selectLeadRoute(db, runId, leadId) {
     ? approvedPrimary?.is_auto_sendable
       ? 'ready'
       : 'review'
-    : 'email_required';
+    : 'archived';
   const projectedLead = {
     contact_name: routePrimary?.person_name || lead.applicant_name || lead.owner_name || '',
     contact_role: routePrimary?.person_role || (lead.applicant_name ? 'gc_applicant' : lead.owner_name ? 'owner' : 'unknown'),
@@ -201,6 +201,7 @@ export async function selectLeadRoute(db, runId, leadId) {
     detail: {
       status: persistedLead.status,
       quality_tier: qualityTier,
+      reason: routePrimary?.email_address ? null : 'no_published_email_auto_archived',
     },
   });
 
