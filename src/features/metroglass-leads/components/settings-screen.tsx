@@ -136,6 +136,17 @@ export function SettingsScreen({ health, config, system, onSaveConfig }: Setting
                 onChange={(event) => setForm({ ...form, manual_send_trust_threshold: Number(event.target.value) })}
               />
             </label>
+            <label className="grid gap-2 text-sm text-[#5F564C]">
+              Auto send policy
+              <select
+                className="h-11 rounded-[14px] border border-[#DCCDBE] bg-white/90 px-3 text-sm text-[#1A1A1A] outline-none"
+                onChange={(event) => setForm({ ...form, auto_send_policy: event.target.value as ConfigPayload["auto_send_policy"] })}
+                value={form.auto_send_policy}
+              >
+                <option value="any_published">Any published email</option>
+                <option value="threshold">Trust threshold only</option>
+              </select>
+            </label>
             <div className="flex items-center justify-between rounded-[18px] border border-[#EEE4D7] bg-[#FFFCF8] px-4 py-4">
               <div>
                 <div className="font-medium text-[#1A1A1A]">Warm up mode</div>
@@ -238,7 +249,7 @@ export function SettingsScreen({ health, config, system, onSaveConfig }: Setting
                     <div className="mt-1 text-lg font-semibold text-[#1A1A1A]">{run.counters?.leads_ready ?? 0}</div>
                   </div>
                   <div className="border-l-2 border-[#E2D4C3] pl-3">
-                    <div className="text-[11px] uppercase tracking-[0.16em] text-[#8B7D6B]">Review</div>
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-[#8B7D6B]">Needs operator</div>
                     <div className="mt-1 text-lg font-semibold text-[#1A1A1A]">{run.counters?.leads_review ?? 0}</div>
                   </div>
                   <div className="border-l-2 border-[#E2D4C3] pl-3">

@@ -91,7 +91,7 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
               {today?.counts.new ?? 0} new
             </div>
             <div className="rounded-full border border-[#D9CCBE] bg-white/78 px-3 py-1.5 text-[11px] text-[#5F564C]">
-              {today?.counts.review ?? 0} review
+              {today?.counts.review ?? 0} exceptions
             </div>
             <div className="rounded-full border border-[#D9CCBE] bg-white/78 px-3 py-1.5 text-[11px] text-[#5F564C]">
               {today?.counts.email_required ?? 0} email required

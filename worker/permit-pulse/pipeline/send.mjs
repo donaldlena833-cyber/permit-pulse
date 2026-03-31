@@ -1,6 +1,6 @@
 import { sendAutomationEmail } from '../lib/gmail.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
-import { eq, order } from '../lib/supabase.mjs';
+import { eq, inList, order } from '../lib/supabase.mjs';
 import { inferEmailPattern, nowIso } from '../lib/utils.mjs';
 import { scheduleFollowUps } from './follow-up.mjs';
 import { generateLeadDraft } from './draft.mjs';
@@ -127,8 +127,13 @@ export async function sendLead(env, db, leadId, options = {}) {
   };
 }
 
-export async function sendReadyLeads(env, db, runId, config) {
+export async function sendReadyLeads(env, db, runId, config, options = {}) {
   const sentToday = await countSentToday(db);
+  const scopedLeadIds = [...new Set(
+    (Array.isArray(options.leadIds) ? options.leadIds : [])
+      .map((leadId) => String(leadId || '').trim())
+      .filter(Boolean),
+  )];
   const configuredCap = config.warm_up_mode
     ? Number(config.warm_up_daily_cap || MAX_EMAILS_PER_DAY)
     : Number(config.daily_send_cap || MAX_EMAILS_PER_DAY);
@@ -144,8 +149,22 @@ export async function sendReadyLeads(env, db, runId, config) {
     };
   }
 
+  if (options.leadIds && scopedLeadIds.length === 0) {
+    return {
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      remaining,
+    };
+  }
+
+  const filters = [eq('status', 'ready')];
+  if (scopedLeadIds.length > 0) {
+    filters.push(inList('id', scopedLeadIds));
+  }
+
   const leads = await db.select('v2_leads', {
-    filters: [eq('status', 'ready')],
+    filters,
     ordering: [order('updated_at', 'desc')],
     limit: Math.max(remaining * 4, 20),
   });
@@ -170,8 +189,20 @@ export async function sendReadyLeads(env, db, runId, config) {
         followUpSequence: config.follow_up_sequence,
       });
       succeeded += 1;
-    } catch {
+    } catch (error) {
       failed += 1;
+      await db.update('v2_leads', [`id=eq.${lead.id}`], {
+        status: 'review',
+        updated_at: nowIso(),
+      });
+      await appendLeadEvent(db, {
+        lead_id: lead.id,
+        run_id: runId || null,
+        event_type: 'send_failed',
+        detail: {
+          error: error instanceof Error ? error.message : String(error || 'Send failed'),
+        },
+      });
     }
 
     if (index < prioritizedLeads.length - 1) {

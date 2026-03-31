@@ -180,7 +180,7 @@ export async function markLeadOutcome(db, leadId, payload, actorId = null) {
       });
     } else {
       await db.update('v2_leads', [`id=eq.${leadId}`], {
-        status: 'archived',
+        status: 'review',
         updated_at: new Date().toISOString(),
       });
     }

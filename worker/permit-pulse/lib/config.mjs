@@ -3,6 +3,7 @@ const LEGACY_FOLLOW_UP_SEQUENCE = ['email:0', 'email:4', 'phone:7', 'email:14'];
 const RECOMMENDED_DAILY_SEND_CAP = 80;
 const LEGACY_DAILY_SEND_CAP = 20;
 const LEGACY_WARM_UP_DAILY_CAP = 5;
+const DEFAULT_AUTO_SEND_POLICY = 'any_published';
 
 const DEFAULT_CONFIG = {
   daily_send_cap: RECOMMENDED_DAILY_SEND_CAP,
@@ -11,6 +12,7 @@ const DEFAULT_CONFIG = {
   scan_limit_per_source: 0,
   auto_send_trust_threshold: 50,
   manual_send_trust_threshold: 25,
+  auto_send_policy: DEFAULT_AUTO_SEND_POLICY,
   follow_up_enabled: true,
   follow_up_sequence: DEFAULT_FOLLOW_UP_SEQUENCE,
   active_sources: ['nyc_dob'],
@@ -35,6 +37,10 @@ function normalizeFollowUpSequence(value) {
   }
 
   return sequence;
+}
+
+function normalizeAutoSendPolicy(value) {
+  return value === 'threshold' ? 'threshold' : DEFAULT_AUTO_SEND_POLICY;
 }
 
 function parseValue(value) {
@@ -88,6 +94,7 @@ export async function getAppConfig(db) {
     mapped.warm_up_daily_cap = RECOMMENDED_DAILY_SEND_CAP;
   }
 
+  mapped.auto_send_policy = normalizeAutoSendPolicy(mapped.auto_send_policy);
   mapped.follow_up_sequence = normalizeFollowUpSequence(mapped.follow_up_sequence);
 
   return mapped;

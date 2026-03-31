@@ -181,7 +181,7 @@ function ContactCard({
             ) : null}
             {isCurrentRoute && !isApprovedRoute ? (
               <span className="rounded-full border border-[#E2C7A7] bg-[#FFF2E3] px-2.5 py-1 text-[#9A5A12]">
-                Selected for review
+                Selected for exception lane
               </span>
             ) : null}
           </div>
@@ -397,11 +397,11 @@ export function LeadDetailView({
                 <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Decision state</div>
                 <div className="mt-2 text-sm font-semibold text-[#161616]">
                   {approvedPrimary
-                    ? "System approved route"
+                    ? "Automation-approved route"
                     : isEmailRequired
                       ? "Waiting on manual email research"
                       : selectedRoute
-                        ? "Operator review needed"
+                        ? "Exception needs attention"
                         : "No route yet"}
                 </div>
               </div>
@@ -563,7 +563,7 @@ export function LeadDetailView({
                     : isEmailRequired
                       ? "Parked until you verify the right address yourself."
                       : selectedRoute
-                        ? "Stored as the active review route."
+                        ? "Stored as the active exception route."
                         : "Choose a found email or enter one yourself."}
                 </div>
               </div>

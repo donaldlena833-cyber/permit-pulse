@@ -219,6 +219,7 @@ export interface ConfigPayload {
   scan_limit_per_source: number
   auto_send_trust_threshold: number
   manual_send_trust_threshold: number
+  auto_send_policy: "threshold" | "any_published"
   follow_up_enabled: boolean
   follow_up_sequence: string[]
   active_sources: string[]

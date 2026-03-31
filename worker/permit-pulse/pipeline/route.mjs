@@ -1,7 +1,7 @@
 import { appendLeadEvent } from '../lib/events.mjs';
 import { isGenericInbox, normalizeEmail } from '../lib/email.mjs';
 import { eq, order } from '../lib/supabase.mjs';
-import { daysSince } from '../lib/utils.mjs';
+import { daysSince, getBaseDomain, normalizeText } from '../lib/utils.mjs';
 
 function computeQualityTier(lead, primaryCandidate) {
   const relevanceScore = Number(lead.relevance_score || 0);
@@ -42,8 +42,35 @@ function isSendApproved(candidate) {
   return Boolean(candidate?.is_auto_sendable || candidate?.is_manual_sendable);
 }
 
-function isTrustedPublished(candidate) {
-  return isPublishedContact(candidate) && isSendApproved(candidate);
+function chosenCompanyDomain(candidate) {
+  return getBaseDomain(candidate?.domain || candidate?.website || '');
+}
+
+function detectResolverConflict(companyCandidates, primaryCandidate) {
+  if (!primaryCandidate?.email_address) {
+    return { conflict: false, reason: null };
+  }
+
+  const ordered = [...companyCandidates].sort((left, right) => Number(right.confidence || 0) - Number(left.confidence || 0));
+  const chosen = ordered.find((candidate) => candidate.is_chosen) || ordered[0] || null;
+  const runnerUp = ordered.find((candidate) => candidate.id !== chosen?.id) || null;
+  const chosenDomain = normalizeText(chosenCompanyDomain(chosen));
+  const runnerUpDomain = normalizeText(chosenCompanyDomain(runnerUp));
+  const confidenceDelta = Number(chosen?.confidence || 0) - Number(runnerUp?.confidence || 0);
+
+  if (!chosen?.website) {
+    return { conflict: true, reason: 'Chosen company has no website' };
+  }
+
+  if (Number(chosen?.confidence || 0) < 50) {
+    return { conflict: true, reason: 'Chosen company confidence is below 50' };
+  }
+
+  if (runnerUp && runnerUpDomain && runnerUpDomain !== chosenDomain && confidenceDelta <= 10) {
+    return { conflict: true, reason: 'Runner-up company is too close to the winner' };
+  }
+
+  return { conflict: false, reason: null };
 }
 
 function pickPreferredPublished(candidates) {
@@ -57,7 +84,7 @@ function pickPreferredPublished(candidates) {
   );
 }
 
-export async function selectLeadRoute(db, runId, leadId) {
+export async function selectLeadRoute(db, runId, leadId, config = {}) {
   const lead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
   });
@@ -69,24 +96,30 @@ export async function selectLeadRoute(db, runId, leadId) {
     filters: [eq('lead_id', leadId), eq('is_current', true)],
     ordering: [order('trust_score', 'desc')],
   });
+  const companyCandidates = await db.select('v2_company_candidates', {
+    filters: [eq('lead_id', leadId), eq('is_current', true)],
+    ordering: [order('confidence', 'desc')],
+  });
 
-  const trustedPublishedCandidates = sortCandidates(candidates.filter(isTrustedPublished));
+  const autoSendPolicy = config.auto_send_policy === 'threshold' ? 'threshold' : 'any_published';
+  const publishedCandidates = sortCandidates(candidates.filter(isPublishedContact));
   const operatorPreferredCandidate = lead.operator_vouched && lead.contact_email
     ? candidates.find((candidate) => normalizeEmail(candidate.email_address) === normalizeEmail(lead.contact_email))
     : null;
   const approvedCandidates = sortCandidates(
-    candidates.filter((candidate) => Number(candidate.trust_score || 0) >= 25 && !candidate.is_research_only && isSendApproved(candidate)),
+    candidates.filter((candidate) => !candidate.is_research_only && isSendApproved(candidate)),
   );
 
   const approvedPrimary = operatorPreferredCandidate
     || approvedCandidates.find((candidate) => !isGenericInbox(candidate.local_part))
     || approvedCandidates[0]
     || null;
-  const approvedFallback = approvedCandidates.find((candidate) => candidate.id !== approvedPrimary?.id && Number(candidate.trust_score || 0) >= 20) || null;
-  const discoveredPrimary = operatorPreferredCandidate || approvedPrimary || pickPreferredPublished(trustedPublishedCandidates);
+  const approvedFallback = approvedCandidates.find((candidate) => candidate.id !== approvedPrimary?.id) || null;
+  const discoveredPrimary = operatorPreferredCandidate || approvedPrimary || pickPreferredPublished(publishedCandidates);
   const discoveredFallback = approvedFallback
-    || trustedPublishedCandidates.find((candidate) => candidate.id !== discoveredPrimary?.id)
+    || publishedCandidates.find((candidate) => candidate.id !== discoveredPrimary?.id)
     || null;
+  const resolverConflict = detectResolverConflict(companyCandidates, discoveredPrimary);
 
   for (const candidate of candidates) {
     const isPrimary = candidate.id === discoveredPrimary?.id;
@@ -119,13 +152,15 @@ export async function selectLeadRoute(db, runId, leadId) {
   }
 
   const qualityTier = computeQualityTier(lead, approvedPrimary || discoveredPrimary);
-  const nextStatus = approvedPrimary?.is_auto_sendable
-    ? 'ready'
-    : discoveredPrimary?.email_address
-      ? 'review'
-      : lead.status === 'email_required'
-        ? 'email_required'
-        : 'review';
+  const nextStatus = resolverConflict.conflict
+    ? 'review'
+    : approvedPrimary?.is_auto_sendable
+      ? 'ready'
+      : discoveredPrimary?.email_address
+        ? autoSendPolicy === 'any_published'
+          ? 'ready'
+          : 'review'
+        : 'email_required';
   const projectedLead = {
     contact_name: discoveredPrimary?.person_name || lead.applicant_name || lead.owner_name || '',
     contact_role: discoveredPrimary?.person_role || (lead.applicant_name ? 'gc_applicant' : lead.owner_name ? 'owner' : 'unknown'),
@@ -150,6 +185,8 @@ export async function selectLeadRoute(db, runId, leadId) {
       fallback: discoveredFallback?.email_address || null,
       send_route_primary: approvedPrimary?.email_address || null,
       primary_trust: Number(discoveredPrimary?.trust_score || 0),
+      resolver_conflict: resolverConflict.conflict,
+      resolver_conflict_reason: resolverConflict.reason,
     },
   });
 

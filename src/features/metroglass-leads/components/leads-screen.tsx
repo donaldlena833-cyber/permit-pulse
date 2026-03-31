@@ -36,7 +36,7 @@ function routeSummary(lead: LeadRow) {
     return "Needs manual email research"
   }
   if (lead.status === "review") {
-    return "System found evidence but no approved route"
+    return "Resolver or delivery exception"
   }
   return "No verified email selected"
 }
@@ -60,9 +60,9 @@ function emailTone(lead: LeadRow) {
 }
 
 function nextStepLabel(status: string) {
-  if (status === "new") return "Enrich"
+  if (status === "new") return "Automate"
   if (status === "email_required") return "Research email"
-  if (status === "review") return "Pick route"
+  if (status === "review") return "Inspect exception"
   if (status === "ready") return "Send or inspect"
   return "Open"
 }
@@ -230,7 +230,7 @@ function LeadRowCard({
           type="button"
         >
           {lead.status === "new" ? <Sparkles className="h-4 w-4" /> : <ArrowUpRight className="h-4 w-4" />}
-          {lead.status === "new" ? (actionLeadId === lead.id ? "Wait" : "Enrich") : "Inspect"}
+          {lead.status === "new" ? (actionLeadId === lead.id ? "Wait" : "Automate") : "Inspect"}
         </button>
       </div>
 
@@ -340,7 +340,7 @@ function LeadRowCard({
                     size="sm"
                     type="button"
                   >
-                    {actionLeadId === lead.id ? "Working" : "Enrich"}
+                    {actionLeadId === lead.id ? "Working" : "Automate"}
                   </Button>
                 ) : null}
                 <Button
@@ -394,10 +394,10 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
           <div className="min-w-0">
             <div className="text-[11px] uppercase tracking-[0.24em] text-[#D4691A]">Lead queue</div>
             <h1 className="mt-2 font-['Instrument_Serif'] text-[1.85rem] leading-none text-[#1A1A1A] sm:text-[2.4rem]">
-              Review with control
+              Work the automation queue
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[#5F564C]">
-              Keep the queue fast to scan. Tap to inspect, swipe on mobile for quick actions, and only batch enrich the leads that actually need another pass.
+              Keep the queue fast to scan. Tap to inspect, swipe on mobile for quick actions, and batch automate the leads that still need the full machine pass.
             </p>
           </div>
 
@@ -451,11 +451,11 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
               </Button>
               <Button
                 className="rounded-full bg-[#D4691A] px-4 text-white hover:bg-[#BA5A12]"
-                disabled={selectedCount === 0 || actionLeadId === "enrich-batch"}
+                disabled={selectedCount === 0 || actionLeadId === "automate-batch"}
                 onClick={() => onEnrichMany(visibleSelectedLeadIds)}
                 type="button"
               >
-                {actionLeadId === "enrich-batch" ? "Working" : `Enrich selected${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+                {actionLeadId === "automate-batch" ? "Working" : `Automate selected${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
               </Button>
             </div>
           </div>
@@ -483,7 +483,7 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
             <div className="text-[11px] uppercase tracking-[0.2em] text-[#8B7D6B]">Queue clear</div>
             <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">Nothing in {formatLeadStatus(filter)} right now</div>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[#5F564C]">
-              Try another filter, run a fresh scan, or move blocked leads into Email Required from the drawer so they do not get buried in general review.
+              Try another filter, run a fresh scan, or move no-email leads into Email Required so the real exceptions do not get buried.
             </p>
           </div>
         ) : null}

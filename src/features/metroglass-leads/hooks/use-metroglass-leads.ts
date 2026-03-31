@@ -172,7 +172,7 @@ export function useMetroglassLeads() {
       if (result.run_id) {
         setRunId(result.run_id)
       }
-      toast.success("Scan started")
+      toast.success("Automation run started")
       await refreshToday()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Scan failed")
@@ -198,12 +198,13 @@ export function useMetroglassLeads() {
     scan,
     sendAllReady: () => runAction(null, async () => { await sendAllReady() }, "Ready leads sent"),
     enrichLead: (leadId: string) => runAction(leadId, async () => { await enrichLeadNow(leadId) }, "Lead enrichment started"),
-    enrichMany: (leadIds: string[]) => runBatchAction("enrich-batch", async () => {
+    enrichMany: (leadIds: string[]) => runBatchAction("automate-batch", async () => {
       const result = await enrichLeadBatch(leadIds)
-      if (!result.started || result.accepted === 0) {
-        throw new Error("Choose at least one lead to enrich")
+      if (!result.started || result.accepted === 0 || !result.run_id) {
+        throw new Error("Choose at least one lead to automate")
       }
-      return `Started enrichment for ${result.accepted} lead${result.accepted === 1 ? "" : "s"}`
+      setRunId(result.run_id)
+      return `Started automation for ${result.accepted} lead${result.accepted === 1 ? "" : "s"}`
     }),
     sendLead: (leadId: string) => runAction(leadId, async () => { await sendLeadNow(leadId) }, "Email sent"),
     archiveLead: (leadId: string) => runAction(leadId, async () => { await archiveLead(leadId) }, "Lead archived"),

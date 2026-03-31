@@ -30,5 +30,6 @@ export function formatScore(value: number | null | undefined): string {
 export function formatLeadStatus(value: string | null | undefined): string {
   if (!value) return "Unknown"
   if (value === "email_required") return "Email Required"
+  if (value === "review") return "Exceptions"
   return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }

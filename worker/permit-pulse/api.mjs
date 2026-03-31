@@ -1,7 +1,7 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
 import { createSupabaseClient, eq, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
-import { getLatestRuns, getRunById, enrichLead, startAutomationCycle } from './pipeline/engine.mjs';
+import { getLatestRuns, getRunById, enrichLead, startAutomationCycle, startLeadBatchAutomation } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
 import { sendLead, sendReadyLeads } from './pipeline/send.mjs';
 import { logPhoneFollowUp, sendFollowUp, skipFollowUp } from './pipeline/follow-up.mjs';
@@ -116,27 +116,6 @@ function presentRun(run) {
   };
 }
 
-async function enrichLeadBatch(env, leadIds = [], actorId = null) {
-  const uniqueLeadIds = [...new Set(
-    (Array.isArray(leadIds) ? leadIds : [])
-      .map((leadId) => String(leadId || '').trim())
-      .filter(Boolean),
-  )].slice(0, 25);
-
-  for (const leadId of uniqueLeadIds) {
-    try {
-      await enrichLead(env, leadId, {
-        triggerType: 'retry',
-        triggeredBy: actorId,
-      });
-    } catch (error) {
-      console.error(`Batch enrich failed for lead ${leadId}`, error);
-    }
-  }
-
-  return uniqueLeadIds.length;
-}
-
 async function getTodayPayload(env) {
   const db = createSupabaseClient(env);
   const config = await getAppConfig(db);
@@ -185,7 +164,7 @@ async function getTodayPayload(env) {
     filters: [eq('outcome', 'sent'), `sent_at=gte.${encodeURIComponent(new Date(new Date().setHours(0, 0, 0, 0)).toISOString())}`],
   });
 
-  const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 5) : Number(config.daily_send_cap || 20);
+  const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 80) : Number(config.daily_send_cap || 80);
 
   return {
     greeting: `Good ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(new Date()) < 12 ? 'morning' : 'afternoon'}, Donald`,
@@ -399,21 +378,27 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     if (url.pathname === '/api/leads/enrich-batch' && request.method === 'POST') {
       const body = await parseBody(request);
       const leadIds = Array.isArray(body.lead_ids) ? body.lead_ids : [];
-      const acceptedCount = [...new Set(leadIds.map((leadId) => String(leadId || '').trim()).filter(Boolean))].slice(0, 25).length;
+      const acceptedLeadIds = [...new Set(leadIds.map((leadId) => String(leadId || '').trim()).filter(Boolean))].slice(0, 50);
+      const acceptedCount = acceptedLeadIds.length;
 
       if (acceptedCount === 0) {
-        return json({ started: false, accepted: 0 });
+        return json({ started: false, accepted: 0, run_id: null });
       }
 
-      const task = enrichLeadBatch(env, leadIds, user.email || null);
+      const { run, task } = await startLeadBatchAutomation(env, acceptedLeadIds, {
+        triggerType: 'operator',
+        triggeredBy: user.email || null,
+      });
 
       if (ctx?.waitUntil) {
-        ctx.waitUntil(task);
-        return json({ started: true, accepted: acceptedCount });
+        ctx.waitUntil(task.catch((error) => {
+          console.error('Batch automation failed', error);
+        }));
+        return json({ started: true, accepted: acceptedCount, run_id: run.id });
       }
 
       await task;
-      return json({ started: true, accepted: acceptedCount });
+      return json({ started: true, accepted: acceptedCount, run_id: run.id });
     }
 
     if (url.pathname === '/api/leads' && request.method === 'GET') {

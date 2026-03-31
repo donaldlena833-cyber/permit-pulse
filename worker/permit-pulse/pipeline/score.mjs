@@ -1,13 +1,42 @@
+import { getAppConfig } from '../lib/config.mjs';
 import { checkDomainHealth } from '../lib/dns.mjs';
-import { isFreeMailbox, isGenericInbox, normalizeEmail } from '../lib/email.mjs';
+import { isBlockedEmail, isFreeMailbox, isGenericInbox, normalizeEmail } from '../lib/email.mjs';
 import { eq } from '../lib/supabase.mjs';
 import { daysAgo, getBaseDomain } from '../lib/utils.mjs';
 
-export function scoreEmail(candidate, domainHealth, domainReputation) {
+function autoSendPolicy(config = {}) {
+  return config.auto_send_policy === 'threshold' ? 'threshold' : 'any_published';
+}
+
+function autoSendThreshold(config = {}) {
+  return Number(config.auto_send_trust_threshold || 50);
+}
+
+function manualSendThreshold(config = {}) {
+  return Number(config.manual_send_trust_threshold || 25);
+}
+
+function isPublishedCandidate(candidate) {
+  return candidate?.provenance_source !== 'pattern_guess' && !isBlockedEmail(candidate?.email_address || '');
+}
+
+export function scoreEmail(candidate, domainHealth, domainReputation, config = {}) {
   let trust = 0;
   const reasons = [];
   const sourceDomain = getBaseDomain(candidate.provenance_url || '');
   const matchesSourceDomain = Boolean(sourceDomain) && sourceDomain === candidate.domain;
+  const policy = autoSendPolicy(config);
+  const publishedCandidate = isPublishedCandidate(candidate);
+
+  if (!publishedCandidate) {
+    return {
+      trust: 0,
+      reasons: ['Blocked or placeholder email'],
+      auto_sendable: false,
+      manual_sendable: false,
+      research_only: true,
+    };
+  }
 
   if (!domainHealth || domainHealth.health_score === 0) {
     return {
@@ -109,13 +138,16 @@ export function scoreEmail(candidate, domainHealth, domainReputation) {
   trust = Math.max(trust, 0);
   const isGuessed = candidate.provenance_source === 'pattern_guess';
   const isFree = isFreeMailbox(candidate.domain);
+  const thresholdAutoSendable = trust >= autoSendThreshold(config) && !isGuessed && !isFree;
+  const thresholdManualSendable = trust >= manualSendThreshold(config) && !isGuessed;
+  const canPromotePublished = policy === 'any_published' && publishedCandidate;
 
   return {
     trust,
     reasons,
-    auto_sendable: trust >= 50 && !isGuessed && !isFree,
-    manual_sendable: trust >= 25 && !isGuessed,
-    research_only: trust < 25 || isGuessed,
+    auto_sendable: canPromotePublished ? true : thresholdAutoSendable,
+    manual_sendable: canPromotePublished ? true : thresholdManualSendable,
+    research_only: canPromotePublished ? false : thresholdManualSendable === false || isGuessed,
   };
 }
 
@@ -125,10 +157,11 @@ async function loadDomainReputation(db, domain) {
   });
 }
 
-export async function scoreLeadEmails(env, db, runId, leadId) {
+export async function scoreLeadEmails(env, db, runId, leadId, config = null) {
   const lead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
   });
+  const appConfig = config || await getAppConfig(db);
   const candidates = await db.select('v2_email_candidates', {
     filters: [eq('lead_id', leadId), eq('is_current', true)],
     ordering: ['order=discovered_at.desc'],
@@ -141,7 +174,7 @@ export async function scoreLeadEmails(env, db, runId, leadId) {
       checkDomainHealth(env, candidate.domain),
       loadDomainReputation(db, candidate.domain),
     ]);
-    const score = scoreEmail(candidate, domainHealth, domainReputation);
+    const score = scoreEmail(candidate, domainHealth, domainReputation, appConfig);
     const isOperatorApprovedRoute = Boolean(lead?.operator_vouched)
       && normalizeEmail(candidate.email_address) === normalizeEmail(lead?.contact_email || '');
 
@@ -150,6 +183,9 @@ export async function scoreLeadEmails(env, db, runId, leadId) {
       score.reasons = ['+45 operator approved route', ...score.reasons.filter((reason) => reason !== '+45 operator approved route')];
       score.manual_sendable = true;
       score.research_only = false;
+      if (autoSendPolicy(appConfig) === 'any_published' && isPublishedCandidate(candidate)) {
+        score.auto_sendable = true;
+      }
     }
 
     await db.update('v2_email_candidates', [`id=eq.${candidate.id}`], {

@@ -92,7 +92,7 @@ export function TodayScreen({
   const readyCount = today?.counts.ready ?? 0
   const newLeadIds = (today?.new_leads ?? []).map((lead) => lead.id)
   const bulkSendDisabled = readyCount === 0 || actionLeadId === "scan"
-  const bulkEnrichDisabled = newLeadIds.length === 0 || actionLeadId === "scan" || actionLeadId === "enrich-batch"
+  const bulkEnrichDisabled = newLeadIds.length === 0 || actionLeadId === "scan" || actionLeadId === "automate-batch"
   const sendNeedsSoftTone = readyCount === 0 || Boolean(today?.warm_up.enabled)
   const bulkSendLabel = readyCount === 0
     ? "No ready leads yet"
@@ -107,7 +107,7 @@ export function TodayScreen({
     { label: "Leads created", value: runCounters?.leads_created ?? 0 },
     { label: "Leads enriched", value: runCounters?.leads_enriched ?? 0 },
     { label: "Ready", value: runCounters?.leads_ready ?? 0 },
-    { label: "Review", value: runCounters?.leads_review ?? 0 },
+    { label: "Needs operator", value: runCounters?.leads_review ?? 0 },
     { label: "Drafts", value: runCounters?.drafts_generated ?? 0 },
     { label: "Send attempts", value: runCounters?.sends_attempted ?? 0 },
     { label: "Sent", value: runCounters?.sends_succeeded ?? 0 },
@@ -124,7 +124,7 @@ export function TodayScreen({
               {today?.greeting ?? "Good afternoon, Donald"}
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5F564C]">
-              {today?.daily_cap.sent ?? 0} / {today?.daily_cap.cap ?? 20} sent today. This board is tuned for operator decisions: what to enrich, what to research, what to send, and what the last scan actually did.
+              {today?.daily_cap.sent ?? 0} / {today?.daily_cap.cap ?? 20} sent today. Scan already runs ingest, enrichment, routing, drafting, and sending. The manual work left here should mostly be email research and true exceptions.
             </p>
             <Progress className="mt-4 h-2.5 bg-[#F1E6D9]" value={progress} />
 
@@ -134,7 +134,7 @@ export function TodayScreen({
                 <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.new ?? 0}</div>
               </div>
               <div className="border-l-2 border-[#9A6A2C] bg-white/75 px-4 py-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Review</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Exceptions</div>
                 <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.review ?? 0}</div>
               </div>
               <div className="border-l-2 border-[#7F5F3F] bg-white/75 px-4 py-3">
@@ -165,7 +165,7 @@ export function TodayScreen({
                   <p className="mt-1 text-sm leading-6 text-[#5F564C]">
                     {run
                       ? `Updated ${formatRelativeTime(run.completed_at || run.started_at)}`
-                      : "Run a scan to fill the queue and build the funnel report below."}
+                      : "Run a scan to ingest, enrich, route, draft, and send automatically."}
                   </p>
                 </div>
                 {run?.status === "running" ? (
@@ -187,8 +187,8 @@ export function TodayScreen({
                 type="button"
                 variant="outline"
               >
-                {actionLeadId === "enrich-batch" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {newLeadIds.length > 0 ? `Enrich new (${newLeadIds.length})` : "No new leads to enrich"}
+                {actionLeadId === "automate-batch" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {newLeadIds.length > 0 ? `Automate new (${newLeadIds.length})` : "No new leads to automate"}
               </Button>
               <Button
                 className={`h-11 flex-1 rounded-full ${
@@ -209,7 +209,7 @@ export function TodayScreen({
             <div className="text-sm leading-6 text-[#5F564C]">
               {today?.warm_up.enabled
                 ? `Warm-up mode is on with a cap of ${today.warm_up.cap}. Send controls stay secondary until the queue is genuinely ready.`
-                : "Use the drawer to verify weak routes, move dead-ends into Email Required, and text from your phone when email is not ready."}
+                : "Use the drawer for true exceptions, move no-email leads into Email Required, and text from your phone when email is not ready."}
             </div>
           </div>
         </div>
@@ -251,7 +251,7 @@ export function TodayScreen({
               Start with <span className="font-medium text-[#1A1A1A]">New</span> when the queue is dry and you need fresh enrichment work.
             </div>
             <div className="border-l-2 border-[#9A6A2C] pl-4">
-              Move to <span className="font-medium text-[#1A1A1A]">Review</span> when the system found options but still needs your judgment.
+              Use <span className="font-medium text-[#1A1A1A]">Exceptions</span> only when routing or delivery needs human judgment.
             </div>
             <div className="border-l-2 border-[#7F5F3F] pl-4">
               Use <span className="font-medium text-[#1A1A1A]">Email Required</span> when the website is real but enrichment still didn’t produce the usable address.
@@ -284,16 +284,16 @@ export function TodayScreen({
 
         <QueuePreview
           count={today?.counts.review ?? 0}
-          emptyState={queueNote(today?.counts.review ?? 0, "No plain review leads right now.", "Lead routes need a human decision")}
+          emptyState={queueNote(today?.counts.review ?? 0, "No exceptions right now.", "Resolver or delivery exceptions need attention")}
           highlight="bg-[#FFF7ED] text-[#9A6A2C]"
           leads={today?.review ?? []}
           onOpenLead={onOpenLead}
-          title="Review"
+          title="Exceptions"
         />
 
         <QueuePreview
           count={today?.counts.email_required ?? 0}
-          emptyState={queueNote(today?.counts.email_required ?? 0, "Nothing is parked in Email Required right now.", "Leads waiting on a verified address")}
+          emptyState={queueNote(today?.counts.email_required ?? 0, "Nothing is parked in Email Required right now.", "Leads waiting on manual email research")}
           highlight="bg-[#F5EDE3] text-[#6B5A48]"
           leads={today?.email_required ?? []}
           onOpenLead={onOpenLead}
