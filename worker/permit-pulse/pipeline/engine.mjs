@@ -11,6 +11,22 @@ import { selectLeadRoute } from './route.mjs';
 import { scoreLeadEmails } from './score.mjs';
 import { sendReadyLeads } from './send.mjs';
 
+function emptyCounters() {
+  return {
+    permits_found: 0,
+    permits_skipped_low_relevance: 0,
+    permits_deduplicated: 0,
+    leads_created: 0,
+    leads_enriched: 0,
+    leads_ready: 0,
+    leads_review: 0,
+    drafts_generated: 0,
+    sends_attempted: 0,
+    sends_succeeded: 0,
+    sends_failed: 0,
+  };
+}
+
 async function processLeadStages(env, db, runId, leadId, counters) {
   await heartbeatRun(db, runId);
   await updateRunStage(db, runId, 'resolve', counters);
@@ -58,6 +74,14 @@ async function processLeadStages(env, db, runId, leadId, counters) {
   }
 }
 
+function normalizeLeadIds(values, max = 50) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return [...new Set(values.filter((value) => typeof value === 'string' && value.trim()))].slice(0, max);
+}
+
 async function getQueuedLeadIds(db, excludedLeadIds = [], limit = 10) {
   const queued = await db.select('v2_leads', {
     columns: 'id',
@@ -72,19 +96,7 @@ async function getQueuedLeadIds(db, excludedLeadIds = [], limit = 10) {
 }
 
 async function executeAutomationRun(env, db, run, config) {
-  const counters = {
-    permits_found: 0,
-    permits_skipped_low_relevance: 0,
-    permits_deduplicated: 0,
-    leads_created: 0,
-    leads_enriched: 0,
-    leads_ready: 0,
-    leads_review: 0,
-    drafts_generated: 0,
-    sends_attempted: 0,
-    sends_succeeded: 0,
-    sends_failed: 0,
-  };
+  const counters = emptyCounters();
 
   const ingestResult = await withJob(db, null, run.id, 'ingest', 'nyc_dob', async () => (
     runIngestStage(env, db, run.id, config)
@@ -169,19 +181,7 @@ export async function enrichLead(env, leadId, options = {}) {
     config.active_sources,
   );
 
-  const counters = {
-    permits_found: 0,
-    permits_skipped_low_relevance: 0,
-    permits_deduplicated: 0,
-    leads_created: 0,
-    leads_enriched: 0,
-    leads_ready: 0,
-    leads_review: 0,
-    drafts_generated: 0,
-    sends_attempted: 0,
-    sends_succeeded: 0,
-    sends_failed: 0,
-  };
+  const counters = emptyCounters();
 
   try {
     await processLeadStages(env, db, run.id, leadId, counters);
@@ -196,6 +196,65 @@ export async function enrichLead(env, leadId, options = {}) {
     await failRun(db, run.id, error);
     throw error;
   }
+}
+
+async function executeLeadBatchAutomation(env, db, run, config, leadIds = []) {
+  const counters = emptyCounters();
+  let targetLeadIds = normalizeLeadIds(leadIds, 50);
+
+  if (targetLeadIds.length === 0) {
+    targetLeadIds = await getQueuedLeadIds(db, [], 50);
+  }
+
+  for (const leadId of targetLeadIds) {
+    await processLeadStages(env, db, run.id, leadId, counters);
+  }
+
+  await heartbeatRun(db, run.id);
+  await updateRunStage(db, run.id, 'send', counters);
+  const sendResult = await withJob(db, null, run.id, 'send', 'gmail', async () => (
+    sendReadyLeads(env, db, run.id, config, { leadIds: targetLeadIds })
+  ));
+
+  counters.sends_attempted = sendResult.attempted;
+  counters.sends_succeeded = sendResult.succeeded;
+  counters.sends_failed = sendResult.failed;
+
+  await completeRun(db, run.id, counters);
+
+  return {
+    run_id: run.id,
+    accepted: targetLeadIds.length,
+    status: 'completed',
+    counts: counters,
+  };
+}
+
+export async function startLeadBatchAutomation(env, leadIds = [], options = {}) {
+  const db = createSupabaseClient(env);
+  const config = await getAppConfig(db);
+  let normalizedLeadIds = normalizeLeadIds(leadIds, 50);
+  if (normalizedLeadIds.length === 0) {
+    normalizedLeadIds = await getQueuedLeadIds(db, [], 50);
+  }
+  const run = await createRun(
+    db,
+    options.triggerType || 'operator',
+    options.triggeredBy || null,
+    config,
+    normalizedLeadIds.length > 0 ? { mode: 'selected_leads', lead_ids: normalizedLeadIds } : { mode: 'new_leads' },
+  );
+
+  const task = executeLeadBatchAutomation(env, db, run, config, normalizedLeadIds).catch(async (error) => {
+    await failRun(db, run.id, error);
+    throw error;
+  });
+
+  return {
+    run,
+    accepted: normalizedLeadIds.length,
+    task,
+  };
 }
 
 export async function getRunById(env, runId) {

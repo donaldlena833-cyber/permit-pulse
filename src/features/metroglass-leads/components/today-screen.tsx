@@ -132,7 +132,7 @@ export function TodayScreen({
                   onClick={() => onEnrich(lead.id)}
                   type="button"
                 >
-                  {actionLeadId === lead.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Enrich"}
+                  {actionLeadId === lead.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Automate"}
                 </Button>
                 <Button
                   className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]"

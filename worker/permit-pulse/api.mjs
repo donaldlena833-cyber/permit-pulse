@@ -1,7 +1,7 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
 import { createSupabaseClient, eq, ilike, inList, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
-import { getLatestRuns, getRunById, enrichLead, startAutomationCycle } from './pipeline/engine.mjs';
+import { getLatestRuns, getRunById, enrichLead, startAutomationCycle, startLeadBatchAutomation } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
 import { sendLead, sendReadyLeads } from './pipeline/send.mjs';
 import { logPhoneFollowUp, sendFollowUp, skipFollowUp } from './pipeline/follow-up.mjs';
@@ -74,6 +74,13 @@ function tierOrder(tier) {
   if (tier === 'hot') return 0;
   if (tier === 'warm') return 1;
   return 2;
+}
+
+function parseLeadIds(body) {
+  const values = body?.lead_ids || body?.leadIds || body?.ids || [];
+  return Array.isArray(values)
+    ? [...new Set(values.filter((value) => typeof value === 'string' && value.trim()))].slice(0, 50)
+    : [];
 }
 
 function isPublishedContact(candidate) {
@@ -391,6 +398,35 @@ export async function handlePermitPulseRequest(request, env, ctx) {
         console.error('Automation run failed', error);
         throw error;
       }));
+    }
+
+    if ((url.pathname === '/api/leads/enrich-batch' || url.pathname === '/api/leads/automate-batch') && request.method === 'POST') {
+      const body = await parseBody(request);
+      const { run, accepted, task } = await startLeadBatchAutomation(env, parseLeadIds(body), {
+        triggerType: 'operator',
+        triggeredBy: user.email || null,
+      });
+
+      if (ctx?.waitUntil) {
+        ctx.waitUntil(task.catch((error) => {
+          console.error('Lead batch automation failed', error);
+        }));
+        return json({
+          started: true,
+          accepted,
+          run_id: run.id,
+        });
+      }
+
+      const result = await task.catch((error) => {
+        console.error('Lead batch automation failed', error);
+        throw error;
+      });
+      return json({
+        started: true,
+        accepted: result.accepted,
+        run_id: run.id,
+      });
     }
 
     if (url.pathname === '/api/leads/send-ready' && request.method === 'POST') {

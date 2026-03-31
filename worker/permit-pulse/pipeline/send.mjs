@@ -1,6 +1,6 @@
 import { sendAutomationEmail } from '../lib/gmail.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
-import { eq, order } from '../lib/supabase.mjs';
+import { eq, inList, order } from '../lib/supabase.mjs';
 import { inferEmailPattern, nowIso } from '../lib/utils.mjs';
 import { scheduleFollowUps } from './follow-up.mjs';
 import { generateLeadDraft } from './draft.mjs';
@@ -114,7 +114,7 @@ export async function sendLead(env, db, leadId, options = {}) {
   };
 }
 
-export async function sendReadyLeads(env, db, runId, config) {
+export async function sendReadyLeads(env, db, runId, config, options = {}) {
   const sentToday = await countSentToday(db);
   const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 5) : Number(config.daily_send_cap || 20);
   const remaining = Math.max(cap - sentToday, 0);
@@ -129,7 +129,10 @@ export async function sendReadyLeads(env, db, runId, config) {
   }
 
   const leads = await db.select('v2_leads', {
-    filters: [eq('status', 'ready')],
+    filters: [
+      eq('status', 'ready'),
+      ...(Array.isArray(options.leadIds) && options.leadIds.length > 0 ? [inList('id', options.leadIds)] : []),
+    ],
     ordering: [order('updated_at', 'desc')],
     limit: Math.max(remaining * 4, 20),
   });

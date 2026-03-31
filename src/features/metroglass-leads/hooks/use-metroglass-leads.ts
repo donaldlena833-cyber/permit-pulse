@@ -182,7 +182,7 @@ export function useMetroglassLeads() {
   const actions = useMemo(() => ({
     scan,
     sendAllReady: () => runAction(null, async () => { await sendAllReady() }, "Ready leads sent"),
-    enrichLead: (leadId: string) => runAction(leadId, async () => { await enrichLeadNow(leadId) }, "Lead enrichment started"),
+    enrichLead: (leadId: string) => runAction(leadId, async () => { await enrichLeadNow(leadId) }, "Lead automation started"),
     sendLead: (leadId: string) => runAction(leadId, async () => { await sendLeadNow(leadId) }, "Email sent"),
     archiveLead: (leadId: string) => runAction(leadId, async () => { await archiveLead(leadId) }, "Lead archived"),
     emailRequired: (leadId: string) => runAction(leadId, async () => { await markLeadEmailRequired(leadId) }, "Moved to Email Required"),

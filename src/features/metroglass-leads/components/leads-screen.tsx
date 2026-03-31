@@ -84,7 +84,7 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
                   onClick={() => onEnrich(lead.id)}
                   type="button"
                 >
-                  {actionLeadId === lead.id ? "Working" : "Enrich"}
+                  {actionLeadId === lead.id ? "Working" : "Automate"}
                 </Button>
                 <Button
                   className="h-9 rounded-[8px] border border-[#D6C6B6] bg-white px-3 text-[#5F564C] hover:bg-[#F7F0E8]"
