@@ -1,9 +1,14 @@
 import { checkDomainHealth } from '../lib/dns.mjs';
 import { isDirectoryEmailDomain, isFreeMailbox, isGenericInbox, normalizeEmail } from '../lib/email.mjs';
+import { getAppConfig } from '../lib/config.mjs';
 import { eq } from '../lib/supabase.mjs';
 import { daysAgo, getBaseDomain } from '../lib/utils.mjs';
 
-export function scoreEmail(candidate, domainHealth, domainReputation, lead = null) {
+function isPublishedCandidate(candidate) {
+  return candidate?.provenance_source !== 'pattern_guess';
+}
+
+export function scoreEmail(candidate, domainHealth, domainReputation, lead = null, config = {}) {
   let trust = 0;
   const reasons = [];
   const candidateDomain = getBaseDomain(candidate.domain || '');
@@ -13,6 +18,9 @@ export function scoreEmail(candidate, domainHealth, domainReputation, lead = nul
   const matchesChosenCompanyDomain = Boolean(officialDomain) && officialDomain === candidateDomain;
   const isDirectoryRecipient = isDirectoryEmailDomain(candidateDomain);
   const isDirectorySource = Boolean(sourceDomain) && isDirectoryEmailDomain(sourceDomain);
+  const autoSendThreshold = Math.max(0, Number(config.auto_send_trust_threshold ?? 50));
+  const manualSendThreshold = Math.max(0, Number(config.manual_send_trust_threshold ?? 25));
+  const autoSendPolicy = config.auto_send_policy === 'threshold' ? 'threshold' : 'any_published';
 
   if (!domainHealth || domainHealth.health_score === 0) {
     return {
@@ -134,13 +142,24 @@ export function scoreEmail(candidate, domainHealth, domainReputation, lead = nul
   const isGuessed = candidate.provenance_source === 'pattern_guess';
   const isFree = isFreeMailbox(candidate.domain);
   const canAutoSendByDomain = !officialDomain || matchesChosenCompanyDomain;
+  const isPublished = isPublishedCandidate(candidate);
+  const canAutoSendPublished = autoSendPolicy === 'any_published'
+    && isPublished
+    && candidate.provenance_source !== 'manual'
+    && !isGuessed
+    && !isFree
+    && !isDirectoryRecipient
+    && canAutoSendByDomain
+    && trust >= manualSendThreshold;
+  const autoSendableByThreshold = trust >= autoSendThreshold && !isGuessed && !isFree && canAutoSendByDomain;
+  const manualSendable = trust >= manualSendThreshold && !isGuessed && !isDirectoryRecipient;
 
   return {
     trust,
     reasons,
-    auto_sendable: trust >= 50 && !isGuessed && !isFree && canAutoSendByDomain,
-    manual_sendable: trust >= 25 && !isGuessed && !isDirectoryRecipient,
-    research_only: trust < 25 || isGuessed || isDirectoryRecipient,
+    auto_sendable: autoSendableByThreshold || canAutoSendPublished,
+    manual_sendable: manualSendable,
+    research_only: trust < manualSendThreshold || isGuessed || isDirectoryRecipient,
   };
 }
 
@@ -150,10 +169,11 @@ async function loadDomainReputation(db, domain) {
   });
 }
 
-export async function scoreLeadEmails(env, db, runId, leadId) {
+export async function scoreLeadEmails(env, db, runId, leadId, config = null) {
   const lead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
   });
+  const resolvedConfig = config || await getAppConfig(db);
   const candidates = await db.select('v2_email_candidates', {
     filters: [eq('lead_id', leadId), eq('is_current', true)],
     ordering: ['order=discovered_at.desc'],
@@ -166,7 +186,7 @@ export async function scoreLeadEmails(env, db, runId, leadId) {
       checkDomainHealth(env, candidate.domain),
       loadDomainReputation(db, candidate.domain),
     ]);
-    const score = scoreEmail(candidate, domainHealth, domainReputation, lead);
+    const score = scoreEmail(candidate, domainHealth, domainReputation, lead, resolvedConfig);
     const isOperatorApprovedRoute = Boolean(lead?.operator_vouched)
       && normalizeEmail(candidate.email_address) === normalizeEmail(lead?.contact_email || '');
 

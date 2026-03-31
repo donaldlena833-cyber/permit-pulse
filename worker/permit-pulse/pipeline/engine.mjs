@@ -27,7 +27,7 @@ function emptyCounters() {
   };
 }
 
-async function processLeadStages(env, db, runId, leadId, counters) {
+async function processLeadStages(env, db, runId, leadId, counters, config) {
   await heartbeatRun(db, runId);
   await updateRunStage(db, runId, 'resolve', counters);
   await withJob(db, leadId, runId, 'resolve_company', 'resolver', async () => (
@@ -43,7 +43,7 @@ async function processLeadStages(env, db, runId, leadId, counters) {
   await heartbeatRun(db, runId);
   await updateRunStage(db, runId, 'score', counters);
   await withJob(db, leadId, runId, 'score_emails', 'dns', async () => (
-    scoreLeadEmails(env, db, runId, leadId)
+    scoreLeadEmails(env, db, runId, leadId, config)
   ));
 
   await heartbeatRun(db, runId);
@@ -82,11 +82,11 @@ function normalizeLeadIds(values, max = 50) {
   return [...new Set(values.filter((value) => typeof value === 'string' && value.trim()))].slice(0, max);
 }
 
-async function getQueuedLeadIds(db, excludedLeadIds = [], limit = 10) {
+async function getQueuedLeadIds(db, excludedLeadIds = [], limit = 10, minRelevance = 0.15) {
   const queued = await db.select('v2_leads', {
     columns: 'id',
-    filters: [eq('status', 'new'), gte('relevance_score', 0.4)],
-    ordering: [order('created_at', 'asc')],
+    filters: [eq('status', 'new'), gte('relevance_score', minRelevance)],
+    ordering: [order('relevance_score', 'desc'), order('created_at', 'asc')],
     limit,
   });
 
@@ -108,11 +108,12 @@ async function executeAutomationRun(env, db, run, config) {
     db,
     ingestResult.leadsToEnrich,
     Math.max(ingestResult.leadsToEnrich.length, 10),
+    Number(config.min_relevance_threshold || 0.15),
   );
-  const leadIdsToProcess = [...ingestResult.leadsToEnrich, ...queuedLeadIds];
+  const leadIdsToProcess = [...new Set([...ingestResult.leadsToEnrich, ...queuedLeadIds])];
 
   for (const leadId of leadIdsToProcess) {
-    await processLeadStages(env, db, run.id, leadId, counters);
+    await processLeadStages(env, db, run.id, leadId, counters, config);
   }
 
   await heartbeatRun(db, run.id);
@@ -184,7 +185,7 @@ export async function enrichLead(env, leadId, options = {}) {
   const counters = emptyCounters();
 
   try {
-    await processLeadStages(env, db, run.id, leadId, counters);
+    await processLeadStages(env, db, run.id, leadId, counters, config);
     await completeRun(db, run.id, counters);
     return {
       run_id: run.id,
@@ -203,11 +204,11 @@ async function executeLeadBatchAutomation(env, db, run, config, leadIds = []) {
   let targetLeadIds = normalizeLeadIds(leadIds, 50);
 
   if (targetLeadIds.length === 0) {
-    targetLeadIds = await getQueuedLeadIds(db, [], 50);
+    targetLeadIds = await getQueuedLeadIds(db, [], 50, Number(config.min_relevance_threshold || 0.15));
   }
 
   for (const leadId of targetLeadIds) {
-    await processLeadStages(env, db, run.id, leadId, counters);
+    await processLeadStages(env, db, run.id, leadId, counters, config);
   }
 
   await heartbeatRun(db, run.id);
@@ -235,7 +236,7 @@ export async function startLeadBatchAutomation(env, leadIds = [], options = {}) 
   const config = await getAppConfig(db);
   let normalizedLeadIds = normalizeLeadIds(leadIds, 50);
   if (normalizedLeadIds.length === 0) {
-    normalizedLeadIds = await getQueuedLeadIds(db, [], 50);
+    normalizedLeadIds = await getQueuedLeadIds(db, [], 50, Number(config.min_relevance_threshold || 0.15));
   }
   const run = await createRun(
     db,

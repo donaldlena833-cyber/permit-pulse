@@ -308,9 +308,7 @@ export async function runIngestStage(env, db, runId, config) {
 
       if (result.created) {
         counters.leads_created += 1;
-        if ((result.relevance?.score || 0) >= 0.4) {
-          leadsToEnrich.push(result.leadId);
-        }
+        leadsToEnrich.push(result.leadId);
       }
     }
   }
