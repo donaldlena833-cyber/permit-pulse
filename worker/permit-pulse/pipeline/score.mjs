@@ -1,18 +1,33 @@
 import { checkDomainHealth } from '../lib/dns.mjs';
-import { isFreeMailbox, isGenericInbox, normalizeEmail } from '../lib/email.mjs';
+import { isDirectoryEmailDomain, isFreeMailbox, isGenericInbox, normalizeEmail } from '../lib/email.mjs';
 import { eq } from '../lib/supabase.mjs';
 import { daysAgo, getBaseDomain } from '../lib/utils.mjs';
 
-export function scoreEmail(candidate, domainHealth, domainReputation) {
+export function scoreEmail(candidate, domainHealth, domainReputation, lead = null) {
   let trust = 0;
   const reasons = [];
+  const candidateDomain = getBaseDomain(candidate.domain || '');
   const sourceDomain = getBaseDomain(candidate.provenance_url || '');
-  const matchesSourceDomain = Boolean(sourceDomain) && sourceDomain === candidate.domain;
+  const officialDomain = getBaseDomain(lead?.company_domain || lead?.company_website || '');
+  const matchesSourceDomain = Boolean(sourceDomain) && sourceDomain === candidateDomain;
+  const matchesChosenCompanyDomain = Boolean(officialDomain) && officialDomain === candidateDomain;
+  const isDirectoryRecipient = isDirectoryEmailDomain(candidateDomain);
+  const isDirectorySource = Boolean(sourceDomain) && isDirectoryEmailDomain(sourceDomain);
 
   if (!domainHealth || domainHealth.health_score === 0) {
     return {
       trust: 0,
       reasons: ['Domain has no MX records'],
+      auto_sendable: false,
+      manual_sendable: false,
+      research_only: true,
+    };
+  }
+
+  if (isDirectoryRecipient) {
+    return {
+      trust: 0,
+      reasons: ['Directory or marketplace recipient domain'],
       auto_sendable: false,
       manual_sendable: false,
       research_only: true,
@@ -58,6 +73,9 @@ export function scoreEmail(candidate, domainHealth, domainReputation) {
   if (candidate.company_token_in_domain) {
     trust += 10; reasons.push('+10 domain matches company');
   }
+  if (matchesChosenCompanyDomain) {
+    trust += 15; reasons.push('+15 email domain matches chosen company');
+  }
   if (candidate.person_name_match) {
     trust += 15; reasons.push('+15 person name matches permit');
   }
@@ -71,6 +89,12 @@ export function scoreEmail(candidate, domainHealth, domainReputation) {
 
   if (candidate.provenance_source === 'pattern_guess') {
     trust -= 30; reasons.push('-30 pattern guessed');
+  }
+  if (officialDomain && !matchesChosenCompanyDomain && candidate.provenance_source !== 'manual') {
+    trust -= 25; reasons.push('-25 email domain does not match chosen company');
+  }
+  if (isDirectorySource) {
+    trust -= 10; reasons.push('-10 discovered on directory source');
   }
   if (isFreeMailbox(candidate.domain)) {
     trust -= 25; reasons.push('-25 free mailbox');
@@ -109,13 +133,14 @@ export function scoreEmail(candidate, domainHealth, domainReputation) {
   trust = Math.max(trust, 0);
   const isGuessed = candidate.provenance_source === 'pattern_guess';
   const isFree = isFreeMailbox(candidate.domain);
+  const canAutoSendByDomain = !officialDomain || matchesChosenCompanyDomain;
 
   return {
     trust,
     reasons,
-    auto_sendable: trust >= 50 && !isGuessed && !isFree,
-    manual_sendable: trust >= 25 && !isGuessed,
-    research_only: trust < 25 || isGuessed,
+    auto_sendable: trust >= 50 && !isGuessed && !isFree && canAutoSendByDomain,
+    manual_sendable: trust >= 25 && !isGuessed && !isDirectoryRecipient,
+    research_only: trust < 25 || isGuessed || isDirectoryRecipient,
   };
 }
 
@@ -141,7 +166,7 @@ export async function scoreLeadEmails(env, db, runId, leadId) {
       checkDomainHealth(env, candidate.domain),
       loadDomainReputation(db, candidate.domain),
     ]);
-    const score = scoreEmail(candidate, domainHealth, domainReputation);
+    const score = scoreEmail(candidate, domainHealth, domainReputation, lead);
     const isOperatorApprovedRoute = Boolean(lead?.operator_vouched)
       && normalizeEmail(candidate.email_address) === normalizeEmail(lead?.contact_email || '');
 

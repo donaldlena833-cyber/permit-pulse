@@ -1,43 +1,18 @@
 import { appendLeadEvent } from '../lib/events.mjs';
+import { isDirectoryEmailDomain } from '../lib/email.mjs';
 import { eq, order } from '../lib/supabase.mjs';
 import { clamp, cleanCompanyName, getBaseDomain, normalizeText, normalizeWhitespace, uniq } from '../lib/utils.mjs';
 
-const DIRECTORY_DOMAIN_DENYLIST = [
-  'yelp.com',
-  'angi.com',
-  'angieslist.com',
-  'houzz.com',
-  'yellowpages.com',
-  'superpages.com',
-  'mapquest.com',
-  'manta.com',
-  'facebook.com',
-  'linkedin.com',
-  'instagram.com',
-  'bbb.org',
-  'dnb.com',
-  'buzzfile.com',
-  'bizapedia.com',
-  'buildzoom.com',
-  'bldup.com',
-  'opencorporates.com',
-  'chamberofcommerce.com',
-  'nextdoor.com',
-  'zoominfo.com',
-  'crunchbase.com',
-  'constructionjournal.com',
-  'thebluebook.com',
-  'alignable.com',
-  'contactout.com',
-  'rocketreach.co',
-  'rocketreach.io',
-  'lusha.com',
-  'seamless.ai',
-  'hunter.io',
-  'skrapp.io',
-  'salesintel.io',
-  'adapt.io',
-  'apollo.io',
+const ARCHITECT_FIRM_TOKENS = [
+  'architect',
+  'architects',
+  'architecture',
+  'design',
+  'designer',
+  'interior',
+  'interiors',
+  'studio',
+  'atelier',
 ];
 
 function tokenizeCompany(value) {
@@ -59,9 +34,13 @@ function buildLeadCompanyTokens(lead) {
   ]);
 }
 
-function isDirectoryDomain(domain = '') {
-  const normalized = normalizeText(domain);
-  return DIRECTORY_DOMAIN_DENYLIST.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
+function hasArchitectFirmSignal(...values) {
+  const searchable = normalizeText(values.join(' '));
+  return ARCHITECT_FIRM_TOKENS.some((token) => searchable.includes(token));
+}
+
+function leadPrefersArchitects(lead) {
+  return hasArchitectFirmSignal(lead?.applicant_name, lead?.owner_name);
 }
 
 function scoreResolverCandidate(lead, candidate) {
@@ -74,6 +53,7 @@ function scoreResolverCandidate(lead, candidate) {
   const totalMatches = countTokenMatches(companyTokens, searchable);
   let confidence = Number(candidate.confidence || 0);
   const reasons = Array.isArray(candidate.reasons) ? [...candidate.reasons] : [];
+  const architectFocusedLead = leadPrefersArchitects(lead);
 
   if (candidate.website) {
     confidence += 6;
@@ -95,9 +75,13 @@ function scoreResolverCandidate(lead, candidate) {
   if (candidate.source === 'permit_data' && !candidate.website && !domain) {
     confidence -= 10;
   }
-  if (isDirectoryDomain(domain)) {
+  if (isDirectoryEmailDomain(domain)) {
     confidence -= 60;
     reasons.push('Directory/social domain deprioritized');
+  }
+  if (architectFocusedLead && hasArchitectFirmSignal(candidate.company_name, candidate.website, candidate.domain)) {
+    confidence += 14;
+    reasons.push('Architect/design firm matches permit applicant');
   }
   if (domain && companyTokens.length > 0 && totalMatches === 0 && candidate.source !== 'permit_data') {
     confidence -= 25;
@@ -116,7 +100,7 @@ function scoreResolverCandidate(lead, candidate) {
 }
 
 async function searchBraveWebsite(env, lead) {
-  const query = `${lead.applicant_name || lead.owner_name || ''} ${lead.address || ''}`.trim();
+  const query = `${lead.applicant_name || lead.owner_name || ''} ${lead.address || ''} ${leadPrefersArchitects(lead) ? 'architect design' : ''}`.trim();
   if (!env.BRAVE_API_KEY || !query) {
     return null;
   }
@@ -148,7 +132,10 @@ async function searchBraveWebsite(env, lead) {
         if (domain && countTokenMatches(companyTokens, domain) > 0) {
           score += 10;
         }
-        if (isDirectoryDomain(domain)) {
+        if (leadPrefersArchitects(lead) && hasArchitectFirmSignal(item.title, item.description, item.url)) {
+          score += 12;
+        }
+        if (isDirectoryEmailDomain(domain)) {
           score -= 50;
         }
         return { item, score, domain };
@@ -194,10 +181,13 @@ async function searchGoogleMapsCandidate(env, lead) {
   const searchPayload = await searchResponse.json();
   const place = Array.isArray(searchPayload?.results)
     ? searchPayload.results
-      .map((entry) => ({
-        entry,
-        score: countTokenMatches(companyTokens, normalizeText(entry?.name || '')) * 14,
-      }))
+      .map((entry) => {
+        let score = countTokenMatches(companyTokens, normalizeText(entry?.name || '')) * 14;
+        if (leadPrefersArchitects(lead) && hasArchitectFirmSignal(entry?.name || '')) {
+          score += 12;
+        }
+        return { entry, score };
+      })
       .filter((entry) => entry.score > 0)
       .sort((left, right) => right.score - left.score)[0]?.entry
     : null;
@@ -231,23 +221,25 @@ async function searchGoogleMapsCandidate(env, lead) {
 function buildPermitCandidates(lead) {
   const candidates = [];
   if (lead.applicant_name) {
+    const applicantIsArchitectFirm = hasArchitectFirmSignal(lead.applicant_name);
     candidates.push({
       company_name: cleanCompanyName(lead.applicant_name),
       website: '',
       domain: '',
       source: 'permit_data',
-      confidence: 35,
-      reasons: ['Applicant name from permit'],
+      confidence: applicantIsArchitectFirm ? 48 : 35,
+      reasons: [applicantIsArchitectFirm ? 'Architect/design applicant from permit' : 'Applicant name from permit'],
     });
   }
   if (lead.owner_name && cleanCompanyName(lead.owner_name) !== cleanCompanyName(lead.applicant_name)) {
+    const ownerIsArchitectFirm = hasArchitectFirmSignal(lead.owner_name);
     candidates.push({
       company_name: cleanCompanyName(lead.owner_name),
       website: '',
       domain: '',
       source: 'permit_data',
-      confidence: 25,
-      reasons: ['Owner name from permit'],
+      confidence: ownerIsArchitectFirm ? 32 : 25,
+      reasons: [ownerIsArchitectFirm ? 'Architect/design owner from permit' : 'Owner name from permit'],
     });
   }
   return candidates;

@@ -69,12 +69,21 @@ export const GLASS_RELEVANCE = {
 const DIRECT_KEYWORDS = METROGLASS_PROFILE.directKeywords.map((keyword) => normalizeText(keyword));
 const INFERRED_KEYWORDS = METROGLASS_PROFILE.inferredKeywords.map((keyword) => normalizeText(keyword));
 const NEGATIVE_KEYWORDS = METROGLASS_PROFILE.negativeKeywords.map((keyword) => normalizeText(keyword));
+const ARCHITECT_SIGNAL_TERMS = ['architect', 'architects', 'architecture', 'design', 'designer', 'interior', 'interiors', 'studio', 'atelier'];
+const RESIDENTIAL_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|interior|apartment|condo|co-op|shower|partition|mirror|cabinet|plumbing/i;
 
 function countKeywordHits(text, keywords) {
   return keywords.filter((keyword) => text.includes(keyword));
 }
 
-export function scorePermitRelevance(workDescription) {
+function hasArchitectSignal(...values) {
+  const searchable = normalizeText(values.join(' '));
+  return ARCHITECT_SIGNAL_TERMS.some((token) => searchable.includes(token));
+}
+
+export function scorePermitRelevance(input) {
+  const permit = input && typeof input === 'object' ? input : null;
+  const workDescription = permit?.work_description ?? input;
   if (!workDescription) {
     return { score: 0, keyword: null, matchType: 'none' };
   }
@@ -122,6 +131,23 @@ export function scorePermitRelevance(workDescription) {
     best = inferredHits.length > 0 ? Math.min(best, 0.2) : 0;
     keyword = keyword || negativeHits[0];
     matchType = best > 0 ? 'mixed' : 'negative';
+  }
+
+  if (permit) {
+    const architectFocused = hasArchitectSignal(permit.applicant_name, permit.owner_name);
+    if (architectFocused && RESIDENTIAL_SCOPE_PATTERN.test(lower)) {
+      const boosted = best > 0 ? Math.min(best + 0.15, 0.95) : 0.35;
+      if (boosted > best) {
+        best = boosted;
+        keyword = keyword || 'architect';
+        if (matchType === 'none') {
+          matchType = 'inferred';
+        }
+      }
+    } else if (architectFocused && best >= 0.3) {
+      best = Math.min(best + 0.1, 0.9);
+      keyword = keyword || 'architect';
+    }
   }
 
   return {
@@ -172,7 +198,7 @@ async function recordDuplicatePermit(db, leadId, permit, relevance) {
 
 async function ingestPermit(db, runId, permit, minThreshold) {
   const permitKey = buildPermitKey(permit.source, permit.permit_number);
-  const relevance = scorePermitRelevance(permit.work_description);
+  const relevance = scorePermitRelevance(permit);
 
   if (relevance.score < minThreshold) {
     return { skipped: true, reason: 'low_relevance' };

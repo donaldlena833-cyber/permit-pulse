@@ -51,8 +51,13 @@ export async function sendLead(env, db, leadId, options = {}) {
     throw new Error('No email available');
   }
 
-  if (!options.force && !candidate?.is_auto_sendable && !candidate?.is_manual_sendable) {
-    throw new Error('No send approved email route');
+  if (!options.force) {
+    const isAllowed = options.requireAutoApproved
+      ? candidate?.is_auto_sendable
+      : candidate?.is_auto_sendable || candidate?.is_manual_sendable;
+    if (!isAllowed) {
+      throw new Error(options.requireAutoApproved ? 'No auto send approved email route' : 'No send approved email route');
+    }
   }
 
   if (!lead.draft_subject || !lead.draft_body) {
@@ -146,6 +151,7 @@ export async function sendReadyLeads(env, db, runId, config) {
     try {
       await sendLead(env, db, lead.id, {
         runId,
+        requireAutoApproved: true,
         followUpSequence: config.follow_up_sequence,
       });
       succeeded += 1;

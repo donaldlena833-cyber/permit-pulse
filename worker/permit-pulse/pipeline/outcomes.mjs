@@ -418,8 +418,8 @@ export async function markLeadEmailRequired(db, leadId, actorId = null) {
   }
 
   await db.update('v2_leads', [`id=eq.${leadId}`], {
-    status: 'review',
-    operator_notes: withEmailRequiredMarker(lead.operator_notes),
+    status: 'email_required',
+    operator_notes: withoutEmailRequiredMarker(lead.operator_notes),
     updated_at: nowIso(),
   });
 

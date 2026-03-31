@@ -1,5 +1,5 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
-import { createSupabaseClient, eq, ilike, order } from './lib/supabase.mjs';
+import { createSupabaseClient, eq, ilike, inList, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
@@ -101,7 +101,7 @@ async function getTodayPayload(env) {
   const db = createSupabaseClient(env);
   const config = await getAppConfig(db);
   const { currentRun, lastRun } = await getLatestRuns(env);
-  const [newLeads, readyLeads, reviewLeads, followUps, sentOutcomes] = await Promise.all([
+  const [newLeads, readyLeads, reviewLeads, explicitEmailRequiredLeads, followUps, sentOutcomes] = await Promise.all([
     db.select('v2_leads', {
       filters: [eq('status', 'new')],
       ordering: [order('updated_at', 'desc')],
@@ -114,6 +114,11 @@ async function getTodayPayload(env) {
     }),
     db.select('v2_leads', {
       filters: [eq('status', 'review')],
+      ordering: [order('updated_at', 'desc')],
+      limit: 40,
+    }),
+    db.select('v2_leads', {
+      filters: [eq('status', 'email_required')],
       ordering: [order('updated_at', 'desc')],
       limit: 40,
     }),
@@ -141,8 +146,11 @@ async function getTodayPayload(env) {
   });
 
   const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 5) : Number(config.daily_send_cap || 20);
-  const emailRequiredLeads = reviewLeads.filter((lead) => isLeadMarkedEmailRequired(lead.operator_notes));
+  const legacyEmailRequiredLeads = reviewLeads.filter((lead) => isLeadMarkedEmailRequired(lead.operator_notes));
   const plainReviewLeads = reviewLeads.filter((lead) => !isLeadMarkedEmailRequired(lead.operator_notes));
+  const emailRequiredLeads = [...explicitEmailRequiredLeads, ...legacyEmailRequiredLeads]
+    .sort((left, right) => Number(new Date(right.updated_at || 0).getTime()) - Number(new Date(left.updated_at || 0).getTime()))
+    .slice(0, 40);
 
   return {
     greeting: `Good ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(new Date()) < 12 ? 'morning' : 'afternoon'}, Donald`,
@@ -291,8 +299,7 @@ async function listLeads(env, requestUrl) {
 
   const filters = [];
   if (status === 'email_required') {
-    filters.push(eq('status', 'review'));
-    filters.push(ilike('operator_notes', `%${EMAIL_REQUIRED_MARKER}%`));
+    filters.push(inList('status', ['review', 'email_required']));
   } else if (status === 'review') {
     filters.push(eq('status', 'review'));
   } else if (status && status !== 'all') {

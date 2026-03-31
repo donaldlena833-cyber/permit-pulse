@@ -71,6 +71,7 @@ export async function selectLeadRoute(db, runId, leadId) {
   });
 
   const trustedPublishedCandidates = sortCandidates(candidates.filter(isTrustedPublished));
+  const publishedCandidates = sortCandidates(candidates.filter(isPublishedContact));
   const operatorPreferredCandidate = lead.operator_vouched && lead.contact_email
     ? candidates.find((candidate) => normalizeEmail(candidate.email_address) === normalizeEmail(lead.contact_email))
     : null;
@@ -83,24 +84,28 @@ export async function selectLeadRoute(db, runId, leadId) {
     || approvedCandidates[0]
     || null;
   const approvedFallback = approvedCandidates.find((candidate) => candidate.id !== approvedPrimary?.id && Number(candidate.trust_score || 0) >= 20) || null;
-  const discoveredPrimary = operatorPreferredCandidate || approvedPrimary || pickPreferredPublished(trustedPublishedCandidates);
-  const discoveredFallback = approvedFallback
-    || trustedPublishedCandidates.find((candidate) => candidate.id !== discoveredPrimary?.id)
+  const discoveredPrimary = pickPreferredPublished(publishedCandidates);
+  const discoveredFallback = trustedPublishedCandidates.find((candidate) => candidate.id !== discoveredPrimary?.id)
+    || publishedCandidates.find((candidate) => candidate.id !== discoveredPrimary?.id)
+    || null;
+  const routePrimary = approvedPrimary || discoveredPrimary;
+  const routeFallback = approvedFallback
+    || [discoveredFallback, ...publishedCandidates].find((candidate) => candidate && candidate.id !== routePrimary?.id)
     || null;
 
   for (const candidate of candidates) {
-    const isPrimary = candidate.id === discoveredPrimary?.id;
-    const isFallback = candidate.id === discoveredFallback?.id;
+    const isPrimary = candidate.id === routePrimary?.id;
+    const isFallback = candidate.id === routeFallback?.id;
     let rejectedReason = null;
     let selectionReason = null;
 
     if (candidate.id === approvedPrimary?.id) {
-      selectionReason = 'Highest trust non generic candidate';
+      selectionReason = 'Selected approved send route';
     } else if (candidate.id === approvedFallback?.id) {
-      selectionReason = 'Best remaining fallback candidate';
-    } else if (isPrimary) {
+      selectionReason = 'Selected approved fallback route';
+    } else if (candidate.id === discoveredPrimary?.id) {
       selectionReason = 'Best discovered published contact';
-    } else if (isFallback) {
+    } else if (candidate.id === discoveredFallback?.id) {
       selectionReason = 'Alternate discovered published contact';
     } else if (approvedPrimary) {
       rejectedReason = 'Lower trust than selected route';
@@ -118,18 +123,22 @@ export async function selectLeadRoute(db, runId, leadId) {
     });
   }
 
-  const qualityTier = computeQualityTier(lead, approvedPrimary || discoveredPrimary);
-  const nextStatus = approvedPrimary?.is_auto_sendable ? 'ready' : 'review';
+  const qualityTier = computeQualityTier(lead, routePrimary);
+  const nextStatus = routePrimary?.email_address
+    ? approvedPrimary?.is_auto_sendable
+      ? 'ready'
+      : 'review'
+    : 'email_required';
   const projectedLead = {
-    contact_name: discoveredPrimary?.person_name || lead.applicant_name || lead.owner_name || '',
-    contact_role: discoveredPrimary?.person_role || (lead.applicant_name ? 'gc_applicant' : lead.owner_name ? 'owner' : 'unknown'),
-    contact_email: discoveredPrimary?.email_address || '',
-    contact_email_trust: Number(discoveredPrimary?.trust_score || 0),
-    fallback_email: discoveredFallback?.email_address || '',
-    fallback_email_trust: Number(discoveredFallback?.trust_score || 0),
+    contact_name: routePrimary?.person_name || lead.applicant_name || lead.owner_name || '',
+    contact_role: routePrimary?.person_role || (lead.applicant_name ? 'gc_applicant' : lead.owner_name ? 'owner' : 'unknown'),
+    contact_email: routePrimary?.email_address || '',
+    contact_email_trust: Number(routePrimary?.trust_score || 0),
+    fallback_email: routeFallback?.email_address || '',
+    fallback_email_trust: Number(routeFallback?.trust_score || 0),
     active_email_role: 'primary',
     quality_tier: qualityTier,
-    status: discoveredPrimary?.email_address ? nextStatus : 'review',
+    status: nextStatus,
     updated_at: new Date().toISOString(),
   };
 

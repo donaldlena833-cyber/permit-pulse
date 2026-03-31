@@ -63,6 +63,45 @@ export const BLOCKED_EMAIL_DOMAINS = [
   'godaddy.com',
 ];
 
+export const DIRECTORY_EMAIL_DOMAINS = [
+  'profymarket.com',
+  'yelp.com',
+  'angi.com',
+  'angieslist.com',
+  'houzz.com',
+  'yellowpages.com',
+  'superpages.com',
+  'mapquest.com',
+  'manta.com',
+  'facebook.com',
+  'linkedin.com',
+  'instagram.com',
+  'bbb.org',
+  'dnb.com',
+  'buzzfile.com',
+  'bizapedia.com',
+  'buildzoom.com',
+  'bldup.com',
+  'opencorporates.com',
+  'chamberofcommerce.com',
+  'nextdoor.com',
+  'zoominfo.com',
+  'crunchbase.com',
+  'constructionjournal.com',
+  'thebluebook.com',
+  'alignable.com',
+  'contactout.com',
+  'rocketreach.co',
+  'rocketreach.io',
+  'lusha.com',
+  'seamless.ai',
+  'hunter.io',
+  'skrapp.io',
+  'salesintel.io',
+  'adapt.io',
+  'apollo.io',
+];
+
 export function isFreeMailbox(domain) {
   return FREE_MAILBOX_DOMAINS.includes(normalizeText(domain));
 }
@@ -79,6 +118,11 @@ export function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
 
+export function isDirectoryEmailDomain(domain) {
+  const normalized = normalizeText(domain);
+  return DIRECTORY_EMAIL_DOMAINS.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
+}
+
 export function isBlockedEmail(email) {
   if (!looksLikeEmail(email)) {
     return true;
@@ -87,6 +131,7 @@ export function isBlockedEmail(email) {
   return (
     !domain
     || isPlaceholderEmail(email)
+    || isDirectoryEmailDomain(domain)
     || BLOCKED_EMAIL_DOMAINS.some((entry) => domain === entry || domain.endsWith(`.${entry}`))
   );
 }
