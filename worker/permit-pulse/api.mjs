@@ -108,12 +108,16 @@ async function getTodayPayload(env) {
   const db = createSupabaseClient(env);
   const config = await getAppConfig(db);
   const { currentRun, lastRun } = await getLatestRuns(env);
-  const [newLeads, readyLeads, reviewLeads, explicitEmailRequiredLeads, followUps, sentOutcomes] = await Promise.all([
-    db.select('v2_leads', {
-      filters: [eq('status', 'new')],
-      ordering: [order('updated_at', 'desc')],
-      limit: 20,
-    }),
+  const freshSince = currentRun?.started_at || lastRun?.started_at || null;
+  const surfacedStatuses = ['ready', 'review', 'email_required'];
+  const [freshLeads, readyLeads, reviewLeads, explicitEmailRequiredLeads, followUps, sentOutcomes] = await Promise.all([
+    freshSince
+      ? db.select('v2_leads', {
+          filters: [inList('status', surfacedStatuses), `updated_at=gte.${encodeURIComponent(freshSince)}`],
+          ordering: [order('updated_at', 'desc')],
+          limit: 20,
+        })
+      : Promise.resolve([]),
     db.select('v2_leads', {
       filters: [eq('status', 'ready')],
       ordering: [order('updated_at', 'desc')],
@@ -199,12 +203,12 @@ async function getTodayPayload(env) {
         }
       : null,
     counts: {
-      new: newLeads.length,
+      new: freshLeads.length,
       ready: readyLeads.length,
       review: plainReviewLeads.length,
       email_required: emailRequiredLeads.length,
     },
-    new_leads: newLeads.map(presentLead),
+    new_leads: freshLeads.map(presentLead),
     ready: readyLeads.map(presentLead),
     review: plainReviewLeads.map(presentLead),
     email_required: emailRequiredLeads.map(presentLead),
@@ -320,11 +324,14 @@ async function listLeads(env, requestUrl) {
   });
 
   const presented = leads.map(presentLead);
+  const surfaced = presented.filter((lead) => lead.status !== 'new' || Boolean(lead.enriched_at));
   const filtered = status === 'review'
-    ? presented.filter((lead) => lead.status === 'review')
+    ? surfaced.filter((lead) => lead.status === 'review')
     : status === 'email_required'
-      ? presented.filter((lead) => lead.status === 'email_required')
-      : presented;
+      ? surfaced.filter((lead) => lead.status === 'email_required')
+      : status === 'new'
+        ? surfaced.filter((lead) => lead.status === 'new')
+        : surfaced;
 
   const sorted = [...filtered]
     .sort((left, right) => {

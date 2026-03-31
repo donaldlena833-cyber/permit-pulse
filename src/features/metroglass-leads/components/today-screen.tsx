@@ -10,7 +10,6 @@ interface TodayScreenProps {
   today: TodayPayload | null
   actionLeadId: string | null
   onOpenLead: (lead: LeadRow) => void
-  onEnrich: (leadId: string) => void
   onScan: () => void
   onSendAllReady: () => void
   onSendFollowUp: (leadId: string, step: number) => void
@@ -25,7 +24,6 @@ export function TodayScreen({
   today,
   actionLeadId,
   onOpenLead,
-  onEnrich,
   onScan,
   onSendAllReady,
   onSendFollowUp,
@@ -47,7 +45,7 @@ export function TodayScreen({
         <Progress className="mt-4 h-2.5 bg-[#F1E6D9]" value={progress} />
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-[16px] bg-white/85 px-4 py-4">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">New</div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Fresh</div>
             <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.new ?? 0}</div>
           </div>
           <div className="rounded-[16px] bg-white/85 px-4 py-4">
@@ -113,8 +111,11 @@ export function TodayScreen({
       </div>
 
       <Panel>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">New leads</div>
-        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.new ?? 0} new leads</div>
+        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Fresh from scan</div>
+        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.new ?? 0} freshly processed leads</div>
+        <div className="mt-2 text-sm leading-6 text-[#5F564C]">
+          These leads have already gone through resolve, enrichment, and routing. Open any of them to review the result, but the raw pre-enrichment rows stay out of your way now.
+        </div>
         <div className="mt-4 space-y-3">
           {(today?.new_leads ?? []).slice(0, 6).map((lead) => (
             <div key={lead.id} className="rounded-[16px] border border-[#EEE4D7] px-4 py-4">
@@ -127,14 +128,6 @@ export function TodayScreen({
               </button>
               <div className="mt-3 flex gap-2">
                 <Button
-                  className="h-10 rounded-full bg-[#D4691A] px-4 text-white hover:bg-[#BA5A12]"
-                  disabled={actionLeadId === lead.id}
-                  onClick={() => onEnrich(lead.id)}
-                  type="button"
-                >
-                  {actionLeadId === lead.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Automate"}
-                </Button>
-                <Button
                   className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]"
                   onClick={() => onOpenLead(lead)}
                   type="button"
@@ -145,6 +138,11 @@ export function TodayScreen({
               </div>
             </div>
           ))}
+          {!(today?.new_leads ?? []).length ? (
+            <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
+              The latest scan has not surfaced any fresh processed leads yet.
+            </div>
+          ) : null}
         </div>
       </Panel>
 
