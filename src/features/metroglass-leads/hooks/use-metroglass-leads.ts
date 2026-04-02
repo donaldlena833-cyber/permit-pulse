@@ -52,12 +52,20 @@ export function useMetroglassLeads() {
   const [actionLeadId, setActionLeadId] = useState<string | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
 
-  const refreshToday = useCallback(async () => {
+  const refreshToday = useCallback(async (options?: { preserveRunId?: string | null }) => {
     const payload = await fetchToday()
-    setToday(payload)
+    setToday((current) => {
+      if (options?.preserveRunId && !payload.current_run && current?.current_run?.id === options.preserveRunId) {
+        return {
+          ...payload,
+          current_run: current.current_run,
+        }
+      }
+      return payload
+    })
     if (payload.current_run?.id) {
       setRunId(payload.current_run.id)
-    } else {
+    } else if (!options?.preserveRunId) {
       setRunId(null)
     }
     return payload
@@ -127,14 +135,18 @@ export function useMetroglassLeads() {
 
     const interval = window.setInterval(() => {
       void (async () => {
-        const run = await fetchRun(runId)
-        if (!run) {
-          return
-        }
-        setToday((current) => current ? { ...current, current_run: run } : current)
-        if (run.status !== "running") {
-          setRunId(null)
-          await Promise.all([refreshToday(), refreshLeads(), refreshSystem()])
+        try {
+          const run = await fetchRun(runId)
+          if (!run) {
+            return
+          }
+          setToday((current) => current ? { ...current, current_run: run } : current)
+          if (run.status !== "running") {
+            setRunId(null)
+            await Promise.all([refreshToday(), refreshLeads(), refreshSystem()])
+          }
+        } catch (error) {
+          console.error("Run polling failed", error)
         }
       })()
     }, 2000)
@@ -169,9 +181,24 @@ export function useMetroglassLeads() {
       const result = await triggerScan()
       if (result.run_id) {
         setRunId(result.run_id)
+        setToday((current) => current ? {
+          ...current,
+          current_run: {
+            id: result.run_id,
+            status: "running",
+            current_stage: "scan",
+            started_at: new Date().toISOString(),
+            counters: {
+              permits_found: 0,
+              leads_created: 0,
+              leads_ready: 0,
+              leads_review: 0,
+            },
+          },
+        } : current)
       }
       toast.success("Scan started")
-      await refreshToday()
+      await refreshToday({ preserveRunId: result.run_id ?? null })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Scan failed")
     } finally {

@@ -31,6 +31,7 @@ export function TodayScreen({
 }: TodayScreenProps) {
   const progress = today ? (today.daily_cap.sent / Math.max(today.daily_cap.cap, 1)) * 100 : 0
   const run = today?.current_run ?? today?.last_run ?? null
+  const isScanRunning = actionLeadId === "scan" || run?.status === "running"
 
   return (
     <div className="space-y-5 pb-32">
@@ -98,7 +99,7 @@ export function TodayScreen({
           <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Quick actions</div>
           <div className="mt-3 space-y-3">
             <Button className="h-11 w-full rounded-full bg-[#1A1A1A] text-white hover:bg-[#111111]" onClick={onScan} type="button">
-              {actionLeadId === "scan" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Run scan now"}
+              {isScanRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Run scan now"}
             </Button>
             <Button className="h-11 w-full rounded-full bg-[#2D6A4F] text-white hover:bg-[#25573F]" onClick={onSendAllReady} type="button">
               {actionLeadId === null ? "Send all ready" : "Working"}
@@ -276,7 +277,7 @@ export function TodayScreen({
         onClick={onScan}
         type="button"
       >
-        {actionLeadId === "scan" ? <LoaderCircle className="h-5 w-5 animate-spin" /> : "Scan"}
+        {isScanRunning ? <LoaderCircle className="h-5 w-5 animate-spin" /> : "Scan"}
       </button>
     </div>
   )

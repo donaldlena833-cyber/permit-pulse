@@ -114,6 +114,35 @@ function presentLead(lead) {
   };
 }
 
+function presentRun(run) {
+  if (!run) {
+    return null;
+  }
+
+  return {
+    id: run.id,
+    status: run.status,
+    current_stage: run.current_stage,
+    started_at: run.started_at,
+    completed_at: run.completed_at || null,
+    counters: {
+      permits_found: Number(run.permits_found || 0),
+      leads_created: Number(run.leads_created || 0),
+      leads_ready: Number(run.leads_ready || 0),
+      leads_review: Number(run.leads_review || 0),
+    },
+    summary: run.status === 'completed' || run.status === 'failed'
+      ? {
+          permits_found: Number(run.permits_found || 0),
+          leads_created: Number(run.leads_created || 0),
+          leads_ready: Number(run.leads_ready || 0),
+          leads_review: Number(run.leads_review || 0),
+          sends_succeeded: Number(run.sends_succeeded || 0),
+        }
+      : undefined,
+  };
+}
+
 async function getTodayPayload(env) {
   const db = createSupabaseClient(env);
   const config = await getAppConfig(db);
@@ -184,34 +213,8 @@ async function getTodayPayload(env) {
       enabled: Boolean(config.warm_up_mode),
       cap: Number(config.warm_up_daily_cap || 5),
     },
-    current_run: currentRun
-      ? {
-          id: currentRun.id,
-          status: currentRun.status,
-          current_stage: currentRun.current_stage,
-          started_at: currentRun.started_at,
-          counters: {
-            permits_found: currentRun.permits_found,
-            leads_created: currentRun.leads_created,
-            leads_ready: currentRun.leads_ready,
-            leads_review: currentRun.leads_review,
-          },
-        }
-      : null,
-    last_run: lastRun
-      ? {
-          id: lastRun.id,
-          status: lastRun.status,
-          summary: {
-            permits_found: lastRun.permits_found,
-            leads_created: lastRun.leads_created,
-            leads_ready: lastRun.leads_ready,
-            leads_review: lastRun.leads_review,
-            sends_succeeded: lastRun.sends_succeeded,
-          },
-          completed_at: lastRun.completed_at,
-        }
-      : null,
+    current_run: presentRun(currentRun),
+    last_run: presentRun(lastRun),
     counts: {
       new: freshLeads.length,
       ready: readyLeads.length,
@@ -458,7 +461,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (runMatch && request.method === 'GET') {
       const run = await getRunById(env, decodeURIComponent(runMatch[1]));
-      return json(run || { error: 'Run not found' }, run ? 200 : 404);
+      return json(run ? presentRun(run) : { error: 'Run not found' }, run ? 200 : 404);
     }
 
     const leadMatch = url.pathname.match(/^\/api\/leads\/([^/]+)$/);
