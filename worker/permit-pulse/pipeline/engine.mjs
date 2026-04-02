@@ -1,7 +1,7 @@
 import { createSupabaseClient, eq, gte, order } from '../lib/supabase.mjs';
 import { getAppConfig } from '../lib/config.mjs';
 import { withJob } from '../lib/jobs.mjs';
-import { completeRun, createRun, failRun, heartbeatRun, updateRunStage } from '../lib/runs.mjs';
+import { completeRun, createRun, expireStaleRuns, failRun, getRunningRun, heartbeatRun, updateRunStage } from '../lib/runs.mjs';
 import { discoverLeadContacts } from './contacts.mjs';
 import { generateLeadDraft } from './draft.mjs';
 import { processDueFollowUps } from './follow-up.mjs';
@@ -99,7 +99,11 @@ async function executeAutomationRun(env, db, run, config) {
   const counters = emptyCounters();
 
   const ingestResult = await withJob(db, null, run.id, 'ingest', 'nyc_dob', async () => (
-    runIngestStage(env, db, run.id, config)
+    runIngestStage(env, db, run.id, config, async (nextCounters) => {
+      Object.assign(counters, nextCounters);
+      await heartbeatRun(db, run.id);
+      await updateRunStage(db, run.id, 'scan', counters);
+    })
   ));
 
   Object.assign(counters, ingestResult.counters);
@@ -149,7 +153,21 @@ async function executeAutomationRun(env, db, run, config) {
 
 export async function startAutomationCycle(env, options = {}) {
   const db = createSupabaseClient(env);
+  await expireStaleRuns(db);
   const config = await getAppConfig(db);
+  if ((options.triggerType || 'operator') === 'operator') {
+    const runningRun = await getRunningRun(db);
+    if (runningRun) {
+      return {
+        run: runningRun,
+        task: Promise.resolve({
+          run_id: runningRun.id,
+          status: runningRun.status,
+          counts: emptyCounters(),
+        }),
+      };
+    }
+  }
   const run = await createRun(
     db,
     options.triggerType || 'operator',
@@ -233,6 +251,7 @@ async function executeLeadBatchAutomation(env, db, run, config, leadIds = []) {
 
 export async function startLeadBatchAutomation(env, leadIds = [], options = {}) {
   const db = createSupabaseClient(env);
+  await expireStaleRuns(db);
   const config = await getAppConfig(db);
   let normalizedLeadIds = normalizeLeadIds(leadIds, 50);
   if (normalizedLeadIds.length === 0) {
@@ -260,6 +279,7 @@ export async function startLeadBatchAutomation(env, leadIds = [], options = {}) 
 
 export async function getRunById(env, runId) {
   const db = createSupabaseClient(env);
+  await expireStaleRuns(db);
   return db.single('v2_automation_runs', {
     filters: [eq('id', runId)],
   });
@@ -267,6 +287,7 @@ export async function getRunById(env, runId) {
 
 export async function getLatestRuns(env) {
   const db = createSupabaseClient(env);
+  await expireStaleRuns(db);
   const [currentRun, lastRun] = await Promise.all([
     db.single('v2_automation_runs', {
       filters: [eq('status', 'running')],

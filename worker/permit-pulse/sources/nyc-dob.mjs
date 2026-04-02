@@ -4,6 +4,8 @@ const SOURCE_ID = 'nyc_dob';
 const API_ENDPOINT = 'https://data.cityofnewyork.us/resource/rbx6-tga4.json';
 const BOROUGHS = ['MANHATTAN', 'BROOKLYN', 'QUEENS', 'BRONX', 'STATEN ISLAND'];
 const PAGE_SIZE = 1000;
+const FETCH_TIMEOUT_MS = 15000;
+const MAX_RETRIES = 2;
 
 function buildAddress(record) {
   return normalizeWhitespace([record.house_no, record.street_name, record.borough, 'NY', record.zip_code].filter(Boolean).join(' '));
@@ -30,7 +32,20 @@ export default {
     for (let offset = 0; rows.length < limit; offset += PAGE_SIZE) {
       const pageLimit = Math.min(PAGE_SIZE, limit - rows.length);
       const url = `${API_ENDPOINT}?$where=${encodeURIComponent(where)}&$order=issued_date DESC&$limit=${Number.isFinite(pageLimit) ? pageLimit : PAGE_SIZE}&$offset=${offset}`;
-      const response = await fetch(url);
+      let response = null;
+
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+        try {
+          response = await fetch(url, {
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          });
+          break;
+        } catch (error) {
+          if (attempt === MAX_RETRIES) {
+            throw new Error(`NYC DOB fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
 
       if (!response.ok) {
         throw new Error(`NYC DOB fetch failed: ${response.status}`);

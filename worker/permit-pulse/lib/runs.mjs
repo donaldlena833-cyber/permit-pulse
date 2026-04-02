@@ -53,3 +53,27 @@ export async function failRun(db, runId, error, counters = {}) {
     ...counters,
   });
 }
+
+export async function getRunningRun(db) {
+  return db.single('v2_automation_runs', {
+    filters: ['status=eq.running'],
+    ordering: ['order=created_at.desc.nullslast'],
+  });
+}
+
+export async function expireStaleRuns(db, options = {}) {
+  const staleAfterMinutes = Math.max(5, Number(options.staleAfterMinutes || 20));
+  const cutoff = new Date(Date.now() - staleAfterMinutes * 60 * 1000).toISOString();
+
+  return db.update(
+    'v2_automation_runs',
+    ['status=eq.running', `heartbeat_at=lt.${encodeURIComponent(cutoff)}`],
+    {
+      status: 'failed',
+      current_stage: null,
+      last_error: 'Run timed out waiting for progress',
+      completed_at: nowIso(),
+      heartbeat_at: nowIso(),
+    },
+  );
+}

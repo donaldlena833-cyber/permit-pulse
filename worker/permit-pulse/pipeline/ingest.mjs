@@ -72,7 +72,7 @@ const NEGATIVE_KEYWORDS = METROGLASS_PROFILE.negativeKeywords.map((keyword) => n
 const ARCHITECT_SIGNAL_TERMS = ['architect', 'architects', 'architecture', 'design', 'designer', 'interior', 'interiors', 'studio', 'atelier'];
 const RESIDENTIAL_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|interior|apartment|condo|co-op|shower|partition|mirror|cabinet|plumbing/i;
 const WIDER_INTERIOR_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|alteration|interior|apartment|condo|co-op|partition|door|mirror|cabinet|finish|fixture|tile|millwork|residential|dwelling|plumbing/i;
-const DEFAULT_SOURCE_FETCH_LIMIT = 1500;
+const DEFAULT_SOURCE_FETCH_LIMIT = 400;
 const DEFAULT_ENRICH_PER_RUN_LIMIT = 150;
 const HARD_EXCLUDED_PERMIT_TYPES = [
   'sidewalk shed',
@@ -359,7 +359,7 @@ async function ingestPermit(db, runId, permit, minThreshold) {
   return { created: true, leadId: lead.id, lead, relevance };
 }
 
-export async function runIngestStage(env, db, runId, config) {
+export async function runIngestStage(env, db, runId, config, onProgress = null) {
   const activeSources = Array.isArray(config.active_sources) && config.active_sources.length > 0
     ? config.active_sources
     : ['nyc_dob'];
@@ -389,8 +389,12 @@ export async function runIngestStage(env, db, runId, config) {
 
     const permits = await source.fetchPermits(sinceDay, { limit: maxPermitsPerSource });
     counters.permits_found += permits.length;
+    if (typeof onProgress === 'function') {
+      await onProgress({ ...counters });
+    }
 
-    for (const permit of permits) {
+    for (let index = 0; index < permits.length; index += 1) {
+      const permit = permits[index];
       const result = await ingestPermit(db, runId, permit, Number(config.min_relevance_threshold || 0.15));
 
       if (result.skipped) {
@@ -408,6 +412,10 @@ export async function runIngestStage(env, db, runId, config) {
         if (leadsToEnrich.length < maxLeadsToEnrichPerRun) {
           leadsToEnrich.push(result.leadId);
         }
+      }
+
+      if (typeof onProgress === 'function' && (index === permits.length - 1 || index % 25 === 24)) {
+        await onProgress({ ...counters });
       }
     }
   }
