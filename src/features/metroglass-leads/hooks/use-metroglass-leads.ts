@@ -136,11 +136,22 @@ export function useMetroglassLeads() {
     const interval = window.setInterval(() => {
       void (async () => {
         try {
-          const run = await fetchRun(runId)
+          const [run, todayPayload] = await Promise.all([
+            fetchRun(runId),
+            refreshToday({ preserveRunId: runId }),
+          ])
           if (!run) {
             return
           }
-          setToday((current) => current ? { ...current, current_run: run } : current)
+          setToday((current) => {
+            if (!current && !todayPayload) {
+              return current
+            }
+            return {
+              ...(todayPayload ?? current ?? {}),
+              current_run: run,
+            } as TodayPayload
+          })
           if (run.status !== "running") {
             setRunId(null)
             await Promise.all([refreshToday(), refreshLeads(), refreshSystem()])
