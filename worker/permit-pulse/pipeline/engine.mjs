@@ -27,6 +27,23 @@ function emptyCounters() {
   };
 }
 
+function withRuntimeOverrides(config, options = {}) {
+  const nextConfig = { ...config };
+
+  if (options.mode === 'operator_scan') {
+    const currentSourceLimit = Number(nextConfig.scan_limit_per_source || 0);
+    const currentEnrichLimit = Number(nextConfig.max_leads_to_enrich_per_run || 0);
+    nextConfig.scan_limit_per_source = currentSourceLimit > 0
+      ? Math.min(currentSourceLimit, 100)
+      : 100;
+    nextConfig.max_leads_to_enrich_per_run = currentEnrichLimit > 0
+      ? Math.min(currentEnrichLimit, 25)
+      : 25;
+  }
+
+  return nextConfig;
+}
+
 async function processLeadStages(env, db, runId, leadId, counters, config) {
   await heartbeatRun(db, runId);
   await updateRunStage(db, runId, 'resolve', counters);
@@ -95,7 +112,7 @@ async function getQueuedLeadIds(db, excludedLeadIds = [], limit = 10, minRelevan
     .filter((leadId) => leadId && !excludedLeadIds.includes(leadId));
 }
 
-async function executeAutomationRun(env, db, run, config) {
+async function executeAutomationRun(env, db, run, config, options = {}) {
   const counters = emptyCounters();
 
   const ingestResult = await withJob(db, null, run.id, 'ingest', 'nyc_dob', async () => (
@@ -108,12 +125,14 @@ async function executeAutomationRun(env, db, run, config) {
 
   Object.assign(counters, ingestResult.counters);
 
-  const queuedLeadIds = await getQueuedLeadIds(
-    db,
-    ingestResult.leadsToEnrich,
-    Math.max(ingestResult.leadsToEnrich.length, 10),
-    Number(config.min_relevance_threshold || 0.15),
-  );
+  const queuedLeadIds = options.freshOnly
+    ? []
+    : await getQueuedLeadIds(
+        db,
+        ingestResult.leadsToEnrich,
+        Math.max(ingestResult.leadsToEnrich.length, 10),
+        Number(config.min_relevance_threshold || 0.15),
+      );
   const leadIdsToProcess = [...new Set([...ingestResult.leadsToEnrich, ...queuedLeadIds])];
 
   for (const leadId of leadIdsToProcess) {
@@ -130,11 +149,13 @@ async function executeAutomationRun(env, db, run, config) {
   counters.sends_succeeded = sendResult.succeeded;
   counters.sends_failed = sendResult.failed;
 
-  await heartbeatRun(db, run.id);
-  await updateRunStage(db, run.id, 'follow_up', counters);
-  await withJob(db, null, run.id, 'follow_up', 'gmail', async () => (
-    processDueFollowUps(env, db)
-  ));
+  if (!options.skipFollowUps) {
+    await heartbeatRun(db, run.id);
+    await updateRunStage(db, run.id, 'follow_up', counters);
+    await withJob(db, null, run.id, 'follow_up', 'gmail', async () => (
+      processDueFollowUps(env, db)
+    ));
+  }
 
   await completeRun(db, run.id, counters);
 
@@ -153,8 +174,10 @@ async function executeAutomationRun(env, db, run, config) {
 
 export async function startAutomationCycle(env, options = {}) {
   const db = createSupabaseClient(env);
-  await expireStaleRuns(db);
-  const config = await getAppConfig(db);
+  await expireStaleRuns(db, {
+    staleAfterMinutes: (options.triggerType || 'operator') === 'operator' ? 5 : 10,
+  });
+  const config = withRuntimeOverrides(await getAppConfig(db), options);
   if ((options.triggerType || 'operator') === 'operator') {
     const runningRun = await getRunningRun(db);
     if (runningRun) {
@@ -176,7 +199,10 @@ export async function startAutomationCycle(env, options = {}) {
     config.active_sources,
   );
 
-  const task = executeAutomationRun(env, db, run, config).catch(async (error) => {
+  const task = executeAutomationRun(env, db, run, config, {
+    freshOnly: Boolean(options.freshOnly),
+    skipFollowUps: Boolean(options.skipFollowUps),
+  }).catch(async (error) => {
     await failRun(db, run.id, error);
     throw error;
   });
@@ -251,7 +277,9 @@ async function executeLeadBatchAutomation(env, db, run, config, leadIds = []) {
 
 export async function startLeadBatchAutomation(env, leadIds = [], options = {}) {
   const db = createSupabaseClient(env);
-  await expireStaleRuns(db);
+  await expireStaleRuns(db, {
+    staleAfterMinutes: 5,
+  });
   const config = await getAppConfig(db);
   let normalizedLeadIds = normalizeLeadIds(leadIds, 50);
   if (normalizedLeadIds.length === 0) {
@@ -279,7 +307,9 @@ export async function startLeadBatchAutomation(env, leadIds = [], options = {}) 
 
 export async function getRunById(env, runId) {
   const db = createSupabaseClient(env);
-  await expireStaleRuns(db);
+  await expireStaleRuns(db, {
+    staleAfterMinutes: 5,
+  });
   return db.single('v2_automation_runs', {
     filters: [eq('id', runId)],
   });
@@ -287,7 +317,9 @@ export async function getRunById(env, runId) {
 
 export async function getLatestRuns(env) {
   const db = createSupabaseClient(env);
-  await expireStaleRuns(db);
+  await expireStaleRuns(db, {
+    staleAfterMinutes: 5,
+  });
   const [currentRun, lastRun] = await Promise.all([
     db.single('v2_automation_runs', {
       filters: [eq('status', 'running')],

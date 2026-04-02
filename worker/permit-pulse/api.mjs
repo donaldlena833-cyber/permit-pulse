@@ -402,22 +402,21 @@ export async function handlePermitPulseRequest(request, env, ctx) {
       const { run, task } = await startAutomationCycle(env, {
         triggerType: 'operator',
         triggeredBy: user.email || null,
+        mode: 'operator_scan',
+        freshOnly: true,
+        skipFollowUps: true,
       });
 
-      if (ctx?.waitUntil) {
-        ctx.waitUntil(task.catch((error) => {
-          console.error('Automation run failed', error);
-        }));
-        return json({
-          started: true,
-          run_id: run.id,
-        });
-      }
-
-      return json(await task.catch((error) => {
+      const result = await task.catch((error) => {
         console.error('Automation run failed', error);
         throw error;
-      }));
+      });
+
+      return json({
+        started: true,
+        run_id: run.id,
+        ...result,
+      });
     }
 
     if ((url.pathname === '/api/leads/enrich-batch' || url.pathname === '/api/leads/automate-batch') && request.method === 'POST') {
