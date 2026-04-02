@@ -138,9 +138,29 @@ export interface LeadDetailResponse {
 
 export interface RunCounters {
   permits_found?: number
+  permits_skipped_low_relevance?: number
+  permits_deduplicated?: number
   leads_created?: number
+  leads_enriched?: number
   leads_ready?: number
   leads_review?: number
+  drafts_generated?: number
+  sends_attempted?: number
+  sends_succeeded?: number
+  sends_failed?: number
+}
+
+export interface RunProgress {
+  backlog_pending: number
+  claimed: number
+  processed: number
+  fresh_inserted: number
+  remaining: number
+  ready?: number
+  review?: number
+  email_required?: number
+  archived_no_email?: number
+  sent?: number
 }
 
 export interface AutomationRun {
@@ -149,7 +169,11 @@ export interface AutomationRun {
   current_stage: string | null
   started_at: string | null
   completed_at?: string | null
+  mode?: string | null
+  target_claim_count?: number
+  backlog_pending_at_start?: number
   counters?: RunCounters
+  progress?: RunProgress
   summary?: Record<string, number>
 }
 
@@ -166,6 +190,7 @@ export interface TodayPayload {
   }
   current_run: AutomationRun | null
   last_run: AutomationRun | null
+  automation_backlog_pending: number
   counts: {
     new: number
     ready: number
@@ -173,6 +198,8 @@ export interface TodayPayload {
     email_required: number
   }
   new_leads: LeadRow[]
+  automation_backlog: LeadRow[]
+  processed_this_run: LeadRow[]
   ready: LeadRow[]
   review: LeadRow[]
   email_required: LeadRow[]

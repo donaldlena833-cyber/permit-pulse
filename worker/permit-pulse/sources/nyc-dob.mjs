@@ -20,6 +20,7 @@ export default {
     const requestedLimit = Number(options.limit || 0);
     const fetchAll = requestedLimit <= 0;
     const limit = fetchAll ? Number.POSITIVE_INFINITY : requestedLimit;
+    const initialOffset = Math.max(0, Number(options.offset || 0));
     const sinceIso = `${since}T00:00:00`;
     const boroughFilters = BOROUGHS.map((borough) => `borough='${borough}'`).join(' OR ');
     const where = [
@@ -29,7 +30,7 @@ export default {
     ].join(' AND ');
     const rows = [];
 
-    for (let offset = 0; rows.length < limit; offset += PAGE_SIZE) {
+    for (let offset = initialOffset; rows.length < limit; offset += PAGE_SIZE) {
       const pageLimit = Math.min(PAGE_SIZE, limit - rows.length);
       const url = `${API_ENDPOINT}?$where=${encodeURIComponent(where)}&$order=issued_date DESC&$limit=${Number.isFinite(pageLimit) ? pageLimit : PAGE_SIZE}&$offset=${offset}`;
       let response = null;

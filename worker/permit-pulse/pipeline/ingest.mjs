@@ -74,6 +74,7 @@ const RESIDENTIAL_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|interior|
 const WIDER_INTERIOR_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|alteration|interior|apartment|condo|co-op|partition|door|mirror|cabinet|finish|fixture|tile|millwork|residential|dwelling|plumbing/i;
 const DEFAULT_SOURCE_FETCH_LIMIT = 400;
 const DEFAULT_ENRICH_PER_RUN_LIMIT = 150;
+const DEFAULT_PAGE_SIZE = 200;
 const HARD_EXCLUDED_PERMIT_TYPES = [
   'sidewalk shed',
   'construction fence',
@@ -308,6 +309,10 @@ async function ingestPermit(db, runId, permit, minThreshold) {
       relevance_keyword: relevance.keyword,
       quality_tier: deriveQualityTier(relevance.score),
       status: 'new',
+      automation_state: 'pending',
+      automation_claimed_by_run: null,
+      automation_claimed_at: null,
+      automation_processed_at: null,
       updated_at: nowIso(),
     });
   } catch (error) {
@@ -359,18 +364,23 @@ async function ingestPermit(db, runId, permit, minThreshold) {
   return { created: true, leadId: lead.id, lead, relevance };
 }
 
-export async function runIngestStage(env, db, runId, config, onProgress = null) {
+export function calculateSinceDay(config = {}) {
+  const scanWindowDays = Math.max(1, Number(config.scan_window_days || 14));
+  const since = new Date();
+  since.setDate(since.getDate() - scanWindowDays);
+  return since.toISOString().split('T')[0];
+}
+
+export async function harvestFreshLeads(env, db, runId, config, options = {}) {
   const activeSources = Array.isArray(config.active_sources) && config.active_sources.length > 0
     ? config.active_sources
     : ['nyc_dob'];
-  const configuredPermitsPerSource = Number(config.scan_limit_per_source || 0);
-  const maxPermitsPerSource = configuredPermitsPerSource > 0 ? configuredPermitsPerSource : DEFAULT_SOURCE_FETCH_LIMIT;
-  const scanWindowDays = Math.max(1, Number(config.scan_window_days || 14));
-  const maxLeadsToEnrichPerRun = Math.max(25, Number(config.max_leads_to_enrich_per_run || DEFAULT_ENRICH_PER_RUN_LIMIT));
-
-  const since = new Date();
-  since.setDate(since.getDate() - scanWindowDays);
-  const sinceDay = since.toISOString().split('T')[0];
+  const sinceDay = options.sinceDay || calculateSinceDay(config);
+  const rawPermitBudget = Math.max(0, Number(options.rawPermitBudget || DEFAULT_SOURCE_FETCH_LIMIT));
+  const targetLeadCount = Math.max(0, Number(options.targetLeadCount || DEFAULT_ENRICH_PER_RUN_LIMIT));
+  const pageSize = Math.max(50, Math.min(Number(options.pageSize || DEFAULT_PAGE_SIZE), 500));
+  const minThreshold = Number(config.min_relevance_threshold || 0.15);
+  const offsets = { ...(options.offsets || {}) };
 
   const counters = {
     permits_found: 0,
@@ -379,49 +389,107 @@ export async function runIngestStage(env, db, runId, config, onProgress = null) 
     leads_created: 0,
   };
 
-  const leadsToEnrich = [];
+  const leadsCreated = [];
+  const exhaustedSources = [];
 
   for (const sourceId of activeSources) {
     const source = SOURCES[sourceId];
     if (!source) {
+      exhaustedSources.push(sourceId);
       continue;
     }
 
-    const permits = await source.fetchPermits(sinceDay, { limit: maxPermitsPerSource });
-    counters.permits_found += permits.length;
-    if (typeof onProgress === 'function') {
-      await onProgress({ ...counters });
-    }
+    let offset = Math.max(0, Number(offsets[sourceId] || 0));
+    let sourceExhausted = false;
 
-    for (let index = 0; index < permits.length; index += 1) {
-      const permit = permits[index];
-      const result = await ingestPermit(db, runId, permit, Number(config.min_relevance_threshold || 0.15));
-
-      if (result.skipped) {
-        counters.permits_skipped_low_relevance += 1;
-        continue;
+    while (counters.permits_found < rawPermitBudget && leadsCreated.length < targetLeadCount) {
+      const remainingRawBudget = rawPermitBudget - counters.permits_found;
+      const fetchLimit = Math.min(pageSize, remainingRawBudget);
+      if (fetchLimit <= 0) {
+        break;
       }
 
-      if (result.duplicate) {
-        counters.permits_deduplicated += 1;
-        continue;
+      const permits = await source.fetchPermits(sinceDay, {
+        limit: fetchLimit,
+        offset,
+      });
+
+      counters.permits_found += permits.length;
+      offset += permits.length;
+      offsets[sourceId] = offset;
+
+      if (typeof options.onProgress === 'function') {
+        await options.onProgress({ ...counters }, { offsets: { ...offsets }, leadsCreated: [...leadsCreated] });
       }
 
-      if (result.created) {
-        counters.leads_created += 1;
-        if (leadsToEnrich.length < maxLeadsToEnrichPerRun) {
-          leadsToEnrich.push(result.leadId);
+      if (permits.length === 0) {
+        sourceExhausted = true;
+        break;
+      }
+
+      for (let index = 0; index < permits.length; index += 1) {
+        const result = await ingestPermit(db, runId, permits[index], minThreshold);
+
+        if (result.skipped) {
+          counters.permits_skipped_low_relevance += 1;
+        } else if (result.duplicate) {
+          counters.permits_deduplicated += 1;
+        } else if (result.created) {
+          counters.leads_created += 1;
+          leadsCreated.push(result.leadId);
+        }
+
+        if (typeof options.onProgress === 'function' && (index === permits.length - 1 || index % 25 === 24)) {
+          await options.onProgress({ ...counters }, { offsets: { ...offsets }, leadsCreated: [...leadsCreated] });
+        }
+
+        if (leadsCreated.length >= targetLeadCount) {
+          break;
         }
       }
 
-      if (typeof onProgress === 'function' && (index === permits.length - 1 || index % 25 === 24)) {
-        await onProgress({ ...counters });
+      if (permits.length < fetchLimit || permits.length < pageSize) {
+        sourceExhausted = true;
+        break;
       }
+    }
+
+    if (sourceExhausted) {
+      exhaustedSources.push(sourceId);
+    }
+
+    if (counters.permits_found >= rawPermitBudget || leadsCreated.length >= targetLeadCount) {
+      break;
     }
   }
 
   return {
     counters,
-    leadsToEnrich,
+    leadsCreated,
+    offsets,
+    exhaustedSources,
+  };
+}
+
+export async function runIngestStage(env, db, runId, config, onProgress = null) {
+  const activeSources = Array.isArray(config.active_sources) && config.active_sources.length > 0
+    ? config.active_sources
+    : ['nyc_dob'];
+  const configuredPermitsPerSource = Number(config.scan_limit_per_source || 0);
+  const maxPermitsPerSource = configuredPermitsPerSource > 0 ? configuredPermitsPerSource : DEFAULT_SOURCE_FETCH_LIMIT;
+  const maxLeadsToEnrichPerRun = Math.max(25, Number(config.max_leads_to_enrich_per_run || DEFAULT_ENRICH_PER_RUN_LIMIT));
+  const harvest = await harvestFreshLeads(env, db, runId, {
+    ...config,
+    active_sources: activeSources,
+  }, {
+    sinceDay: calculateSinceDay(config),
+    rawPermitBudget: maxPermitsPerSource,
+    targetLeadCount: maxLeadsToEnrichPerRun,
+    onProgress,
+  });
+
+  return {
+    counters: harvest.counters,
+    leadsToEnrich: harvest.leadsCreated,
   };
 }

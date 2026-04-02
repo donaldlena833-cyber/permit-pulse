@@ -79,10 +79,10 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
             <div className="mt-1 font-['Instrument_Serif'] text-3xl leading-none sm:text-[2.4rem]">Leads</div>
             <div className="mt-2 flex flex-wrap gap-2">
               <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
-                {today?.counts.new ?? 0} fresh
+                {today?.automation_backlog_pending ?? today?.counts.new ?? 0} backlog
               </div>
               <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
-                {today?.counts.review ?? 0} review
+                {today?.counts.review ?? 0} exceptions
               </div>
               <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
                 {today?.counts.email_required ?? 0} email required

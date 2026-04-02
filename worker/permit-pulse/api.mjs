@@ -1,6 +1,7 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
-import { createSupabaseClient, eq, ilike, inList, order } from './lib/supabase.mjs';
+import { createSupabaseClient, eq, inList, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
+import { countPendingAutomationLeads, summarizeRunQueue } from './lib/automation-queue.mjs';
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle, startLeadBatchAutomation } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
 import { sendLead, sendReadyLeads } from './pipeline/send.mjs';
@@ -8,7 +9,6 @@ import { logPhoneFollowUp, sendFollowUp, skipFollowUp } from './pipeline/follow-
 import {
   addManualLeadEmail,
   chooseLeadEmailCandidate,
-  EMAIL_REQUIRED_MARKER,
   isLeadMarkedEmailRequired,
   markLeadEmailRequired,
   markLeadOutcome,
@@ -114,10 +114,36 @@ function presentLead(lead) {
   };
 }
 
-function presentRun(run) {
+function normalizeRunScope(run) {
+  if (!run?.source_scope || typeof run.source_scope !== 'object' || Array.isArray(run.source_scope)) {
+    return {
+      mode: null,
+      target_claim_count: 0,
+      backlog_pending_at_start: 0,
+      fresh_inserted: 0,
+      progress: {},
+    };
+  }
+
+  return run.source_scope;
+}
+
+async function presentRun(db, run) {
   if (!run) {
     return null;
   }
+
+  const scope = normalizeRunScope(run);
+  const [backlogPending, queueSummary] = await Promise.all([
+    countPendingAutomationLeads(db),
+    summarizeRunQueue(db, run.id, {
+      claimedLeadIds: scope.claimed_lead_ids,
+      processedLeadIds: scope.processed_lead_ids,
+    }),
+  ]);
+
+  const targetClaimCount = Number(scope.target_claim_count || 0);
+  const freshInserted = Number(scope.progress?.fresh_inserted || scope.fresh_inserted || 0);
 
   return {
     id: run.id,
@@ -125,38 +151,90 @@ function presentRun(run) {
     current_stage: run.current_stage,
     started_at: run.started_at,
     completed_at: run.completed_at || null,
+    mode: scope.mode || null,
+    target_claim_count: targetClaimCount,
+    backlog_pending_at_start: Number(scope.backlog_pending_at_start || 0),
     counters: {
       permits_found: Number(run.permits_found || 0),
+      permits_skipped_low_relevance: Number(run.permits_skipped_low_relevance || 0),
+      permits_deduplicated: Number(run.permits_deduplicated || 0),
       leads_created: Number(run.leads_created || 0),
+      leads_enriched: Number(run.leads_enriched || 0),
       leads_ready: Number(run.leads_ready || 0),
       leads_review: Number(run.leads_review || 0),
+      drafts_generated: Number(run.drafts_generated || 0),
+      sends_attempted: Number(run.sends_attempted || 0),
+      sends_succeeded: Number(run.sends_succeeded || 0),
+      sends_failed: Number(run.sends_failed || 0),
+    },
+    progress: {
+      backlog_pending: backlogPending,
+      claimed: queueSummary.claimed,
+      processed: queueSummary.processed,
+      fresh_inserted: freshInserted,
+      remaining: Math.max(targetClaimCount - queueSummary.processed, 0),
+      ready: queueSummary.ready,
+      review: queueSummary.review,
+      email_required: queueSummary.email_required,
+      archived_no_email: queueSummary.archived,
+      sent: queueSummary.sent,
     },
     summary: run.status === 'completed' || run.status === 'failed'
       ? {
-          permits_found: Number(run.permits_found || 0),
-          leads_created: Number(run.leads_created || 0),
-          leads_ready: Number(run.leads_ready || 0),
-          leads_review: Number(run.leads_review || 0),
-          sends_succeeded: Number(run.sends_succeeded || 0),
+          harvested: Number(run.permits_found || 0),
+          deduplicated: Number(run.permits_deduplicated || 0),
+          low_relevance: Number(run.permits_skipped_low_relevance || 0),
+          created: Number(run.leads_created || 0),
+          claimed: queueSummary.claimed,
+          processed: queueSummary.processed,
+          ready: Number(run.leads_ready || 0),
+          review: Number(run.leads_review || 0),
+          sent: Number(run.sends_succeeded || 0),
         }
       : undefined,
   };
+}
+
+async function getProcessedLeadsForRun(db, run) {
+  if (!run) {
+    return [];
+  }
+
+  const scope = normalizeRunScope(run);
+
+  try {
+    return await db.select('v2_leads', {
+      filters: [eq('automation_claimed_by_run', run.id), eq('automation_state', 'processed')],
+      ordering: [order('automation_processed_at', 'desc'), order('updated_at', 'desc')],
+      limit: 20,
+    });
+  } catch (error) {
+    const processedLeadIds = Array.isArray(scope.processed_lead_ids) ? scope.processed_lead_ids : [];
+    if (processedLeadIds.length === 0) {
+      return [];
+    }
+    return db.select('v2_leads', {
+      filters: [inList('id', processedLeadIds)],
+      ordering: [order('updated_at', 'desc')],
+      limit: 20,
+    });
+  }
 }
 
 async function getTodayPayload(env) {
   const db = createSupabaseClient(env);
   const config = await getAppConfig(db);
   const { currentRun, lastRun } = await getLatestRuns(env);
-  const freshSince = currentRun?.started_at || lastRun?.started_at || null;
-  const surfacedStatuses = ['ready', 'review', 'email_required'];
-  const [freshLeads, readyLeads, reviewLeads, explicitEmailRequiredLeads, followUps, sentOutcomes] = await Promise.all([
-    freshSince
-      ? db.select('v2_leads', {
-          filters: [inList('status', surfacedStatuses), `updated_at=gte.${encodeURIComponent(freshSince)}`],
-          ordering: [order('updated_at', 'desc')],
-          limit: 20,
-        })
-      : Promise.resolve([]),
+  const displayRun = currentRun || lastRun || null;
+  const [presentedCurrentRun, presentedLastRun, backlogPending, backlogLeads, readyLeads, reviewLeads, explicitEmailRequiredLeads, followUps, sentOutcomes, processedLeads] = await Promise.all([
+    presentRun(db, currentRun),
+    presentRun(db, lastRun),
+    countPendingAutomationLeads(db),
+    db.select('v2_leads', {
+      filters: [eq('status', 'new'), eq('automation_state', 'pending')],
+      ordering: [order('relevance_score', 'desc'), order('created_at', 'asc')],
+      limit: 20,
+    }),
     db.select('v2_leads', {
       filters: [eq('status', 'ready')],
       ordering: [order('updated_at', 'desc')],
@@ -182,6 +260,7 @@ async function getTodayPayload(env) {
       ordering: [order('sent_at', 'desc')],
       limit: 5,
     }),
+    getProcessedLeadsForRun(db, displayRun),
   ]);
 
   const leadIds = [...new Set([...followUps.map((row) => row.lead_id), ...sentOutcomes.map((row) => row.lead_id)])];
@@ -213,15 +292,18 @@ async function getTodayPayload(env) {
       enabled: Boolean(config.warm_up_mode),
       cap: Number(config.warm_up_daily_cap || 5),
     },
-    current_run: presentRun(currentRun),
-    last_run: presentRun(lastRun),
+    current_run: presentedCurrentRun,
+    last_run: presentedLastRun,
+    automation_backlog_pending: backlogPending,
     counts: {
-      new: freshLeads.length,
+      new: backlogPending,
       ready: readyLeads.length,
       review: plainReviewLeads.length,
       email_required: emailRequiredLeads.length,
     },
-    new_leads: freshLeads.map(presentLead),
+    new_leads: backlogLeads.map(presentLead),
+    automation_backlog: backlogLeads.map(presentLead),
+    processed_this_run: processedLeads.map(presentLead),
     ready: readyLeads.map(presentLead),
     review: plainReviewLeads.map(presentLead),
     email_required: emailRequiredLeads.map(presentLead),
@@ -330,21 +412,24 @@ async function listLeads(env, requestUrl) {
     filters.push(eq('status', status));
   }
 
+  const ordering = status === 'new'
+    ? [order('relevance_score', 'desc'), order('created_at', 'asc')]
+    : [order('updated_at', 'desc')];
+
   const leads = await db.select('v2_leads', {
     filters,
-    ordering: [order('updated_at', 'desc')],
+    ordering,
     limit: page * limit,
   });
 
   const presented = leads.map(presentLead);
-  const surfaced = presented.filter((lead) => lead.status !== 'new' || Boolean(lead.enriched_at));
   const filtered = status === 'review'
-    ? surfaced.filter((lead) => lead.status === 'review')
+    ? presented.filter((lead) => lead.status === 'review')
     : status === 'email_required'
-      ? surfaced.filter((lead) => lead.status === 'email_required')
+      ? presented.filter((lead) => lead.status === 'email_required')
       : status === 'new'
-        ? surfaced.filter((lead) => lead.status === 'new')
-        : surfaced;
+        ? presented.filter((lead) => lead.status === 'new')
+        : presented;
 
   const sorted = [...filtered]
     .sort((left, right) => {
@@ -399,23 +484,32 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/api/scan' && request.method === 'POST') {
-      const { run, task } = await startAutomationCycle(env, {
+      const { run, task, activeRunReused } = await startAutomationCycle(env, {
         triggerType: 'operator',
         triggeredBy: user.email || null,
         mode: 'operator_scan',
-        freshOnly: true,
         skipFollowUps: true,
       });
 
-      const result = await task.catch((error) => {
-        console.error('Automation run failed', error);
-        throw error;
-      });
+      if (task && ctx?.waitUntil) {
+        ctx.waitUntil(task.catch((error) => {
+          console.error('Automation run failed', error);
+        }));
+      } else if (task) {
+        task.catch((error) => {
+          console.error('Automation run failed', error);
+        });
+      }
+
+      const scope = normalizeRunScope(run);
 
       return json({
         started: true,
         run_id: run.id,
-        ...result,
+        mode: 'operator_scan',
+        target_claim_count: Number(scope.target_claim_count || 0),
+        backlog_pending_at_start: Number(scope.backlog_pending_at_start || 0),
+        active_run_reused: Boolean(activeRunReused),
       });
     }
 
@@ -460,7 +554,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (runMatch && request.method === 'GET') {
       const run = await getRunById(env, decodeURIComponent(runMatch[1]));
-      return json(run ? presentRun(run) : { error: 'Run not found' }, run ? 200 : 404);
+      return json(run ? await presentRun(db, run) : { error: 'Run not found' }, run ? 200 : 404);
     }
 
     const leadMatch = url.pathname.match(/^\/api\/leads\/([^/]+)$/);
@@ -617,7 +711,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
         total_leads: totalLeads.length,
         recent_failures: recentFailures,
         domain_health: domainHealth,
-        recent_runs: runs,
+        recent_runs: await Promise.all(runs.map((run) => presentRun(db, run))),
       });
     }
 

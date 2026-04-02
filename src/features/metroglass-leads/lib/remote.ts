@@ -45,7 +45,14 @@ export function fetchToday() {
 }
 
 export function triggerScan() {
-  return requestJson<{ started: boolean; run_id?: string | null }>("/api/scan", {
+  return requestJson<{
+    started: boolean
+    run_id?: string | null
+    mode?: "operator_scan"
+    target_claim_count?: number
+    backlog_pending_at_start?: number
+    active_run_reused?: boolean
+  }>("/api/scan", {
     method: "POST",
   })
 }

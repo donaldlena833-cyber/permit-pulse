@@ -78,6 +78,18 @@ export function SettingsScreen({ health, config, system, onSaveConfig }: Setting
         <div className="mt-3 text-sm text-[#5F564C]">Worker healthy: {system?.worker.ok ? "Yes" : "No"}</div>
         <div className="mt-2 text-sm text-[#5F564C]">Total leads: {system?.total_leads ?? 0}</div>
         <div className="mt-4 space-y-3">
+          {(system?.recent_runs ?? []).map((run) => (
+            <div key={run.id} className="rounded-[10px] border border-[#EEE4D7] bg-[#FFFCF8] px-3 py-3">
+              <div className="font-medium text-[#1A1A1A]">
+                {run.status === "running" ? "Run in progress" : "Recent run"}
+              </div>
+              <div className="mt-1 text-sm text-[#5F564C]">
+                {run.current_stage || run.status} · backlog {run.progress?.backlog_pending ?? 0} · claimed {run.progress?.claimed ?? 0} · processed {run.progress?.processed ?? 0} · sent {run.summary?.sent ?? run.counters?.sends_succeeded ?? 0}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 space-y-3">
           {(system?.recent_failures ?? []).map((failure) => (
             <div key={failure.id} className="rounded-[10px] border border-[#F0D0C6] bg-[#FFF5F2] px-3 py-3">
               <div className="font-medium text-[#1A1A1A]">{failure.job_type}</div>

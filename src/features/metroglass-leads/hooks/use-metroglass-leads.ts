@@ -197,18 +197,35 @@ export function useMetroglassLeads() {
           current_run: {
             id: result.run_id,
             status: "running",
-            current_stage: "scan",
+            current_stage: "claim",
             started_at: new Date().toISOString(),
+            mode: result.mode ?? "operator_scan",
+            target_claim_count: result.target_claim_count ?? 0,
+            backlog_pending_at_start: result.backlog_pending_at_start ?? current.automation_backlog_pending ?? 0,
             counters: {
               permits_found: 0,
+              permits_skipped_low_relevance: 0,
+              permits_deduplicated: 0,
               leads_created: 0,
+              leads_enriched: 0,
               leads_ready: 0,
               leads_review: 0,
+              drafts_generated: 0,
+              sends_attempted: 0,
+              sends_succeeded: 0,
+              sends_failed: 0,
+            },
+            progress: {
+              backlog_pending: result.backlog_pending_at_start ?? current.automation_backlog_pending ?? 0,
+              claimed: 0,
+              processed: 0,
+              fresh_inserted: 0,
+              remaining: result.target_claim_count ?? 0,
             },
           },
         } : current)
       }
-      toast.success("Scan started")
+      toast.success(result.active_run_reused ? "Active scan already in progress" : "Automation scan started")
       await refreshToday({ preserveRunId: result.run_id ?? null })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Scan failed")

@@ -32,6 +32,14 @@ export function TodayScreen({
   const progress = today ? (today.daily_cap.sent / Math.max(today.daily_cap.cap, 1)) * 100 : 0
   const run = today?.current_run ?? today?.last_run ?? null
   const isScanRunning = actionLeadId === "scan" || run?.status === "running"
+  const runProgress = run?.progress
+  const runOutcomeMessage = run?.status === "completed"
+    ? ((run.summary?.processed ?? 0) === 0
+      ? "No pending backlog and no new matching permits were found."
+      : (run.summary?.sent ?? 0) === 0
+        ? "Backlog moved, but nothing sendable was ready this run."
+        : `${run.summary?.sent ?? 0} emails sent from this run.`)
+    : null
 
   return (
     <div className="space-y-5 pb-32">
@@ -46,11 +54,11 @@ export function TodayScreen({
         <Progress className="mt-4 h-2.5 bg-[#F1E6D9]" value={progress} />
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-[16px] bg-white/85 px-4 py-4">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Fresh</div>
-            <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.new ?? 0}</div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Backlog</div>
+            <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.automation_backlog_pending ?? today?.counts.new ?? 0}</div>
           </div>
           <div className="rounded-[16px] bg-white/85 px-4 py-4">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Review</div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Exceptions</div>
             <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.review ?? 0}</div>
           </div>
           <div className="rounded-[16px] bg-white/85 px-4 py-4">
@@ -71,21 +79,33 @@ export function TodayScreen({
         <Panel>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Run status</div>
+              <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Current scan</div>
               <div className="mt-2 text-lg font-semibold text-[#1A1A1A]">
                 {run?.status === "running"
-                  ? `Scanning, ${run.current_stage ?? "working"}`
+                  ? `${run.current_stage ?? "working"}`
                   : run?.status === "failed"
                     ? "Last scan failed"
                     : "Last scan"}
               </div>
               <p className="mt-1 text-sm leading-6 text-[#5F564C]">
                 {run?.status === "running"
-                  ? `${run.counters?.permits_found ?? 0} permits found so far`
+                  ? `${runProgress?.claimed ?? 0} claimed, ${runProgress?.processed ?? 0} processed, ${runProgress?.sent ?? 0} sent`
                   : run?.summary
-                    ? `${run.summary.leads_created ?? 0} leads created, ${run.summary.leads_ready ?? 0} ready, ${run.summary.leads_review ?? 0} review`
+                    ? `${run.summary.claimed ?? 0} claimed, ${run.summary.processed ?? 0} processed, ${run.summary.sent ?? 0} sent`
                     : "No runs yet"}
               </p>
+              {runProgress ? (
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[#6B5A48] sm:grid-cols-5">
+                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Backlog {runProgress.backlog_pending}</div>
+                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Claimed {runProgress.claimed}</div>
+                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Processed {runProgress.processed}</div>
+                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Fresh {runProgress.fresh_inserted}</div>
+                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Remaining {runProgress.remaining}</div>
+                </div>
+              ) : null}
+              {runOutcomeMessage ? (
+                <p className="mt-3 text-sm leading-6 text-[#5F564C]">{runOutcomeMessage}</p>
+              ) : null}
             </div>
             {run?.status === "running" ? (
               <LoaderCircle className="h-5 w-5 animate-spin text-[#D4691A]" />
@@ -105,26 +125,26 @@ export function TodayScreen({
               {actionLeadId === null ? "Send all ready" : "Working"}
             </Button>
           </div>
-        <div className="mt-4 text-sm leading-6 text-[#5F564C]">
-          Use the lead drawer to override email choices, move dead-end leads into Email Required, or launch a text from your phone when email is not ready.
-        </div>
-      </Panel>
+          <div className="mt-4 text-sm leading-6 text-[#5F564C]">
+            Scan now drains queued backlog first, tops up with fresh DOB permits only when needed, then resolves, enriches, routes, drafts, and sends in the background.
+          </div>
+        </Panel>
       </div>
 
       <Panel>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Fresh from scan</div>
-        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.new ?? 0} freshly processed leads</div>
+        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Automation backlog</div>
+        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.automation_backlog_pending ?? today?.counts.new ?? 0} pending leads</div>
         <div className="mt-2 text-sm leading-6 text-[#5F564C]">
-          These leads have already gone through resolve, enrichment, and routing. Open any of them to review the result, but the raw pre-enrichment rows stay out of your way now.
+          This is the true unprocessed queue. Scan claims from here first, then only fetches fresh permits if it still needs more work to fill the run.
         </div>
         <div className="mt-4 space-y-3">
-          {(today?.new_leads ?? []).slice(0, 6).map((lead) => (
+          {(today?.automation_backlog ?? today?.new_leads ?? []).slice(0, 6).map((lead) => (
             <div key={lead.id} className="rounded-[16px] border border-[#EEE4D7] px-4 py-4">
               <button className="w-full text-left transition hover:text-[#D4691A]" onClick={() => onOpenLead(lead)} type="button">
                 <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.applicant_name || lead.address}</div>
                 <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
                 <div className="mt-2 text-xs text-[#8B7D6B]">
-                  Relevance {leadSummary(lead)} | Status {formatLeadStatus(lead.status)}
+                  Relevance {leadSummary(lead)} | Waiting to be processed
                 </div>
               </button>
               <div className="mt-3 flex gap-2">
@@ -139,9 +159,35 @@ export function TodayScreen({
               </div>
             </div>
           ))}
-          {!(today?.new_leads ?? []).length ? (
+          {!(today?.automation_backlog ?? today?.new_leads ?? []).length ? (
             <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
-              The latest scan has not surfaced any fresh processed leads yet.
+              There is no pending backlog right now.
+            </div>
+          ) : null}
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Processed this run</div>
+        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.processed_this_run.length ?? 0} recently processed leads</div>
+        <div className="mt-2 text-sm leading-6 text-[#5F564C]">
+          These leads were claimed by the current or last scan run and already moved through resolve, enrichment, route selection, and draft generation.
+        </div>
+        <div className="mt-4 space-y-3">
+          {(today?.processed_this_run ?? []).slice(0, 6).map((lead) => (
+            <div key={lead.id} className="rounded-[16px] border border-[#EEE4D7] px-4 py-4">
+              <button className="w-full text-left transition hover:text-[#D4691A]" onClick={() => onOpenLead(lead)} type="button">
+                <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.applicant_name || lead.address}</div>
+                <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
+                <div className="mt-2 text-xs text-[#8B7D6B]">
+                  Relevance {leadSummary(lead)} | Status {formatLeadStatus(lead.status)}
+                </div>
+              </button>
+            </div>
+          ))}
+          {!(today?.processed_this_run ?? []).length ? (
+            <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
+              Nothing has been processed in the current visible run yet.
             </div>
           ) : null}
         </div>
@@ -176,8 +222,8 @@ export function TodayScreen({
       </Panel>
 
       <Panel>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Needs review</div>
-        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.review ?? 0} leads to review</div>
+        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Exceptions</div>
+        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.review ?? 0} leads need a decision</div>
         <div className="mt-4 space-y-3">
           {(today?.review ?? []).slice(0, 6).map((lead) => (
             <button

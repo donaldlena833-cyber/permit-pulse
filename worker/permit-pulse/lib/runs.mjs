@@ -24,10 +24,11 @@ export async function updateRun(db, runId, patch) {
   return run || null;
 }
 
-export async function updateRunStage(db, runId, stage, counters = {}) {
+export async function updateRunStage(db, runId, stage, counters = {}, extraPatch = {}) {
   return updateRun(db, runId, {
     current_stage: stage,
     ...counters,
+    ...extraPatch,
   });
 }
 
@@ -35,22 +36,24 @@ export async function heartbeatRun(db, runId) {
   return updateRun(db, runId, {});
 }
 
-export async function completeRun(db, runId, counters = {}) {
+export async function completeRun(db, runId, counters = {}, extraPatch = {}) {
   return updateRun(db, runId, {
     status: 'completed',
     current_stage: null,
     completed_at: nowIso(),
     ...counters,
+    ...extraPatch,
   });
 }
 
-export async function failRun(db, runId, error, counters = {}) {
+export async function failRun(db, runId, error, counters = {}, extraPatch = {}) {
   return updateRun(db, runId, {
     status: 'failed',
     last_error: error instanceof Error ? error.message : String(error || 'Run failed'),
     error_count: (counters.error_count || 0) + 1,
     completed_at: nowIso(),
     ...counters,
+    ...extraPatch,
   });
 }
 
