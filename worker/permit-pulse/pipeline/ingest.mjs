@@ -71,6 +71,27 @@ const INFERRED_KEYWORDS = METROGLASS_PROFILE.inferredKeywords.map((keyword) => n
 const NEGATIVE_KEYWORDS = METROGLASS_PROFILE.negativeKeywords.map((keyword) => normalizeText(keyword));
 const ARCHITECT_SIGNAL_TERMS = ['architect', 'architects', 'architecture', 'design', 'designer', 'interior', 'interiors', 'studio', 'atelier'];
 const RESIDENTIAL_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|interior|apartment|condo|co-op|shower|partition|mirror|cabinet|plumbing/i;
+const WIDER_INTERIOR_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|alteration|interior|apartment|condo|co-op|partition|door|mirror|cabinet|finish|fixture|tile|millwork|residential|dwelling|plumbing/i;
+const DEFAULT_SOURCE_FETCH_LIMIT = 1500;
+const DEFAULT_ENRICH_PER_RUN_LIMIT = 150;
+const HARD_EXCLUDED_PERMIT_TYPES = [
+  'sidewalk shed',
+  'construction fence',
+  'supported scaffold',
+  'suspended scaffold',
+  'sprinklers',
+  'standpipe',
+  'solar',
+  'curb cut',
+  'antenna',
+  'boiler equipment',
+  'full demolition',
+  'protection and mechanical methods',
+  'earth work',
+  'foundation',
+  'support of excavation',
+];
+const CONDITIONAL_PERMIT_TYPES = ['plumbing', 'mechanical systems', 'structural'];
 
 function countKeywordHits(text, keywords) {
   return keywords.filter((keyword) => text.includes(keyword));
@@ -89,6 +110,10 @@ export function scorePermitRelevance(input) {
   }
 
   const lower = normalizeText(workDescription);
+  const permitType = normalizeText(permit?.permit_type || '');
+  if (permitType && HARD_EXCLUDED_PERMIT_TYPES.some((candidate) => permitType.includes(candidate))) {
+    return { score: 0, keyword: permit?.permit_type || null, matchType: 'negative' };
+  }
   const directHits = countKeywordHits(lower, DIRECT_KEYWORDS);
   const inferredHits = countKeywordHits(lower, INFERRED_KEYWORDS);
   const negativeHits = countKeywordHits(lower, NEGATIVE_KEYWORDS);
@@ -135,8 +160,42 @@ export function scorePermitRelevance(input) {
 
   if (permit) {
     const architectFocused = hasArchitectSignal(permit.applicant_name, permit.owner_name);
+    const conditionalPermitType = CONDITIONAL_PERMIT_TYPES.some((candidate) => permitType.includes(candidate));
+
+    if (permitType.includes('general construction') && WIDER_INTERIOR_SCOPE_PATTERN.test(lower) && architectFocused) {
+      const boosted = Math.max(best, 0.45);
+      if (boosted > best) {
+        best = boosted;
+        keyword = keyword || 'architect';
+        matchType = matchType === 'none' ? 'inferred' : matchType;
+      }
+    } else if (permitType.includes('plumbing') && WIDER_INTERIOR_SCOPE_PATTERN.test(lower)) {
+      const boosted = Math.max(best, architectFocused ? 0.4 : 0.25);
+      if (boosted > best) {
+        best = boosted;
+        keyword = keyword || 'plumbing';
+        matchType = matchType === 'none' ? 'inferred' : matchType;
+      }
+    } else if (architectFocused && conditionalPermitType && WIDER_INTERIOR_SCOPE_PATTERN.test(lower)) {
+      const boosted = Math.max(best, 0.22);
+      if (boosted > best) {
+        best = boosted;
+        keyword = keyword || 'architect';
+        matchType = matchType === 'none' ? 'inferred' : matchType;
+      }
+    }
+
     if (architectFocused && RESIDENTIAL_SCOPE_PATTERN.test(lower)) {
       const boosted = best > 0 ? Math.min(best + 0.15, 0.95) : 0.35;
+      if (boosted > best) {
+        best = boosted;
+        keyword = keyword || 'architect';
+        if (matchType === 'none') {
+          matchType = 'inferred';
+        }
+      }
+    } else if (architectFocused && WIDER_INTERIOR_SCOPE_PATTERN.test(lower)) {
+      const boosted = Math.max(best, 0.18);
       if (boosted > best) {
         best = boosted;
         keyword = keyword || 'architect';
@@ -304,8 +363,10 @@ export async function runIngestStage(env, db, runId, config) {
   const activeSources = Array.isArray(config.active_sources) && config.active_sources.length > 0
     ? config.active_sources
     : ['nyc_dob'];
-  const maxPermitsPerSource = Number(config.scan_limit_per_source || 0);
+  const configuredPermitsPerSource = Number(config.scan_limit_per_source || 0);
+  const maxPermitsPerSource = configuredPermitsPerSource > 0 ? configuredPermitsPerSource : DEFAULT_SOURCE_FETCH_LIMIT;
   const scanWindowDays = Math.max(1, Number(config.scan_window_days || 14));
+  const maxLeadsToEnrichPerRun = Math.max(25, Number(config.max_leads_to_enrich_per_run || DEFAULT_ENRICH_PER_RUN_LIMIT));
 
   const since = new Date();
   since.setDate(since.getDate() - scanWindowDays);
@@ -344,7 +405,9 @@ export async function runIngestStage(env, db, runId, config) {
 
       if (result.created) {
         counters.leads_created += 1;
-        leadsToEnrich.push(result.leadId);
+        if (leadsToEnrich.length < maxLeadsToEnrichPerRun) {
+          leadsToEnrich.push(result.leadId);
+        }
       }
     }
   }

@@ -23,7 +23,6 @@ export default {
     const where = [
       `issued_date >= '${sinceIso}'`,
       `permit_status='Permit Issued'`,
-      `work_type='General Construction'`,
       `(${boroughFilters})`,
     ].join(' AND ');
     const rows = [];
