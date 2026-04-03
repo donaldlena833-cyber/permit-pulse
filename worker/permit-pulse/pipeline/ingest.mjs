@@ -262,6 +262,15 @@ function isDuplicatePermitInsertError(error) {
     && message.includes('idx_v2_leads_permit_key');
 }
 
+function isMissingAutomationQueueColumnError(error) {
+  const message = String(error instanceof Error ? error.message : error || '');
+  return message.includes('automation_state')
+    || message.includes('automation_claimed_by_run')
+    || message.includes('automation_claimed_at')
+    || message.includes('automation_processed_at')
+    || message.includes('42703');
+}
+
 async function ingestPermit(db, runId, permit, minThreshold) {
   const permitKey = buildPermitKey(permit.source, permit.permit_number);
   const relevance = scorePermitRelevance(permit);
@@ -291,57 +300,70 @@ async function ingestPermit(db, runId, permit, minThreshold) {
     return { duplicate: true, leadId: duplicateLead.id, relevance };
   }
 
+  const leadPayload = {
+    permit_number: permit.permit_number,
+    permit_key: permitKey,
+    source: permit.source,
+    address: normalizeWhitespace(permit.address),
+    borough_or_municipality: permit.borough_or_municipality,
+    state: permit.state || 'NY',
+    work_description: permit.work_description,
+    filing_date: permit.filing_date,
+    permit_type: permit.permit_type,
+    applicant_name: cleanCompanyName(permit.applicant_name),
+    owner_name: cleanCompanyName(permit.owner_name),
+    relevance_score: relevance.score,
+    relevance_keyword: relevance.keyword,
+    quality_tier: deriveQualityTier(relevance.score),
+    status: 'new',
+    automation_state: 'pending',
+    automation_claimed_by_run: null,
+    automation_claimed_at: null,
+    automation_processed_at: null,
+    updated_at: nowIso(),
+  };
+
   let lead;
   try {
-    [lead] = await db.insert('v2_leads', {
-      permit_number: permit.permit_number,
-      permit_key: permitKey,
-      source: permit.source,
-      address: normalizeWhitespace(permit.address),
-      borough_or_municipality: permit.borough_or_municipality,
-      state: permit.state || 'NY',
-      work_description: permit.work_description,
-      filing_date: permit.filing_date,
-      permit_type: permit.permit_type,
-      applicant_name: cleanCompanyName(permit.applicant_name),
-      owner_name: cleanCompanyName(permit.owner_name),
-      relevance_score: relevance.score,
-      relevance_keyword: relevance.keyword,
-      quality_tier: deriveQualityTier(relevance.score),
-      status: 'new',
-      automation_state: 'pending',
-      automation_claimed_by_run: null,
-      automation_claimed_at: null,
-      automation_processed_at: null,
-      updated_at: nowIso(),
-    });
+    [lead] = await db.insert('v2_leads', leadPayload);
   } catch (error) {
-    if (!isDuplicatePermitInsertError(error)) {
-      throw error;
+    if (isMissingAutomationQueueColumnError(error)) {
+      const {
+        automation_state: _automationState,
+        automation_claimed_by_run: _automationClaimedByRun,
+        automation_claimed_at: _automationClaimedAt,
+        automation_processed_at: _automationProcessedAt,
+        ...legacyLeadPayload
+      } = leadPayload;
+      [lead] = await db.insert('v2_leads', legacyLeadPayload);
+    } else {
+      if (!isDuplicatePermitInsertError(error)) {
+        throw error;
+      }
+
+      const racedDuplicate = await findDuplicateLead(
+        db,
+        permitKey,
+        normalizeWhitespace(permit.address),
+        cleanCompanyName(permit.applicant_name),
+      );
+
+      if (!racedDuplicate) {
+        throw error;
+      }
+
+      await recordDuplicatePermit(db, racedDuplicate.id, permit, relevance);
+      await appendLeadEvent(db, {
+        lead_id: racedDuplicate.id,
+        run_id: runId,
+        event_type: 'duplicate_collapsed',
+        detail: {
+          permit_number: permit.permit_number,
+          permit_key: permitKey,
+        },
+      });
+      return { duplicate: true, leadId: racedDuplicate.id, relevance };
     }
-
-    const racedDuplicate = await findDuplicateLead(
-      db,
-      permitKey,
-      normalizeWhitespace(permit.address),
-      cleanCompanyName(permit.applicant_name),
-    );
-
-    if (!racedDuplicate) {
-      throw error;
-    }
-
-    await recordDuplicatePermit(db, racedDuplicate.id, permit, relevance);
-    await appendLeadEvent(db, {
-      lead_id: racedDuplicate.id,
-      run_id: runId,
-      event_type: 'duplicate_collapsed',
-      detail: {
-        permit_number: permit.permit_number,
-        permit_key: permitKey,
-      },
-    });
-    return { duplicate: true, leadId: racedDuplicate.id, relevance };
   }
 
   await appendLeadEvent(db, {

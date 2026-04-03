@@ -1,7 +1,7 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
 import { createSupabaseClient, eq, inList, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
-import { countPendingAutomationLeads, summarizeRunQueue } from './lib/automation-queue.mjs';
+import { countPendingAutomationLeads, listPendingAutomationLeads, summarizeRunQueue } from './lib/automation-queue.mjs';
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle, startLeadBatchAutomation } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
 import { sendLead, sendReadyLeads } from './pipeline/send.mjs';
@@ -230,11 +230,7 @@ async function getTodayPayload(env) {
     presentRun(db, currentRun),
     presentRun(db, lastRun),
     countPendingAutomationLeads(db),
-    db.select('v2_leads', {
-      filters: [eq('status', 'new'), eq('automation_state', 'pending')],
-      ordering: [order('relevance_score', 'desc'), order('created_at', 'asc')],
-      limit: 20,
-    }),
+    listPendingAutomationLeads(db, 20),
     db.select('v2_leads', {
       filters: [eq('status', 'ready')],
       ordering: [order('updated_at', 'desc')],

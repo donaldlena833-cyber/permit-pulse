@@ -455,12 +455,26 @@ async function executeAutomationRun(env, db, run, config, options = {}) {
 }
 
 async function getQueuedLeadIds(db, excludedLeadIds = [], limit = 10, minRelevance = 0.15) {
-  const queued = await db.select('v2_leads', {
-    columns: 'id',
-    filters: [eq('status', 'new'), eq('automation_state', 'pending'), gte('relevance_score', minRelevance)],
-    ordering: [order('relevance_score', 'desc'), order('created_at', 'asc')],
-    limit,
-  });
+  let queued;
+  try {
+    queued = await db.select('v2_leads', {
+      columns: 'id',
+      filters: [eq('status', 'new'), eq('automation_state', 'pending'), gte('relevance_score', minRelevance)],
+      ordering: [order('relevance_score', 'desc'), order('created_at', 'asc')],
+      limit,
+    });
+  } catch (error) {
+    const message = String(error instanceof Error ? error.message : error || '');
+    if (!message.includes('automation_state') && !message.includes('42703')) {
+      throw error;
+    }
+    queued = await db.select('v2_leads', {
+      columns: 'id',
+      filters: [eq('status', 'new'), gte('relevance_score', minRelevance)],
+      ordering: [order('relevance_score', 'desc'), order('created_at', 'asc')],
+      limit,
+    });
+  }
 
   return queued
     .map((row) => row.id)
