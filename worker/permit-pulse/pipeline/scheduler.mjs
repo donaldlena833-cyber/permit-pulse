@@ -21,15 +21,8 @@ async function runProspectSchedules(env, db, config, now) {
 
   if (matchesLocalClock(now, timeZone, config.prospect_initial_send_time || '11:00')) {
     results.push(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
-      mode: 'prospect_initial_send',
-      slotKey: buildSlotKey('prospect_initial_send', now, timeZone),
-    }));
-  }
-
-  if (matchesLocalClock(now, timeZone, config.prospect_follow_up_send_time || '23:30')) {
-    results.push(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
-      mode: 'prospect_follow_up_send',
-      slotKey: buildSlotKey('prospect_follow_up_send', now, timeZone),
+      mode: 'prospect_daily_send',
+      slotKey: buildSlotKey('prospect_daily_send', now, timeZone),
     }));
   }
 

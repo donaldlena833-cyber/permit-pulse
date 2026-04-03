@@ -68,10 +68,11 @@ export function fetchLeads(status: string, page = 1, limit = 20) {
   return requestJson<LeadsPayload>(`/api/leads?${params.toString()}`)
 }
 
-export function fetchProspects(status: string, category: string, page = 1, limit = 20) {
+export function fetchProspects(status: string, category: string, q = "", page = 1, limit = 20) {
   const params = new URLSearchParams({
     status,
     category,
+    q,
     page: String(page),
     limit: String(limit),
   })
@@ -98,6 +99,22 @@ export function sendProspectNow(prospectId: string) {
     `/api/prospects/${encodeURIComponent(prospectId)}/send`,
     { method: "POST" },
   )
+}
+
+export function markProspectReply(prospectId: string, tone: "neutral" | "positive" = "neutral") {
+  return requestJson(`/api/prospects/${encodeURIComponent(prospectId)}/reply`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ tone }),
+  })
+}
+
+export function markProspectBounced(prospectId: string) {
+  return requestJson(`/api/prospects/${encodeURIComponent(prospectId)}/bounce`, {
+    method: "POST",
+  })
 }
 
 export function enrichLeadNow(leadId: string) {
@@ -193,7 +210,17 @@ export function updateDraft(leadId: string, draft: { subject: string; body: stri
 }
 
 export function importProspectsCsv(payload: { filename: string; category: string; rows: Array<Record<string, string>> }) {
-  return requestJson<{ batch_id: string; filename: string; category: string; imported: number; skipped: number }>(
+  return requestJson<{
+    batch_id: string
+    filename: string
+    category: string
+    imported: number
+    skipped: number
+    skipped_by_reason?: {
+      missing_valid_email?: number
+      duplicate_in_file?: number
+    }
+  }>(
     "/api/prospects/import",
     {
       method: "POST",

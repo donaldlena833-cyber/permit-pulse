@@ -10,11 +10,11 @@ import {
 import { nowIso } from './utils.mjs';
 
 export const PROSPECT_CATEGORIES = [
+  'architect',
   'interior_designer',
-  'gc',
   'property_manager',
   'project_manager',
-  'architect',
+  'gc',
 ];
 
 export const PROSPECT_STATUSES = ['new', 'drafted', 'sent', 'replied', 'opted_out', 'archived'];
@@ -26,6 +26,37 @@ const CATEGORY_LABELS = {
   project_manager: 'Project Manager',
   architect: 'Architect',
 };
+
+const GENERIC_LOCAL_PARTS = new Set([
+  'admin',
+  'contact',
+  'desk',
+  'hello',
+  'hi',
+  'info',
+  'inquiries',
+  'inquiry',
+  'mail',
+  'office',
+  'operations',
+  'sales',
+  'service',
+  'studio',
+  'team',
+]);
+
+const FREE_EMAIL_DOMAINS = new Set([
+  'aol.com',
+  'gmail.com',
+  'hotmail.com',
+  'icloud.com',
+  'live.com',
+  'msn.com',
+  'outlook.com',
+  'proton.me',
+  'protonmail.com',
+  'yahoo.com',
+]);
 
 const FIELD_ALIASES = {
   company_name: ['company', 'company_name', 'company name', 'firm', 'organization', 'organisation', 'studio', 'business'],
@@ -125,10 +156,70 @@ function pickField(row, aliases) {
 function greetingName(prospect) {
   const contact = compactText(prospect.contact_name);
   if (!contact) {
-    return 'there';
+    return null;
   }
 
-  return contact.split(/\s+/)[0] || 'there';
+  return contact.split(/\s+/)[0] || null;
+}
+
+function emailDomain(value) {
+  const normalized = normalizeEmail(value);
+  if (!normalized || !normalized.includes('@')) {
+    return null;
+  }
+  return normalized.split('@').pop() || null;
+}
+
+function emailLocalPart(value) {
+  const normalized = normalizeEmail(value);
+  if (!normalized || !normalized.includes('@')) {
+    return null;
+  }
+  return normalized.split('@')[0] || null;
+}
+
+function normalizeDomain(value) {
+  const text = compactText(value)?.toLowerCase() || null;
+  if (!text) {
+    return null;
+  }
+  return text.replace(/^www\./, '').trim();
+}
+
+function websiteDomain(value) {
+  const website = normalizeWebsite(value);
+  if (!website) {
+    return null;
+  }
+  try {
+    return normalizeDomain(new URL(website).hostname);
+  } catch {
+    return normalizeDomain(website.replace(/^https?:\/\//i, '').split('/')[0] || null);
+  }
+}
+
+function companyDomainForProspect(prospect) {
+  const website = websiteDomain(prospect?.website);
+  if (website) {
+    return website;
+  }
+
+  const domain = normalizeDomain(emailDomain(prospect?.email_address));
+  if (!domain || FREE_EMAIL_DOMAINS.has(domain)) {
+    return null;
+  }
+  return domain;
+}
+
+function greetingLine(prospect) {
+  const localPart = emailLocalPart(prospect?.email_address);
+  const firstName = greetingName(prospect);
+
+  if (!firstName || (localPart && GENERIC_LOCAL_PARTS.has(localPart))) {
+    return 'Hello,';
+  }
+
+  return `Hi ${firstName},`;
 }
 
 function categoryPitch(category) {
@@ -163,8 +254,124 @@ function topicLine(prospect) {
   return 'construction teams';
 }
 
+function categoryFocusLine(prospect) {
+  if (prospect.category === 'architect') {
+    return 'We support architects with precise detailing, clean field coordination, and residential glass execution that respects the design intent.';
+  }
+  if (prospect.category === 'interior_designer') {
+    return 'We help interior designers translate shower, mirror, partition, and cabinet glass ideas into clean installs without losing the original concept.';
+  }
+  if (prospect.category === 'property_manager') {
+    return 'We help property managers move replacement, upgrade, and tenant-improvement glass work quickly without dragging out coordination.';
+  }
+  if (prospect.category === 'project_manager') {
+    return 'We help project managers keep glass scope moving with responsive measurements, pricing, fabrication, and install coordination.';
+  }
+  return 'We support general contractors with fast glass pricing, measurements, fabrication, and installation so custom scope does not become a bottleneck.';
+}
+
+function trimTrailingPunctuation(value) {
+  return String(value || '').replace(/[.,;:!?-]+$/g, '').trim();
+}
+
+function sentenceCase(value) {
+  const text = compactText(value);
+  if (!text) {
+    return null;
+  }
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function firstDescriptionSnippet(prospect, maxLength = 180) {
+  const notes = compactText(prospect?.notes);
+  if (!notes) {
+    return null;
+  }
+
+  const firstSentence = notes
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .find(Boolean) || notes;
+  const trimmed = trimTrailingPunctuation(firstSentence);
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, maxLength - 3).trim()}...`;
+}
+
+function personalizedContextLine(prospect) {
+  const snippet = firstDescriptionSnippet(prospect);
+  if (!snippet) {
+    return null;
+  }
+
+  const normalized = snippet.toLowerCase();
+  const asStatement = /^(specializ|focus|work|design|manage|lead|deliver|build|create|handle|oversee|operate|renovat|develop|serve|provide)/i
+    .test(normalized);
+
+  const line = asStatement
+    ? `I noticed ${snippet}, which felt especially aligned with the kind of detailed glass scope we support.`
+    : `I noticed your focus on ${snippet}, which felt especially aligned with the kind of detailed glass scope we support.`;
+
+  return sentenceCase(line);
+}
+
+function shouldUseStoredInitialDraft(prospect) {
+  return prospect?.status === 'drafted' || Boolean(prospect?.first_sent_at);
+}
+
 function isProspectSuppressed(prospect) {
   return Boolean(prospect?.do_not_contact || prospect?.status === 'opted_out' || prospect?.opted_out_at);
+}
+
+function buildSuppressedDomainMap(prospects, outcomes = []) {
+  const suppressed = new Map();
+
+  for (const prospect of prospects || []) {
+    const domain = companyDomainForProspect(prospect);
+    if (!domain) {
+      continue;
+    }
+
+    if (prospect.do_not_contact || prospect.status === 'opted_out' || prospect.opted_out_at) {
+      suppressed.set(domain, 'company_opted_out');
+      continue;
+    }
+
+    if (prospect.status === 'replied' || prospect.last_replied_at) {
+      if (!suppressed.has(domain)) {
+        suppressed.set(domain, 'company_replied');
+      }
+    }
+  }
+
+  for (const outcome of outcomes || []) {
+    if (String(outcome?.outcome || '').toLowerCase() !== 'bounced') {
+      continue;
+    }
+
+    const domain = normalizeDomain(emailDomain(outcome.email_address));
+    if (!domain || FREE_EMAIL_DOMAINS.has(domain) || suppressed.has(domain)) {
+      continue;
+    }
+    suppressed.set(domain, 'company_bounced');
+  }
+
+  return suppressed;
+}
+
+function companySuppressionReason(prospect, suppressedDomains) {
+  if (!suppressedDomains || !(suppressedDomains instanceof Map)) {
+    return null;
+  }
+  const domain = companyDomainForProspect(prospect);
+  if (!domain) {
+    return null;
+  }
+  return suppressedDomains.get(domain) || null;
 }
 
 function deriveQueueState(prospect, followUps = []) {
@@ -229,6 +436,17 @@ function normalizeProspectRow(row, category) {
   };
 }
 
+function normalizeProspectRowResult(row, category) {
+  const normalized = normalizeProspectRow(row, category);
+  if (normalized) {
+    return { row: normalized, reason: null };
+  }
+  return {
+    row: null,
+    reason: 'missing_valid_email',
+  };
+}
+
 function findProspectFollowUps(followUps, prospectId) {
   return (followUps || []).filter((row) => String(row.prospect_id) === String(prospectId));
 }
@@ -240,13 +458,19 @@ function hydrateProspect(prospect, options = {}) {
 
   const followUps = Array.isArray(options.followUps) ? options.followUps : [];
   const draft = buildProspectDraft(prospect);
+  const useStoredDraft = shouldUseStoredInitialDraft(prospect);
+  const companySuppressed = companySuppressionReason(prospect, options.suppressedDomains);
+  const queueState = companySuppressed && !isProspectSuppressed(prospect) && !['replied', 'archived'].includes(String(prospect.status || ''))
+    ? 'suppressed'
+    : deriveQueueState(prospect, followUps);
   return {
     ...prospect,
-    draft_subject: prospect.draft_subject || draft.subject,
-    draft_body: prospect.draft_body || draft.body,
-    queue_state: deriveQueueState(prospect, followUps),
+    draft_subject: useStoredDraft ? prospect.draft_subject || draft.subject : draft.subject,
+    draft_body: useStoredDraft ? prospect.draft_body || draft.body : draft.body,
+    queue_state: queueState,
     next_follow_up: followUps.find((followUp) => followUp.status === 'pending') || null,
-    automation_block_reason: isProspectSuppressed(prospect) ? 'opted_out' : null,
+    automation_block_reason: isProspectSuppressed(prospect) ? 'opted_out' : companySuppressed,
+    company_domain: companyDomainForProspect(prospect),
   };
 }
 
@@ -314,22 +538,105 @@ function summaryLabel(prospect) {
 }
 
 function baseFollowUpDraft(prospect) {
+  const personalizedLine = personalizedContextLine(prospect);
+  const followUpStep = Number(prospect?.follow_up_step || 1);
+  const secondTouch = followUpStep >= 2;
+
   return {
-    subject: `Quick follow-up from MetroGlass Pro`,
+    subject: secondTouch
+      ? `Final follow-up from MetroGlass Pro${prospect.company_name ? ` for ${prospect.company_name}` : ''}`
+      : `Quick follow-up from MetroGlass Pro${prospect.company_name ? ` for ${prospect.company_name}` : ''}`,
     body: [
-      `Hi ${greetingName(prospect)},`,
+      greetingLine(prospect),
       '',
-      `Following up on my note from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`,
+      secondTouch
+        ? `One last follow-up from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`
+        : `Following up on my note from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`,
+      personalizedLine,
       '',
-      'If there is any shower, partition, mirror, railing, storefront, or custom glass work coming up, I would be happy to connect.',
+      categoryFocusLine(prospect),
       '',
-      'Best,',
+      secondTouch
+        ? 'If there is any upcoming glass scope, I would still be glad to send over our MetroGlass Pro About Us one-pager and put together quick next steps.'
+        : 'If there is any upcoming glass scope, I would be happy to connect and send over our MetroGlass Pro About Us one-pager again if helpful.',
+      '',
+      'Warm regards,',
       'Donald Lena',
       'MetroGlass Pro',
       '(332) 999-3846',
-      'operations@metroglasspro.com',
       'metroglasspro.com',
-    ].join('\n'),
+    ].filter(Boolean).join('\n'),
+  };
+}
+
+function initialSubject(prospect) {
+  const subjectBase = compactText(prospect.company_name) || compactText(prospect.contact_name) || 'your team';
+  const snippet = firstDescriptionSnippet(prospect, 48);
+  return snippet ? `MetroGlass Pro for ${subjectBase} | ${snippet}` : `MetroGlass Pro for ${subjectBase}`;
+}
+
+function initialBody(prospect) {
+  const personalizedLine = personalizedContextLine(prospect);
+
+  return [
+    greetingLine(prospect),
+    '',
+    `I’m Donald from MetroGlass Pro. We ${categoryPitch(prospect.category)} across NYC, New Jersey, and Connecticut.`,
+    '',
+    personalizedLine,
+    '',
+    categoryFocusLine(prospect),
+    '',
+    'I attached our MetroGlass Pro About Us one-pager so you can get a quick feel for the work and responsiveness we bring to projects.',
+    '',
+    'If you have a project where glass scope still needs a responsive partner, I’d be happy to connect, turn around pricing quickly, and help keep things moving.',
+    '',
+    'Warm regards,',
+    'Donald Lena',
+    'MetroGlass Pro',
+    '(332) 999-3846',
+    'metroglasspro.com',
+  ].filter(Boolean).join('\n');
+}
+
+function resolveInitialDraft(prospect) {
+  const generated = {
+    subject: initialSubject(prospect),
+    body: initialBody(prospect),
+  };
+
+  if (!shouldUseStoredInitialDraft(prospect)) {
+    return generated;
+  }
+
+  return {
+    subject: compactText(prospect.draft_subject) || generated.subject,
+    body: compactMultilineText(prospect.draft_body) || generated.body,
+  };
+}
+
+function resolveFollowUpDraft(prospect, options = {}) {
+  if (options.subject || options.body) {
+    return {
+      subject: compactText(options.subject) || baseFollowUpDraft(prospect).subject,
+      body: compactMultilineText(options.body) || baseFollowUpDraft(prospect).body,
+    };
+  }
+
+  return baseFollowUpDraft(prospect);
+}
+
+function updatedStoredInitialDraft(prospect, subject, body) {
+  if (shouldUseStoredInitialDraft(prospect)) {
+    return {
+      draft_subject: subject,
+      draft_body: body,
+    };
+  }
+
+  return {
+    draft_subject: prospect.draft_subject || subject,
+    draft_body: prospect.draft_body || body,
   };
 }
 
@@ -340,31 +647,43 @@ async function ensureProspectFollowUp(db, prospect, config) {
     limit: 5,
   }).catch(() => []);
 
-  if (existing.some((row) => Number(row.step_number || 0) === 1)) {
-    return existing.find((row) => Number(row.step_number || 0) === 1) || null;
+  const dateKey = formatLocalDateKey(new Date(prospect.first_sent_at || prospect.last_sent_at || nowIso()), config.prospect_timezone);
+  const offsets = Array.isArray(config.prospect_follow_up_offsets_days) && config.prospect_follow_up_offsets_days.length > 0
+    ? config.prospect_follow_up_offsets_days
+    : [Number(config.prospect_follow_up_delay_days || 3), 14];
+  const createdRows = [];
+
+  for (const [index, offset] of offsets.map((value) => Number(value || 0)).filter((value) => value > 0).entries()) {
+    const stepNumber = index + 1;
+    if (existing.some((row) => Number(row.step_number || 0) === stepNumber)) {
+      continue;
+    }
+
+    const scheduledDateKey = addDaysToDateKey(dateKey, offset);
+    const scheduledAt = zonedDateTimeToUtcIso(
+      scheduledDateKey,
+      config.prospect_initial_send_time || '11:00',
+      config.prospect_timezone || 'America/New_York',
+    );
+    const draft = buildProspectFollowUpDraft({ ...prospect, follow_up_step: stepNumber });
+
+    const [row] = await db.insert('v2_prospect_follow_ups', {
+      prospect_id: prospect.id,
+      step_number: stepNumber,
+      scheduled_at: scheduledAt,
+      draft_subject: draft.subject,
+      draft_body: draft.body,
+      status: 'pending',
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    });
+
+    if (row) {
+      createdRows.push(row);
+    }
   }
 
-  const dateKey = formatLocalDateKey(new Date(prospect.first_sent_at || prospect.last_sent_at || nowIso()), config.prospect_timezone);
-  const scheduledDateKey = addDaysToDateKey(dateKey, Number(config.prospect_follow_up_delay_days || 3));
-  const scheduledAt = zonedDateTimeToUtcIso(
-    scheduledDateKey,
-    config.prospect_follow_up_send_time || '23:30',
-    config.prospect_timezone || 'America/New_York',
-  );
-  const draft = buildProspectFollowUpDraft(prospect);
-
-  const [row] = await db.insert('v2_prospect_follow_ups', {
-    prospect_id: prospect.id,
-    step_number: 1,
-    scheduled_at: scheduledAt,
-    draft_subject: draft.subject,
-    draft_body: draft.body,
-    status: 'pending',
-    created_at: nowIso(),
-    updated_at: nowIso(),
-  });
-
-  return row || null;
+  return createdRows[0] || existing.find((row) => Number(row.step_number || 0) === 1) || null;
 }
 
 async function cancelProspectFollowUps(db, prospectId, reason = 'status_changed') {
@@ -410,13 +729,18 @@ async function getProspectWithFollowUps(db, prospectId) {
 }
 
 async function sendProspectMessage(env, db, prospectId, options = {}) {
-  const { prospect, followUps } = await getProspectWithFollowUps(db, prospectId);
+  const [{ prospect, followUps }, allProspects, outcomes] = await Promise.all([
+    getProspectWithFollowUps(db, prospectId),
+    listAllProspects(db),
+    listRecentProspectOutcomes(db),
+  ]);
   if (!prospect) {
     throw new Error('Prospect not found');
   }
 
   const kind = options.kind === 'follow_up' ? 'follow_up' : 'initial';
-  const hydrated = hydrateProspect(prospect, { followUps });
+  const suppressedDomains = buildSuppressedDomainMap(allProspects, outcomes);
+  const hydrated = hydrateProspect(prospect, { followUps, suppressedDomains });
   const recipient = normalizeEmail(hydrated.email_address);
 
   if (!recipient) {
@@ -425,6 +749,19 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
 
   if (isProspectSuppressed(hydrated)) {
     throw new Error('Prospect is suppressed and cannot receive automation');
+  }
+
+  const domainSuppression = companySuppressionReason(hydrated, suppressedDomains);
+  if (domainSuppression && !isProspectSuppressed(hydrated)) {
+    await db.update('v2_prospects', [eq('id', prospectId)], {
+      status: hydrated.first_sent_at ? hydrated.status : 'archived',
+      updated_at: nowIso(),
+    }).catch(() => []);
+    await recordProspectEvent(db, prospectId, 'company_suppressed', options.actorType || 'system', options.actorId || null, {
+      reason: domainSuppression,
+      company_domain: companyDomainForProspect(hydrated),
+    });
+    throw new Error('Company domain is suppressed from further outreach');
   }
 
   if (kind === 'initial' && hydrated.first_sent_at) {
@@ -459,9 +796,16 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
     }
   }
 
-  const followUpDraft = kind === 'follow_up' ? buildProspectFollowUpDraft(hydrated) : null;
-  const draftSubject = compactText(options.subject) || (kind === 'follow_up' ? followUpDraft?.subject : hydrated.draft_subject) || '';
-  const draftBody = compactMultilineText(options.body) || (kind === 'follow_up' ? followUpDraft?.body : hydrated.draft_body) || '';
+  const resolvedInitialDraft = resolveInitialDraft(hydrated);
+  const resolvedFollowUpDraft = kind === 'follow_up'
+    ? resolveFollowUpDraft({ ...hydrated, follow_up_step: Number(options.stepNumber || 1) }, options)
+    : null;
+  const draftSubject = kind === 'follow_up'
+    ? resolvedFollowUpDraft?.subject || ''
+    : compactText(options.subject) || resolvedInitialDraft.subject || '';
+  const draftBody = kind === 'follow_up'
+    ? resolvedFollowUpDraft?.body || ''
+    : compactMultilineText(options.body) || resolvedInitialDraft.body || '';
 
   const gmail = await sendAutomationEmail(env, {
     recipient,
@@ -472,8 +816,7 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
 
   const sentAt = nowIso();
   const nextPatch = {
-    draft_subject: kind === 'initial' ? draftSubject : hydrated.draft_subject,
-    draft_body: kind === 'initial' ? draftBody : hydrated.draft_body,
+    ...(kind === 'initial' ? updatedStoredInitialDraft(hydrated, draftSubject, draftBody) : {}),
     status: 'sent',
     first_sent_at: kind === 'initial' ? (hydrated.first_sent_at || sentAt) : hydrated.first_sent_at,
     last_sent_at: sentAt,
@@ -551,31 +894,11 @@ export function formatProspectCategory(category) {
 }
 
 export function buildProspectDraft(prospect) {
-  const subjectBase = compactText(prospect.company_name) || compactText(prospect.contact_name) || 'your team';
-
-  return {
-    subject: `MetroGlass Pro for ${subjectBase}`,
-    body: [
-      `Hi ${greetingName(prospect)},`,
-      '',
-      `I’m Donald from MetroGlass Pro. We ${categoryPitch(prospect.category)} across NYC, New Jersey, and Connecticut.`,
-      '',
-      'We handle custom showers, partitions, mirrors, railings, storefronts, and specialty glass installs. I attached our one-pager so you can get a quick feel for the kind of work we take on.',
-      '',
-      'If you have a project where glass scope still needs a responsive partner, I’d be happy to connect and put something together quickly.',
-      '',
-      'Best,',
-      'Donald Lena',
-      'MetroGlass Pro',
-      '(332) 999-3846',
-      'operations@metroglasspro.com',
-      'metroglasspro.com',
-    ].join('\n'),
-  };
+  return resolveInitialDraft(prospect);
 }
 
 export function buildProspectFollowUpDraft(prospect) {
-  return baseFollowUpDraft(prospect);
+  return resolveFollowUpDraft(prospect);
 }
 
 function hydrateFollowUpItem(followUp, prospect) {
@@ -587,6 +910,26 @@ function hydrateFollowUpItem(followUp, prospect) {
     email_address: prospect?.email_address || null,
     queue_state: prospect ? deriveQueueState(prospect, [followUp]) : 'queued_follow_up',
   };
+}
+
+function sumCounter(counter) {
+  return Object.values(counter || {}).reduce((total, value) => total + Number(value || 0), 0);
+}
+
+function categoryMetricTemplate() {
+  return Object.fromEntries(PROSPECT_CATEGORIES.map((category) => [category, {
+    key: category,
+    label: formatProspectCategory(category),
+    category,
+    contacts: 0,
+    queued_initial: 0,
+    follow_ups_due: 0,
+    sent_today: 0,
+    sent_total: 0,
+    delivered_total: 0,
+    positive_replies: 0,
+    suppressed_total: 0,
+  }]));
 }
 
 export async function getProspectAutomationOverview(db, config = null) {
@@ -601,33 +944,83 @@ export async function getProspectAutomationOverview(db, config = null) {
   ]);
 
   const prospectMap = Object.fromEntries(prospects.map((prospect) => [prospect.id, prospect]));
+  const suppressedDomains = buildSuppressedDomainMap(prospects, outcomes);
   const followUpsByProspect = Object.fromEntries(
     prospects.map((prospect) => [prospect.id, findProspectFollowUps(followUps, prospect.id)]),
   );
   const initialSentToday = categoryCounter(0);
   const followUpSentToday = categoryCounter(0);
+  const sentTodayByCategory = categoryCounter(0);
   const initialQueueByCategory = categoryCounter(0);
   const followUpDueByCategory = categoryCounter(0);
   const optOutsByCategory = categoryCounter(0);
+  const deliveredByCategory = categoryCounter(0);
+  const positiveRepliesByCategory = categoryCounter(0);
+  const categoryMetrics = categoryMetricTemplate();
+
+  let sentTotal = 0;
+  let bouncedTotal = 0;
+  let positiveRepliesTotal = 0;
+  let suppressedTotal = 0;
 
   for (const prospect of prospects) {
+    if (!PROSPECT_CATEGORIES.includes(prospect.category)) {
+      continue;
+    }
+
+    categoryMetrics[prospect.category].contacts += 1;
+
+    const companySuppressed = companySuppressionReason(prospect, suppressedDomains);
     if (prospect.status === 'opted_out' || prospect.do_not_contact || prospect.opted_out_at) {
       optOutsByCategory[prospect.category] += 1;
+    }
+    if (isProspectSuppressed(prospect) || companySuppressed) {
+      categoryMetrics[prospect.category].suppressed_total += 1;
+      suppressedTotal += 1;
     }
   }
 
   for (const outcome of outcomes) {
-    if (outcome.outcome !== 'sent' || !matchesLocalDate(outcome.sent_at || outcome.created_at, todayKey, timeZone)) {
-      continue;
-    }
     const prospect = prospectMap[outcome.prospect_id];
     if (!prospect || !PROSPECT_CATEGORIES.includes(prospect.category)) {
       continue;
     }
+
+    const outcomeType = String(outcome.outcome || '').toLowerCase();
+    if (outcomeType === 'sent') {
+      sentTotal += 1;
+      categoryMetrics[prospect.category].sent_total += 1;
+      deliveredByCategory[prospect.category] += 1;
+      categoryMetrics[prospect.category].delivered_total += 1;
+    }
+    if (outcomeType === 'bounced') {
+      bouncedTotal += 1;
+      deliveredByCategory[prospect.category] = Math.max(0, deliveredByCategory[prospect.category] - 1);
+      categoryMetrics[prospect.category].delivered_total = Math.max(0, categoryMetrics[prospect.category].delivered_total - 1);
+    }
+
+    if (outcomeType !== 'sent' || !matchesLocalDate(outcome.sent_at || outcome.created_at, todayKey, timeZone)) {
+      continue;
+    }
+
+    sentTodayByCategory[prospect.category] += 1;
+    categoryMetrics[prospect.category].sent_today += 1;
     if (detailKind(outcome) === 'follow_up') {
       followUpSentToday[prospect.category] += 1;
     } else {
       initialSentToday[prospect.category] += 1;
+    }
+  }
+
+  for (const event of events) {
+    const prospect = prospectMap[event.prospect_id];
+    if (!prospect || !PROSPECT_CATEGORIES.includes(prospect.category)) {
+      continue;
+    }
+    if (event.event_type === 'positive_reply') {
+      positiveRepliesTotal += 1;
+      positiveRepliesByCategory[prospect.category] += 1;
+      categoryMetrics[prospect.category].positive_replies += 1;
     }
   }
 
@@ -636,16 +1029,19 @@ export async function getProspectAutomationOverview(db, config = null) {
 
   for (const prospect of prospects) {
     const prospectFollowUps = followUpsByProspect[prospect.id] || [];
+    const hydratedProspect = hydrateProspect(prospect, { followUps: prospectFollowUps, suppressedDomains });
 
-    if (!prospect.first_sent_at && !isProspectSuppressed(prospect) && ['new', 'drafted'].includes(prospect.status)) {
+    if (!prospect.first_sent_at && !hydratedProspect.automation_block_reason && ['new', 'drafted'].includes(prospect.status)) {
       initialQueueByCategory[prospect.category] += 1;
-      initialQueue.push(hydrateProspect(prospect, { followUps: prospectFollowUps }));
+      categoryMetrics[prospect.category].queued_initial += 1;
+      initialQueue.push(hydratedProspect);
     }
 
     for (const followUp of prospectFollowUps) {
-      if (followUp.status === 'pending') {
+      if (followUp.status === 'pending' && !hydratedProspect.automation_block_reason) {
         followUpDueByCategory[prospect.category] += 1;
-        followUpQueue.push(hydrateFollowUpItem(followUp, hydrateProspect(prospect, { followUps: prospectFollowUps })));
+        categoryMetrics[prospect.category].follow_ups_due += 1;
+        followUpQueue.push(hydrateFollowUpItem(followUp, hydratedProspect));
       }
     }
   }
@@ -667,7 +1063,7 @@ export async function getProspectAutomationOverview(db, config = null) {
     });
 
   const exceptions = events
-    .filter((event) => ['duplicate_initial_suppressed', 'opted_out', 'status_changed'].includes(event.event_type))
+    .filter((event) => ['duplicate_initial_suppressed', 'opted_out', 'status_changed', 'company_suppressed', 'bounced'].includes(event.event_type))
     .slice(0, 12)
     .map((event) => {
       const prospect = prospectMap[event.prospect_id];
@@ -686,19 +1082,33 @@ export async function getProspectAutomationOverview(db, config = null) {
     permit_auto_send_enabled: Boolean(resolvedConfig.permit_auto_send_enabled),
     timezone: timeZone,
     initial_send_time: resolvedConfig.prospect_initial_send_time || '11:00',
-    follow_up_send_time: resolvedConfig.prospect_follow_up_send_time || '23:30',
-    initial_daily_per_category: Number(resolvedConfig.prospect_initial_daily_per_category || 10),
-    follow_up_daily_per_category: Number(resolvedConfig.prospect_follow_up_daily_per_category || 10),
-    follow_up_delay_days: Number(resolvedConfig.prospect_follow_up_delay_days || 3),
+    follow_up_send_time: resolvedConfig.prospect_initial_send_time || '11:00',
+    initial_daily_per_category: Number(resolvedConfig.prospect_daily_per_category || resolvedConfig.prospect_initial_daily_per_category || 10),
+    follow_up_daily_per_category: Number(resolvedConfig.prospect_daily_per_category || resolvedConfig.prospect_follow_up_daily_per_category || 10),
+    follow_up_delay_days: Number(Array.isArray(resolvedConfig.prospect_follow_up_offsets_days) ? resolvedConfig.prospect_follow_up_offsets_days[0] || 3 : resolvedConfig.prospect_follow_up_delay_days || 3),
+    follow_up_offsets_days: Array.isArray(resolvedConfig.prospect_follow_up_offsets_days)
+      ? resolvedConfig.prospect_follow_up_offsets_days.map((value) => Number(value || 0)).filter((value) => value > 0)
+      : [Number(resolvedConfig.prospect_follow_up_delay_days || 3), 14],
     initial_sent_today: initialSentToday,
     follow_up_sent_today: followUpSentToday,
+    sent_today_by_category: sentTodayByCategory,
     initial_queue_by_category: initialQueueByCategory,
     follow_up_due_by_category: followUpDueByCategory,
     opted_out_by_category: optOutsByCategory,
+    positive_replies_by_category: positiveRepliesByCategory,
+    suppressed_by_category: Object.fromEntries(PROSPECT_CATEGORIES.map((category) => [category, categoryMetrics[category].suppressed_total])),
     initial_queue: initialQueue.slice(0, 20),
     follow_up_queue: followUpQueue.slice(0, 20),
     recent_sends: recentSends,
     exceptions,
+    metrics: {
+      contacts_total: prospects.length,
+      sent_total: sentTotal,
+      delivered_total: Math.max(sentTotal - bouncedTotal, 0),
+      positive_replies_total: positiveRepliesTotal,
+      suppressed_total: suppressedTotal,
+    },
+    campaigns: PROSPECT_CATEGORIES.map((category) => categoryMetrics[category]),
   };
 }
 
@@ -707,6 +1117,7 @@ export async function listProspects(db, options = {}) {
   const limit = Math.min(50, Math.max(1, Number(options.limit || 20)));
   const status = options.status || 'all';
   const category = options.category || 'all';
+  const query = compactText(options.q)?.toLowerCase() || '';
 
   const config = await getAppConfig(db);
   const [allRows, recentImports, followUps, automation] = await Promise.all([
@@ -729,6 +1140,7 @@ export async function listProspects(db, options = {}) {
     archived: 0,
   };
   const categories = categoryCounter(0);
+  const suppressedDomains = buildSuppressedDomainMap(allRows, []);
   const followUpsByProspect = Object.fromEntries(
     allRows.map((prospect) => [prospect.id, findProspectFollowUps(followUps, prospect.id)]),
   );
@@ -749,13 +1161,32 @@ export async function listProspects(db, options = {}) {
     if (category !== 'all' && prospect.category !== category) {
       return false;
     }
+    if (query) {
+      const haystack = [
+        prospect.contact_name,
+        prospect.company_name,
+        prospect.contact_role,
+        prospect.email_address,
+        prospect.website,
+        prospect.notes,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(query)) {
+        return false;
+      }
+    }
     return true;
   });
 
   const sorted = [...filtered]
     .sort((left, right) => Number(new Date(right.updated_at || 0).getTime()) - Number(new Date(left.updated_at || 0).getTime()))
     .slice((page - 1) * limit, page * limit)
-    .map((prospect) => hydrateProspect(prospect, { followUps: followUpsByProspect[prospect.id] || [] }));
+    .map((prospect) => hydrateProspect(prospect, {
+      followUps: followUpsByProspect[prospect.id] || [],
+      suppressedDomains,
+    }));
 
   return {
     prospects: sorted,
@@ -771,7 +1202,7 @@ export async function listProspects(db, options = {}) {
 }
 
 export async function getProspectDetail(db, prospectId) {
-  const [prospect, timeline, followUps] = await Promise.all([
+  const [prospect, timeline, followUps, allProspects, outcomes] = await Promise.all([
     db.single('v2_prospects', { filters: [eq('id', prospectId)] }),
     db.select('v2_prospect_events', {
       filters: [eq('prospect_id', prospectId)],
@@ -782,13 +1213,18 @@ export async function getProspectDetail(db, prospectId) {
       filters: [eq('prospect_id', prospectId)],
       ordering: [order('step_number', 'asc')],
     }).catch(() => []),
+    listAllProspects(db),
+    listRecentProspectOutcomes(db),
   ]);
 
   if (!prospect) {
     return null;
   }
 
-  const hydrated = hydrateProspect(prospect, { followUps });
+  const hydrated = hydrateProspect(prospect, {
+    followUps,
+    suppressedDomains: buildSuppressedDomainMap(allProspects, outcomes),
+  });
   const importBatch = hydrated.import_batch_id
     ? await db.single('v2_prospect_import_batches', { filters: [eq('id', hydrated.import_batch_id)] })
     : null;
@@ -825,11 +1261,30 @@ export async function importProspects(db, payload, actorId = null) {
     actor_id: actorId,
   }))[0];
 
-  const normalizedRows = rows
-    .map((row) => normalizeProspectRow(row, category))
-    .filter(Boolean);
+  const skippedByReason = {
+    missing_valid_email: 0,
+    duplicate_in_file: 0,
+  };
+  const seenEmails = new Set();
+  const normalizedRows = [];
 
-  const skipped = rows.length - normalizedRows.length;
+  for (const row of rows) {
+    const result = normalizeProspectRowResult(row, category);
+    if (!result.row) {
+      skippedByReason[result.reason] += 1;
+      continue;
+    }
+
+    if (seenEmails.has(result.row.email_normalized)) {
+      skippedByReason.duplicate_in_file += 1;
+      continue;
+    }
+
+    seenEmails.add(result.row.email_normalized);
+    normalizedRows.push(result.row);
+  }
+
+  const skipped = Object.values(skippedByReason).reduce((total, value) => total + Number(value || 0), 0);
 
   if (!normalizedRows.length) {
     await db.update('v2_prospect_import_batches', [eq('id', batch.id)], {
@@ -842,6 +1297,7 @@ export async function importProspects(db, payload, actorId = null) {
       category,
       imported: 0,
       skipped,
+      skipped_by_reason: skippedByReason,
     };
   }
 
@@ -921,6 +1377,7 @@ export async function importProspects(db, payload, actorId = null) {
     category,
     imported: imported.length,
     skipped,
+    skipped_by_reason: skippedByReason,
   };
 }
 
@@ -1008,6 +1465,61 @@ export async function optOutProspect(db, prospectId, actorId = null) {
   return updateProspectStatus(db, prospectId, 'opted_out', actorId);
 }
 
+export async function markProspectReply(db, prospectId, actorId = null, tone = 'neutral') {
+  const prospect = await db.single('v2_prospects', { filters: [eq('id', prospectId)] });
+  if (!prospect) {
+    throw new Error('Prospect not found');
+  }
+
+  const now = nowIso();
+  const updated = (await db.update('v2_prospects', [eq('id', prospectId)], {
+    status: 'replied',
+    do_not_contact: true,
+    last_replied_at: now,
+    updated_at: now,
+  }))[0];
+
+  await cancelProspectFollowUps(db, prospectId, 'replied');
+  await recordProspectOutcome(db, {
+    prospect_id: prospectId,
+    email_address: prospect.email_address,
+    outcome: 'replied',
+    detail: { tone },
+  });
+  await recordProspectEvent(db, prospectId, tone === 'positive' ? 'positive_reply' : 'replied', 'operator', actorId, { tone });
+
+  return hydrateProspect(updated, {
+    followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
+  });
+}
+
+export async function markProspectBounced(db, prospectId, actorId = null) {
+  const prospect = await db.single('v2_prospects', { filters: [eq('id', prospectId)] });
+  if (!prospect) {
+    throw new Error('Prospect not found');
+  }
+
+  const now = nowIso();
+  const updated = (await db.update('v2_prospects', [eq('id', prospectId)], {
+    status: 'archived',
+    do_not_contact: true,
+    updated_at: now,
+  }))[0];
+
+  await cancelProspectFollowUps(db, prospectId, 'bounced');
+  await recordProspectOutcome(db, {
+    prospect_id: prospectId,
+    email_address: prospect.email_address,
+    outcome: 'bounced',
+    detail: { source: 'operator' },
+  });
+  await recordProspectEvent(db, prospectId, 'bounced', 'operator', actorId, null);
+
+  return hydrateProspect(updated, {
+    followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
+  });
+}
+
 export async function sendProspect(env, db, prospectId, actorId = null) {
   const { prospect, followUps } = await getProspectWithFollowUps(db, prospectId);
   const kind = prospect?.first_sent_at ? 'follow_up' : 'initial';
@@ -1047,6 +1559,130 @@ async function findSlotDuplicateRun(db, mode, slotKey) {
 
 function canQueueInitialProspect(prospect) {
   return prospect && !prospect.first_sent_at && !isProspectSuppressed(prospect) && ['new', 'drafted'].includes(prospect.status);
+}
+
+function sentTodayByCategory(outcomes, prospectMap, timeZone) {
+  const todayKey = formatLocalDateKey(new Date(), timeZone);
+  const totals = categoryCounter(0);
+
+  for (const outcome of outcomes) {
+    if (String(outcome.outcome || '').toLowerCase() !== 'sent' || !matchesLocalDate(outcome.sent_at || outcome.created_at, todayKey, timeZone)) {
+      continue;
+    }
+    const prospect = prospectMap[outcome.prospect_id];
+    if (prospect && totals[prospect.category] !== undefined) {
+      totals[prospect.category] += 1;
+    }
+  }
+
+  return totals;
+}
+
+export async function runProspectDailyBatch(env, db, config, slotKey) {
+  const [followUps, prospects, outcomes] = await Promise.all([
+    listAllProspectFollowUps(db),
+    listAllProspects(db),
+    listRecentProspectOutcomes(db),
+  ]);
+
+  const prospectMap = Object.fromEntries(prospects.map((prospect) => [prospect.id, prospect]));
+  const suppressedDomains = buildSuppressedDomainMap(prospects, outcomes);
+  const attemptedByCategory = categoryCounter(0);
+  const sentByCategory = categoryCounter(0);
+  const skippedByCategory = categoryCounter(0);
+  const initialSentByCategory = categoryCounter(0);
+  const followUpSentByCategory = categoryCounter(0);
+  const sentToday = sentTodayByCategory(outcomes, prospectMap, config.prospect_timezone);
+  const totalPerCategory = Number(config.prospect_daily_per_category || config.prospect_initial_daily_per_category || 10);
+
+  const dueFollowUps = followUps
+    .filter((followUp) => followUp.status === 'pending' && new Date(followUp.scheduled_at).getTime() <= Date.now())
+    .sort(byScheduledAtAsc);
+  const queuedInitials = prospects
+    .filter((prospect) => canQueueInitialProspect(prospect) && !companySuppressionReason(prospect, suppressedDomains))
+    .sort(byCreatedAtAsc);
+
+  const selectedFollowUps = [];
+  const selectedInitials = [];
+
+  for (const category of PROSPECT_CATEGORIES) {
+    const remaining = Math.max(totalPerCategory - Number(sentToday[category] || 0), 0);
+    if (remaining <= 0) {
+      continue;
+    }
+
+    const categoryFollowUps = dueFollowUps
+      .filter((followUp) => prospectMap[followUp.prospect_id]?.category === category)
+      .slice(0, remaining);
+    selectedFollowUps.push(...categoryFollowUps);
+
+    const leftAfterFollowUps = Math.max(remaining - categoryFollowUps.length, 0);
+    if (leftAfterFollowUps > 0) {
+      selectedInitials.push(...queuedInitials.filter((prospect) => prospect.category === category).slice(0, leftAfterFollowUps));
+    }
+  }
+
+  for (const followUp of selectedFollowUps) {
+    const prospect = prospectMap[followUp.prospect_id];
+    if (!prospect) {
+      continue;
+    }
+
+    attemptedByCategory[prospect.category] += 1;
+    try {
+      await sendProspectMessage(env, db, prospect.id, {
+        kind: 'follow_up',
+        automated: true,
+        actorType: 'schedule',
+        actorId: null,
+        slotKey,
+        stepNumber: Number(followUp.step_number || 1),
+        followUpId: followUp.id,
+        config,
+      });
+      sentByCategory[prospect.category] += 1;
+      followUpSentByCategory[prospect.category] += 1;
+    } catch (error) {
+      skippedByCategory[prospect.category] += 1;
+      await recordProspectEvent(db, prospect.id, 'follow_up_skipped', 'schedule', null, {
+        slot_key: slotKey,
+        error: error instanceof Error ? error.message : String(error || 'Follow-up automation skipped'),
+      });
+    }
+  }
+
+  for (const prospect of selectedInitials) {
+    attemptedByCategory[prospect.category] += 1;
+    try {
+      await sendProspectMessage(env, db, prospect.id, {
+        kind: 'initial',
+        automated: true,
+        actorType: 'schedule',
+        actorId: null,
+        slotKey,
+        config,
+      });
+      sentByCategory[prospect.category] += 1;
+      initialSentByCategory[prospect.category] += 1;
+    } catch (error) {
+      skippedByCategory[prospect.category] += 1;
+      await recordProspectEvent(db, prospect.id, 'initial_send_skipped', 'schedule', null, {
+        slot_key: slotKey,
+        error: error instanceof Error ? error.message : String(error || 'Initial automation skipped'),
+      });
+    }
+  }
+
+  return {
+    attempted_by_category: attemptedByCategory,
+    sent_by_category: sentByCategory,
+    skipped_by_category: skippedByCategory,
+    initial_sent_by_category: initialSentByCategory,
+    follow_up_sent_by_category: followUpSentByCategory,
+    selected_count: selectedInitials.length + selectedFollowUps.length,
+    selected_initial_count: selectedInitials.length,
+    selected_follow_up_count: selectedFollowUps.length,
+  };
 }
 
 export async function runProspectInitialBatch(env, db, config, slotKey) {
@@ -1160,8 +1796,6 @@ export async function runProspectFollowUpBatch(env, db, config, slotKey) {
         slotKey,
         stepNumber: Number(followUp.step_number || 1),
         followUpId: followUp.id,
-        subject: followUp.draft_subject,
-        body: followUp.draft_body,
         config,
       });
       sentByCategory[prospect.category] += 1;
@@ -1188,7 +1822,7 @@ export async function runScheduledProspectPilot(env, db, createRun, completeRun,
     return { started: false, reason: 'prospect_pilot_disabled' };
   }
 
-  const mode = options.mode === 'prospect_follow_up_send' ? 'prospect_follow_up_send' : 'prospect_initial_send';
+  const mode = options.mode || 'prospect_daily_send';
   const slotKey = options.slotKey;
   const existingRun = slotKey ? await findSlotDuplicateRun(db, mode, slotKey) : null;
   if (existingRun) {
@@ -1212,13 +1846,11 @@ export async function runScheduledProspectPilot(env, db, createRun, completeRun,
         remaining: 0,
       },
     },
-    { initialStage: mode === 'prospect_initial_send' ? 'prospect_initial_queue' : 'prospect_follow_up_queue' },
+    { initialStage: 'prospect_daily_queue' },
   );
 
   try {
-    const summary = mode === 'prospect_initial_send'
-      ? await runProspectInitialBatch(env, db, config, slotKey)
-      : await runProspectFollowUpBatch(env, db, config, slotKey);
+    const summary = await runProspectDailyBatch(env, db, config, slotKey);
 
     await completeRun(db, run.id, {
       sends_attempted: Object.values(summary.attempted_by_category).reduce((total, value) => total + Number(value || 0), 0),

@@ -3,7 +3,7 @@ export type QualityTier = "hot" | "warm" | "cold"
 export type AppTab = "today" | "leads" | "prospects" | "settings"
 export type ProspectCategory = "interior_designer" | "gc" | "property_manager" | "project_manager" | "architect"
 export type ProspectStatus = "new" | "drafted" | "sent" | "replied" | "opted_out" | "archived"
-export type ProspectQueueState = "queued_initial" | "sent" | "queued_follow_up" | "follow_up_sent" | "replied" | "opted_out" | "archived"
+export type ProspectQueueState = "queued_initial" | "sent" | "queued_follow_up" | "follow_up_sent" | "replied" | "opted_out" | "archived" | "suppressed"
 
 export interface LeadRow {
   id: string
@@ -100,6 +100,7 @@ export interface ProspectRow {
   email_normalized: string
   phone: string | null
   website: string | null
+  company_domain?: string | null
   city: string | null
   state: string | null
   source: string
@@ -276,13 +277,37 @@ export interface ProspectAutomationSummary {
   initial_daily_per_category: number
   follow_up_daily_per_category: number
   follow_up_delay_days: number
+  follow_up_offsets_days?: number[]
   initial_sent_today: Record<ProspectCategory, number>
   follow_up_sent_today: Record<ProspectCategory, number>
+  sent_today_by_category?: Record<ProspectCategory, number>
   initial_queue_by_category: Record<ProspectCategory, number>
   follow_up_due_by_category: Record<ProspectCategory, number>
   opted_out_by_category: Record<ProspectCategory, number>
+  positive_replies_by_category?: Record<ProspectCategory, number>
+  suppressed_by_category?: Record<ProspectCategory, number>
   initial_queue: ProspectRow[]
   follow_up_queue: ProspectFollowUp[]
+  metrics?: {
+    contacts_total: number
+    sent_total: number
+    delivered_total: number
+    positive_replies_total: number
+    suppressed_total: number
+  }
+  campaigns?: Array<{
+    key: string
+    label: string
+    category: ProspectCategory
+    contacts: number
+    queued_initial: number
+    follow_ups_due: number
+    sent_today: number
+    sent_total: number
+    delivered_total: number
+    positive_replies: number
+    suppressed_total: number
+  }>
   recent_sends: Array<{
     id: string
     prospect_id: string
@@ -375,6 +400,8 @@ export interface ConfigPayload {
   prospect_initial_send_time: string
   prospect_follow_up_send_time: string
   prospect_follow_up_delay_days: number
+  prospect_daily_per_category?: number
+  prospect_follow_up_offsets_days?: number[]
   permit_auto_send_enabled: boolean
 }
 

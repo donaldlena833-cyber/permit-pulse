@@ -16,6 +16,8 @@ import {
   fetchToday,
   importProspectsCsv,
   logPhoneFollowUp,
+  markProspectBounced as markProspectBouncedRequest,
+  markProspectReply as markProspectReplyRequest,
   markLeadEmailRequired,
   markOutcome,
   optOutProspect as optOutProspectRequest,
@@ -63,6 +65,7 @@ export function useMetroglassLeads() {
   const [leadFilter, setLeadFilter] = useState<string>("all")
   const [prospectStatusFilter, setProspectStatusFilter] = useState<"all" | ProspectStatus>("all")
   const [prospectCategoryFilter, setProspectCategoryFilter] = useState<"all" | ProspectCategory>("all")
+  const [prospectQuery, setProspectQuery] = useState("")
   const [config, setConfig] = useState<ConfigPayload | null>(null)
   const [system, setSystem] = useState<SystemPayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -96,7 +99,7 @@ export function useMetroglassLeads() {
 
   const refreshProspects = useCallback(async () => {
     try {
-      const payload = await fetchProspects(prospectStatusFilter, prospectCategoryFilter, 1, 50)
+      const payload = await fetchProspects(prospectStatusFilter, prospectCategoryFilter, prospectQuery, 1, 100)
       setProspects(payload)
       return payload
     } catch (error) {
@@ -130,10 +133,11 @@ export function useMetroglassLeads() {
             permit_auto_send_enabled: false,
             timezone: "America/New_York",
             initial_send_time: "11:00",
-            follow_up_send_time: "23:30",
+            follow_up_send_time: "11:00",
             initial_daily_per_category: 10,
             follow_up_daily_per_category: 10,
             follow_up_delay_days: 3,
+            follow_up_offsets_days: [3, 14],
             initial_sent_today: {
               architect: 0,
               interior_designer: 0,
@@ -142,6 +146,13 @@ export function useMetroglassLeads() {
               project_manager: 0,
             },
             follow_up_sent_today: {
+              architect: 0,
+              interior_designer: 0,
+              gc: 0,
+              property_manager: 0,
+              project_manager: 0,
+            },
+            sent_today_by_category: {
               architect: 0,
               interior_designer: 0,
               gc: 0,
@@ -169,6 +180,28 @@ export function useMetroglassLeads() {
               property_manager: 0,
               project_manager: 0,
             },
+            positive_replies_by_category: {
+              architect: 0,
+              interior_designer: 0,
+              gc: 0,
+              property_manager: 0,
+              project_manager: 0,
+            },
+            suppressed_by_category: {
+              architect: 0,
+              interior_designer: 0,
+              gc: 0,
+              property_manager: 0,
+              project_manager: 0,
+            },
+            metrics: {
+              contacts_total: 0,
+              sent_total: 0,
+              delivered_total: 0,
+              positive_replies_total: 0,
+              suppressed_total: 0,
+            },
+            campaigns: [],
             initial_queue: [],
             follow_up_queue: [],
             recent_sends: [],
@@ -180,7 +213,7 @@ export function useMetroglassLeads() {
       }
       throw error
     }
-  }, [prospectCategoryFilter, prospectStatusFilter])
+  }, [prospectCategoryFilter, prospectQuery, prospectStatusFilter])
 
   const refreshSelectedLead = useCallback(async (leadId?: string | null) => {
     const id = leadId ?? selectedLeadId
@@ -431,7 +464,14 @@ export function useMetroglassLeads() {
       setActionLeadId("prospects-import")
       try {
         const result = await importProspectsCsv(payload)
-        toast.success(`Imported ${result.imported} prospects${result.skipped ? `, skipped ${result.skipped}` : ""}`)
+        const reasons = result.skipped_by_reason || {}
+        const details = [
+          reasons.missing_valid_email ? `${reasons.missing_valid_email} missing valid email` : null,
+          reasons.duplicate_in_file ? `${reasons.duplicate_in_file} duplicate email in file` : null,
+        ].filter(Boolean)
+        toast.success(
+          `Imported ${result.imported} prospects${result.skipped ? `, skipped ${result.skipped}${details.length ? ` (${details.join(", ")})` : ""}` : ""}`,
+        )
         await Promise.all([refreshProspects(), refreshToday(), refreshSystem()])
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Import failed")
@@ -442,6 +482,12 @@ export function useMetroglassLeads() {
     sendProspect: (prospectId: string) => runProspectAction(prospectId, async () => {
       await sendProspectNow(prospectId)
     }, "Prospect email sent"),
+    markProspectReply: (prospectId: string, tone: "neutral" | "positive" = "neutral") => runProspectAction(prospectId, async () => {
+      await markProspectReplyRequest(prospectId, tone)
+    }, "Reply recorded"),
+    markProspectBounced: (prospectId: string) => runProspectAction(prospectId, async () => {
+      await markProspectBouncedRequest(prospectId)
+    }, "Bounce recorded"),
     saveProspectDraft: (prospectId: string, draft: { subject: string; body: string }) => runProspectAction(prospectId, async () => {
       await updateProspectDraft(prospectId, draft)
     }, "Prospect draft saved"),
@@ -452,7 +498,7 @@ export function useMetroglassLeads() {
       await updateProspectStatus(prospectId, "archived")
     }, "Prospect archived"),
     markProspectReplied: (prospectId: string) => runProspectAction(prospectId, async () => {
-      await updateProspectStatus(prospectId, "replied")
+      await markProspectReplyRequest(prospectId, "neutral")
     }, "Marked replied"),
     optOutProspect: (prospectId: string) => runProspectAction(prospectId, async () => {
       await optOutProspectRequest(prospectId)
@@ -489,6 +535,8 @@ export function useMetroglassLeads() {
     setProspectStatusFilter,
     prospectCategoryFilter,
     setProspectCategoryFilter,
+    prospectQuery,
+    setProspectQuery,
     config,
     system,
     loading,

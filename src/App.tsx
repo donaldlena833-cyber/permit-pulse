@@ -22,7 +22,7 @@ function AppTabs({
   const items = [
     { id: "today", label: "Today", icon: ScanLine },
     { id: "leads", label: "Leads", icon: ListTodo },
-    { id: "prospects", label: "Prospects", icon: BriefcaseBusiness },
+    { id: "prospects", label: "Outreach", icon: BriefcaseBusiness },
     { id: "settings", label: "Settings", icon: Settings2 },
   ] as const
 
@@ -80,10 +80,12 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
     setProspectStatusFilter,
     prospectCategoryFilter,
     setProspectCategoryFilter,
+    prospectQuery,
+    setProspectQuery,
   } = useMetroglassLeads()
 
-  const title = tab === "prospects" ? "Prospects" : "Leads"
-  const subtitle = tab === "prospects" ? "Manual outreach pilot" : "Permit automation"
+  const title = tab === "prospects" ? "Outreach CRM" : "Leads"
+  const subtitle = tab === "prospects" ? "Automated outbound email operations" : "Permit automation"
 
   return (
     <div className="min-h-screen text-foreground">
@@ -113,6 +115,9 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   </div>
                   <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {prospects?.counts.sent ?? 0} sent
+                  </div>
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
+                    {prospects?.automation.metrics?.positive_replies_total ?? 0} positive replies
                   </div>
                   <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {prospects?.counts.opted_out ?? 0} opted out
@@ -195,8 +200,10 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
             onCategoryFilterChange={setProspectCategoryFilter}
             onImportCsv={actions.importProspects}
             onOpenProspect={openProspect}
+            onQueryChange={setProspectQuery}
             onStatusFilterChange={setProspectStatusFilter}
             prospects={prospects}
+            query={prospectQuery}
             statusFilter={prospectStatusFilter}
           />
         ) : null}
@@ -232,7 +239,9 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         detail={selectedProspect}
         key={selectedProspect ? `${selectedProspect.prospect.id}:${selectedProspect.prospect.updated_at}` : "prospect-detail"}
         onArchive={(prospectId) => void actions.archiveProspect(prospectId)}
+        onMarkBounced={(prospectId) => void actions.markProspectBounced(prospectId)}
         onClose={closeProspect}
+        onMarkPositiveReply={(prospectId) => void actions.markProspectReply(prospectId, "positive")}
         onMarkReplied={(prospectId) => void actions.markProspectReplied(prospectId)}
         onOptOut={(prospectId) => void actions.optOutProspect(prospectId)}
         onSaveDraft={(prospectId, draft) => void actions.saveProspectDraft(prospectId, draft)}

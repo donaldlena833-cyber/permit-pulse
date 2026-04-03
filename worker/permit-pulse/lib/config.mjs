@@ -11,12 +11,14 @@ const DEFAULT_CONFIG = {
   warm_up_mode: false,
   warm_up_daily_cap: 100,
   prospect_pilot_enabled: true,
+  prospect_daily_per_category: 10,
   prospect_initial_daily_per_category: 10,
   prospect_follow_up_daily_per_category: 10,
   prospect_timezone: 'America/New_York',
   prospect_initial_send_time: '11:00',
-  prospect_follow_up_send_time: '23:30',
+  prospect_follow_up_send_time: '11:00',
   prospect_follow_up_delay_days: 3,
+  prospect_follow_up_offsets_days: [3, 14],
   permit_auto_send_enabled: false,
 };
 
@@ -69,6 +71,10 @@ export async function getAppConfig(db) {
     1,
     Number(mapped.prospect_initial_daily_per_category || DEFAULT_CONFIG.prospect_initial_daily_per_category),
   );
+  mapped.prospect_daily_per_category = Math.max(
+    1,
+    Number(mapped.prospect_daily_per_category || mapped.prospect_initial_daily_per_category || DEFAULT_CONFIG.prospect_daily_per_category),
+  );
   mapped.prospect_follow_up_daily_per_category = Math.max(
     1,
     Number(mapped.prospect_follow_up_daily_per_category || DEFAULT_CONFIG.prospect_follow_up_daily_per_category),
@@ -82,6 +88,9 @@ export async function getAppConfig(db) {
   mapped.prospect_follow_up_send_time = String(
     mapped.prospect_follow_up_send_time || DEFAULT_CONFIG.prospect_follow_up_send_time,
   );
+  mapped.prospect_follow_up_offsets_days = Array.isArray(mapped.prospect_follow_up_offsets_days)
+    ? mapped.prospect_follow_up_offsets_days.map((value) => Math.max(1, Number(value || 0))).filter(Boolean)
+    : DEFAULT_CONFIG.prospect_follow_up_offsets_days;
   mapped.prospect_pilot_enabled = Boolean(mapped.prospect_pilot_enabled);
   mapped.permit_auto_send_enabled = Boolean(mapped.permit_auto_send_enabled);
 

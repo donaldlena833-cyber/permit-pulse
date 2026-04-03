@@ -99,12 +99,17 @@ export function SettingsScreen({ health, config, system, onSaveConfig }: Setting
               <Switch checked={form.prospect_pilot_enabled} onCheckedChange={(checked) => setForm({ ...form, prospect_pilot_enabled: checked })} />
             </div>
             <label className="grid gap-2 text-sm text-steel-600">
-              Initial daily quota per category
-              <Input type="number" value={form.prospect_initial_daily_per_category} onChange={(event) => setForm({ ...form, prospect_initial_daily_per_category: Number(event.target.value) })} />
-            </label>
-            <label className="grid gap-2 text-sm text-steel-600">
-              Follow-up daily quota per category
-              <Input type="number" value={form.prospect_follow_up_daily_per_category} onChange={(event) => setForm({ ...form, prospect_follow_up_daily_per_category: Number(event.target.value) })} />
+              Total daily sends per category
+              <Input
+                type="number"
+                value={form.prospect_daily_per_category ?? form.prospect_initial_daily_per_category}
+                onChange={(event) => setForm({
+                  ...form,
+                  prospect_daily_per_category: Number(event.target.value),
+                  prospect_initial_daily_per_category: Number(event.target.value),
+                  prospect_follow_up_daily_per_category: Number(event.target.value),
+                })}
+              />
             </label>
             <label className="grid gap-2 text-sm text-steel-600">
               Timezone
@@ -115,12 +120,32 @@ export function SettingsScreen({ health, config, system, onSaveConfig }: Setting
               <Input value={form.prospect_initial_send_time} onChange={(event) => setForm({ ...form, prospect_initial_send_time: event.target.value })} />
             </label>
             <label className="grid gap-2 text-sm text-steel-600">
-              Follow-up send time
-              <Input value={form.prospect_follow_up_send_time} onChange={(event) => setForm({ ...form, prospect_follow_up_send_time: event.target.value })} />
+              Sequence send time
+              <Input
+                value={form.prospect_initial_send_time}
+                onChange={(event) => setForm({
+                  ...form,
+                  prospect_initial_send_time: event.target.value,
+                  prospect_follow_up_send_time: event.target.value,
+                })}
+              />
             </label>
             <label className="grid gap-2 text-sm text-steel-600">
-              Follow-up delay in days
-              <Input type="number" value={form.prospect_follow_up_delay_days} onChange={(event) => setForm({ ...form, prospect_follow_up_delay_days: Number(event.target.value) })} />
+              Follow-up offsets in days
+              <Input
+                value={(form.prospect_follow_up_offsets_days ?? [form.prospect_follow_up_delay_days, 14]).join(", ")}
+                onChange={(event) => {
+                  const values = event.target.value
+                    .split(",")
+                    .map((value) => Number(value.trim()))
+                    .filter((value) => Number.isFinite(value) && value > 0)
+                  setForm({
+                    ...form,
+                    prospect_follow_up_offsets_days: values,
+                    prospect_follow_up_delay_days: values[0] ?? form.prospect_follow_up_delay_days,
+                  })
+                }}
+              />
             </label>
           </div>
           <Button className="mt-5 h-11 rounded-full px-5" onClick={() => void save()}>
@@ -135,7 +160,7 @@ export function SettingsScreen({ health, config, system, onSaveConfig }: Setting
               <div key={run.id} className="rounded-[16px] border border-steel-200 bg-white px-4 py-4">
                 <div className="font-medium text-steel-900">
                   {run.mode?.startsWith("prospect_")
-                    ? run.mode === "prospect_follow_up_send" ? "Prospect follow-up batch" : "Prospect initial batch"
+                    ? "Outreach CRM daily send batch"
                     : run.status === "running" ? "Permit run in progress" : "Recent permit run"}
                 </div>
                 <div className="mt-1 text-sm text-steel-600">

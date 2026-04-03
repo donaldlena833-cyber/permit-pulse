@@ -31,7 +31,7 @@ function leadSummary(lead: LeadRow) {
 function runHeadline(run: TodayPayload["current_run"] | TodayPayload["last_run"]) {
   if (!run) return "No automation running"
   if (run.mode?.startsWith("prospect_")) {
-    return run.mode === "prospect_follow_up_send" ? "Prospect follow-up batch" : "Prospect initial batch"
+    return "Outreach CRM daily send batch"
   }
   if (run.status === "running") {
     return "Permit scan in progress"
@@ -146,7 +146,7 @@ export function TodayScreen({
               </div>
               <p className="mt-2 text-sm leading-6 text-steel-600">
                 {prospect?.pilot_enabled
-                  ? `${prospect.initial_daily_per_category}/category at ${prospect.initial_send_time}, one follow-up ${prospect.follow_up_delay_days} days later at ${prospect.follow_up_send_time}.`
+                  ? `${prospect.initial_daily_per_category}/category at ${prospect.initial_send_time}, with follow-ups queued for ${(prospect.follow_up_offsets_days ?? [3, 14]).join(" and ")} days in the same daily window.`
                   : "The prospect pilot is currently disabled in config."}
               </p>
             </div>
@@ -158,10 +158,10 @@ export function TodayScreen({
               <div key={category} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-[16px] border border-steel-200 bg-steel-50/60 px-3 py-3">
                 <div className="font-medium text-steel-900">{formatProspectCategory(category)}</div>
                 <div className="font-mono text-xs text-steel-600">
-                  Initial {prospect?.initial_sent_today?.[category] ?? 0}/{prospect?.initial_daily_per_category ?? 0}
+                  Sent {prospect?.sent_today_by_category?.[category] ?? ((prospect?.initial_sent_today?.[category] ?? 0) + (prospect?.follow_up_sent_today?.[category] ?? 0))}/{prospect?.initial_daily_per_category ?? 0}
                 </div>
                 <div className="font-mono text-xs text-steel-600">
-                  F/U {prospect?.follow_up_sent_today?.[category] ?? 0}/{prospect?.follow_up_daily_per_category ?? 0}
+                  Positive {prospect?.positive_replies_by_category?.[category] ?? 0}
                 </div>
               </div>
             ))}
@@ -259,13 +259,22 @@ export function TodayScreen({
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Prospect automation board</div>
-              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-900">Initial queue, due follow-ups, and exceptions</div>
+              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-900">Outreach metrics, due follow-ups, and suppressions</div>
             </div>
           </div>
 
           <div className="mt-5 grid gap-4">
             <div className="rounded-[18px] border border-steel-200 bg-white p-4">
-              <div className="text-sm font-semibold text-steel-900">Follow-ups due tonight</div>
+              <div className="text-sm font-semibold text-steel-900">CRM totals</div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-steel-600">
+                <div>Contacts: {prospect?.metrics?.contacts_total ?? 0}</div>
+                <div>Sent: {prospect?.metrics?.sent_total ?? 0}</div>
+                <div>Delivered: {prospect?.metrics?.delivered_total ?? 0}</div>
+                <div>Positive replies: {prospect?.metrics?.positive_replies_total ?? 0}</div>
+              </div>
+            </div>
+            <div className="rounded-[18px] border border-steel-200 bg-white p-4">
+              <div className="text-sm font-semibold text-steel-900">Follow-ups due in the next send window</div>
               <div className="mt-3 grid gap-2">
                 {(prospect?.follow_up_queue ?? []).slice(0, 5).map((followUp) => (
                   <div key={followUp.id} className="rounded-[14px] border border-steel-200 bg-steel-50/70 px-3 py-3">

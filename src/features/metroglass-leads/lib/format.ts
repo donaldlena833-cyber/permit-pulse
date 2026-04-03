@@ -51,5 +51,6 @@ export function formatProspectQueueState(value: string | null | undefined): stri
   if (value === "queued_follow_up") return "Queued for Follow-up"
   if (value === "follow_up_sent") return "Follow-up Sent"
   if (value === "opted_out") return "Opted out"
+  if (value === "suppressed") return "Suppressed"
   return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }

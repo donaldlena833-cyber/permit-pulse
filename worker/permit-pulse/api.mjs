@@ -5,6 +5,8 @@ import {
   getProspectDetail,
   importProspects,
   listProspects,
+  markProspectBounced,
+  markProspectReply,
   optOutProspect,
   saveProspectDraft,
   saveProspectNotes,
@@ -617,6 +619,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
       return json(await listProspects(db, {
         status: url.searchParams.get('status') || 'all',
         category: url.searchParams.get('category') || 'all',
+        q: url.searchParams.get('q') || '',
         page: Number(url.searchParams.get('page') || 1),
         limit: Number(url.searchParams.get('limit') || 20),
       }));
@@ -642,6 +645,17 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const prospectSendMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/send$/);
     if (prospectSendMatch && request.method === 'POST') {
       return json(await sendProspect(env, db, decodeURIComponent(prospectSendMatch[1]), user.email || null));
+    }
+
+    const prospectReplyMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/reply$/);
+    if (prospectReplyMatch && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await markProspectReply(db, decodeURIComponent(prospectReplyMatch[1]), user.email || null, body?.tone || 'neutral'));
+    }
+
+    const prospectBounceMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/bounce$/);
+    if (prospectBounceMatch && request.method === 'POST') {
+      return json(await markProspectBounced(db, decodeURIComponent(prospectBounceMatch[1]), user.email || null));
     }
 
     const prospectOptOutMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/opt-out$/);
