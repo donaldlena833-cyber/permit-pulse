@@ -9,7 +9,7 @@ import {
 } from '../lib/timezone.mjs';
 import { createRun, completeRun, failRun } from '../lib/runs.mjs';
 import { createSupabaseClient } from '../lib/supabase.mjs';
-import { processDueFollowUps } from './follow-up.mjs';
+import { backfillPermitFollowUps, processDueFollowUps } from './follow-up.mjs';
 import { runAutomationCycle } from './engine.mjs';
 
 async function runProspectSchedules(env, db, config, now) {
@@ -41,10 +41,15 @@ export async function runScheduledWork(env, now = new Date()) {
     prospects: [],
     permits: null,
     permit_follow_ups: null,
+    permit_follow_up_backfill: null,
   };
 
   if (config.prospect_pilot_enabled) {
     results.prospects = await runProspectSchedules(env, db, config, now);
+  }
+
+  if (config.follow_up_enabled) {
+    results.permit_follow_up_backfill = await backfillPermitFollowUps(db, config);
   }
 
   if (config.permit_auto_send_enabled && shouldRunPermitSchedule(now, config.prospect_timezone || 'America/New_York')) {

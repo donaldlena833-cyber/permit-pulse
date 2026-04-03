@@ -1,7 +1,7 @@
 import { sendAutomationEmail } from '../lib/gmail.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
 import { formatPriorOutreachMessage, getPriorOutreach } from '../lib/outreach-guard.mjs';
-import { eq, lte, order } from '../lib/supabase.mjs';
+import { eq, gte, lte, order } from '../lib/supabase.mjs';
 import { buildFollowUpDraft } from './draft.mjs';
 
 function normalizeFollowUpSequence(sequence) {
@@ -26,16 +26,29 @@ function normalizeFollowUpSequence(sequence) {
   });
 }
 
+function isLegacyPlaceholderFollowUp(item) {
+  return Number(item?.step_number || 0) === 1
+    && String(item?.status || '') === 'sent'
+    && String(item?.outcome_notes || '').includes('Repeat outreach disabled');
+}
+
+function followUpNeedsRepair(existing, sequence) {
+  const legacyPlaceholder = existing.find(isLegacyPlaceholderFollowUp);
+  if (legacyPlaceholder) {
+    return true;
+  }
+
+  const expectedSteps = normalizeFollowUpSequence(sequence);
+  const existingSteps = new Set(existing.map((item) => Number(item.step_number || 0)));
+  return expectedSteps.some((_, index) => !existingSteps.has(index + 1));
+}
+
 export async function scheduleFollowUps(db, leadId, sequence, sentAt) {
   const baseDate = new Date(sentAt || Date.now());
   const existing = await db.select('v2_follow_ups', {
     filters: [eq('lead_id', leadId)],
   });
-  const legacyPlaceholder = existing.find((item) => (
-    Number(item.step_number || 0) === 1
-    && String(item.status || '') === 'sent'
-    && String(item.outcome_notes || '').includes('Repeat outreach disabled')
-  ));
+  const legacyPlaceholder = existing.find(isLegacyPlaceholderFollowUp);
   const existingSteps = new Set(
     existing
       .filter((item) => !(legacyPlaceholder && String(item.id) === String(legacyPlaceholder.id)))
@@ -255,4 +268,46 @@ export async function processDueFollowUps(env, db) {
   }
 
   return { sent };
+}
+
+export async function backfillPermitFollowUps(db, config, options = {}) {
+  const limit = Math.max(1, Number(options.limit || 250));
+  const lookbackDays = Math.max(7, Number(options.lookbackDays || 30));
+  const since = new Date(Date.now() - (lookbackDays * 24 * 60 * 60 * 1000)).toISOString();
+
+  const leads = await db.select('v2_leads', {
+    columns: 'id,status,sent_at',
+    filters: [eq('status', 'sent'), gte('sent_at', since)],
+    ordering: [order('sent_at', 'desc')],
+    limit,
+  }).catch(() => []);
+
+  let repairedLeads = 0;
+  let repairedRows = 0;
+
+  for (const lead of leads) {
+    const existing = await db.select('v2_follow_ups', {
+      filters: [eq('lead_id', lead.id)],
+      ordering: [order('step_number', 'asc')],
+    }).catch(() => []);
+
+    if (!followUpNeedsRepair(existing, config.follow_up_sequence)) {
+      continue;
+    }
+
+    const beforePendingCount = existing.filter((item) => String(item.status || '') === 'pending').length;
+    const beforeCount = existing.length;
+    const next = await scheduleFollowUps(db, lead.id, config.follow_up_sequence, lead.sent_at || new Date().toISOString());
+    const afterPendingCount = next.filter((item) => String(item.status || '') === 'pending').length;
+    const afterCount = next.length;
+
+    repairedLeads += 1;
+    repairedRows += Math.max(afterPendingCount - beforePendingCount, 0) + Math.max(afterCount - beforeCount, 0);
+  }
+
+  return {
+    scanned: leads.length,
+    repaired_leads: repairedLeads,
+    repaired_rows: repairedRows,
+  };
 }
