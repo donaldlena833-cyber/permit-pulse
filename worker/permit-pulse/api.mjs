@@ -689,7 +689,11 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const sendMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/send$/);
     if (sendMatch && request.method === 'POST') {
-      return json(await sendLead(env, db, decodeURIComponent(sendMatch[1]), { actorId: user.email || null }));
+      const config = await getAppConfig(db);
+      return json(await sendLead(env, db, decodeURIComponent(sendMatch[1]), {
+        actorId: user.email || null,
+        followUpSequence: config.follow_up_sequence,
+      }));
     }
 
     const enrichMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/enrich$/);

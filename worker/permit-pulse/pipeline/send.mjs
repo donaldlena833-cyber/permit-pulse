@@ -139,7 +139,7 @@ export async function sendLead(env, db, leadId, options = {}) {
       step_number: options.stepNumber || null,
     },
   });
-  await scheduleFollowUps(db, leadId, options.followUpSequence || ['email:0', 'email:4', 'phone:7', 'email:14'], nowIso());
+  await scheduleFollowUps(db, leadId, options.followUpSequence || ['email:3', 'email:14'], nowIso());
 
   return {
     success: true,

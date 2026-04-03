@@ -4,32 +4,87 @@ import { formatPriorOutreachMessage, getPriorOutreach } from '../lib/outreach-gu
 import { eq, lte, order } from '../lib/supabase.mjs';
 import { buildFollowUpDraft } from './draft.mjs';
 
+function normalizeFollowUpSequence(sequence) {
+  const fallback = ['email:3', 'email:14'];
+  if (!Array.isArray(sequence)) {
+    return fallback;
+  }
+
+  const normalized = sequence
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [channel, dayString] = entry.split(':');
+      const days = Math.max(0, Number(dayString || 0));
+      return channel === 'email' && days > 0 ? { channel, days } : null;
+    })
+    .filter(Boolean);
+
+  return normalized.length > 0 ? normalized : fallback.map((entry) => {
+    const [channel, dayString] = entry.split(':');
+    return { channel, days: Number(dayString || 0) };
+  });
+}
+
 export async function scheduleFollowUps(db, leadId, sequence, sentAt) {
   const baseDate = new Date(sentAt || Date.now());
   const existing = await db.select('v2_follow_ups', {
     filters: [eq('lead_id', leadId)],
   });
-  if (existing.length > 0) {
+  const legacyPlaceholder = existing.find((item) => (
+    Number(item.step_number || 0) === 1
+    && String(item.status || '') === 'sent'
+    && String(item.outcome_notes || '').includes('Repeat outreach disabled')
+  ));
+  const existingSteps = new Set(
+    existing
+      .filter((item) => !(legacyPlaceholder && String(item.id) === String(legacyPlaceholder.id)))
+      .map((item) => Number(item.step_number || 0)),
+  );
+  const rows = [];
+  const normalizedSequence = normalizeFollowUpSequence(sequence);
+
+  for (const [index, item] of normalizedSequence.entries()) {
+    const stepNumber = index + 1;
+    if (legacyPlaceholder && stepNumber === 1) {
+      const scheduledAt = new Date(baseDate);
+      scheduledAt.setDate(scheduledAt.getDate() + Number(item.days || 0));
+      await db.update('v2_follow_ups', [`id=eq.${legacyPlaceholder.id}`], {
+        channel: item.channel,
+        status: 'pending',
+        scheduled_at: scheduledAt.toISOString(),
+        sent_at: null,
+        outcome_notes: null,
+        cancelled_reason: null,
+        draft_content: null,
+      });
+      existingSteps.add(stepNumber);
+      continue;
+    }
+
+    if (existingSteps.has(stepNumber)) {
+      continue;
+    }
+
+    const scheduledAt = new Date(baseDate);
+    scheduledAt.setDate(scheduledAt.getDate() + Number(item.days || 0));
+
+    rows.push({
+      lead_id: leadId,
+      step_number: stepNumber,
+      channel: item.channel,
+      status: 'pending',
+      scheduled_at: scheduledAt.toISOString(),
+      created_at: baseDate.toISOString(),
+    });
+  }
+
+  if (rows.length === 0) {
     return existing;
   }
 
-  const firstEntry = Array.isArray(sequence) && sequence.length > 0 ? String(sequence[0]) : 'email:0';
-  const [channel, dayString] = firstEntry.split(':');
-  const days = Number(dayString || 0);
-  const scheduledAt = new Date(baseDate);
-  scheduledAt.setDate(scheduledAt.getDate() + days);
-
-  const rows = [{
-    lead_id: leadId,
-    step_number: 1,
-    channel,
-    status: 'sent',
-    scheduled_at: scheduledAt.toISOString(),
-    sent_at: baseDate.toISOString(),
-    outcome_notes: 'Repeat outreach disabled: initial email only',
-  }];
-
-  return db.insert('v2_follow_ups', rows);
+  const inserted = await db.insert('v2_follow_ups', rows);
+  return [...existing, ...inserted];
 }
 
 export async function cancelFollowUps(db, leadId, reason) {
@@ -66,25 +121,28 @@ export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null) 
 
   const priorOutreach = await getPriorOutreach(db, recipient);
   if (priorOutreach) {
-    await db.update('v2_follow_ups', [`id=eq.${followUp.id}`], {
-      status: 'skipped',
-      cancelled_reason: 'repeat_contact_disabled',
-      outcome_notes: formatPriorOutreachMessage(priorOutreach),
-    });
+    const sameLead = priorOutreach.lead_id && String(priorOutreach.lead_id) === String(lead.id);
+    if (!sameLead) {
+      await db.update('v2_follow_ups', [`id=eq.${followUp.id}`], {
+        status: 'skipped',
+        cancelled_reason: 'repeat_contact_disabled',
+        outcome_notes: formatPriorOutreachMessage(priorOutreach),
+      });
 
-    await appendLeadEvent(db, {
-      lead_id: leadId,
-      event_type: 'follow_up_suppressed',
-      actor_type: actorId ? 'operator' : 'system',
-      actor_id: actorId,
-      detail: {
-        step_number: stepNumber,
-        recipient,
-        reason: 'repeat_contact_disabled',
-      },
-    });
+      await appendLeadEvent(db, {
+        lead_id: leadId,
+        event_type: 'follow_up_suppressed',
+        actor_type: actorId ? 'operator' : 'system',
+        actor_id: actorId,
+        detail: {
+          step_number: stepNumber,
+          recipient,
+          reason: 'repeat_contact_disabled',
+        },
+      });
 
-    throw new Error('Repeat outreach is disabled for this recipient');
+      throw new Error('Repeat outreach is disabled for this recipient');
+    }
   }
 
   await sendAutomationEmail(env, {

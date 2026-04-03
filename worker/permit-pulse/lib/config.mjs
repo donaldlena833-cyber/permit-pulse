@@ -6,7 +6,7 @@ const DEFAULT_CONFIG = {
   auto_send_trust_threshold: 50,
   manual_send_trust_threshold: 25,
   follow_up_enabled: true,
-  follow_up_sequence: ['email:0', 'email:4', 'phone:7', 'email:14'],
+  follow_up_sequence: ['email:3', 'email:14'],
   active_sources: ['nyc_dob'],
   warm_up_mode: false,
   warm_up_daily_cap: 100,
@@ -54,6 +54,34 @@ function parseValue(value) {
   return value;
 }
 
+function normalizeFollowUpSequence(value) {
+  const fallback = [...DEFAULT_CONFIG.follow_up_sequence];
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+
+  const rawEntries = value.map((entry) => String(entry || '').trim()).filter(Boolean);
+  const hasLegacyShape = rawEntries.some((entry) => (
+    entry === 'email:0'
+    || entry === 'email:4'
+    || entry.startsWith('phone:')
+  ));
+
+  if (hasLegacyShape) {
+    return fallback;
+  }
+
+  const normalized = rawEntries
+    .map((entry) => {
+      const [channel, dayString] = entry.split(':');
+      const days = Math.max(0, Number(dayString || 0));
+      return channel === 'email' && days > 0 ? `email:${days}` : null;
+    })
+    .filter(Boolean);
+
+  return normalized.length > 0 ? normalized : fallback;
+}
+
 export async function getAppConfig(db) {
   const rows = await db.select('v2_app_config', {
     columns: 'key,value,updated_at',
@@ -91,6 +119,7 @@ export async function getAppConfig(db) {
   mapped.prospect_follow_up_offsets_days = Array.isArray(mapped.prospect_follow_up_offsets_days)
     ? mapped.prospect_follow_up_offsets_days.map((value) => Math.max(1, Number(value || 0))).filter(Boolean)
     : DEFAULT_CONFIG.prospect_follow_up_offsets_days;
+  mapped.follow_up_sequence = normalizeFollowUpSequence(mapped.follow_up_sequence);
   mapped.prospect_pilot_enabled = Boolean(mapped.prospect_pilot_enabled);
   mapped.permit_auto_send_enabled = Boolean(mapped.permit_auto_send_enabled);
 

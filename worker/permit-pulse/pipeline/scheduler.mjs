@@ -9,6 +9,7 @@ import {
 } from '../lib/timezone.mjs';
 import { createRun, completeRun, failRun } from '../lib/runs.mjs';
 import { createSupabaseClient } from '../lib/supabase.mjs';
+import { processDueFollowUps } from './follow-up.mjs';
 import { runAutomationCycle } from './engine.mjs';
 
 async function runProspectSchedules(env, db, config, now) {
@@ -39,6 +40,7 @@ export async function runScheduledWork(env, now = new Date()) {
   const results = {
     prospects: [],
     permits: null,
+    permit_follow_ups: null,
   };
 
   if (config.prospect_pilot_enabled) {
@@ -50,6 +52,10 @@ export async function runScheduledWork(env, now = new Date()) {
       triggerType: 'schedule',
       triggeredBy: null,
     });
+  }
+
+  if (config.follow_up_enabled && shouldRunPermitSchedule(now, config.prospect_timezone || 'America/New_York')) {
+    results.permit_follow_ups = await processDueFollowUps(env, db);
   }
 
   return results;

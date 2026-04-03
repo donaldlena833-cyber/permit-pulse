@@ -65,7 +65,7 @@ export function buildFollowUpDraft(lead, stepNumber) {
   const firstName = String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
   const service = serviceFromLead(lead);
 
-  if (stepNumber === 2) {
+  if (Number(stepNumber || 0) <= 1) {
     return {
       subject: lead.draft_subject || `Following up on ${lead.address || 'your project'}`,
       body: [
