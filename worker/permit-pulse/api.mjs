@@ -1,4 +1,5 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
+import { isApprovedRouteCandidate, isPublishedEmailCandidate, isOfficialSitePublishedContact, withApprovedTrustFloor } from './lib/email-approval.mjs';
 import { createSupabaseClient, eq, inList, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
 import { countPendingAutomationLeads, listPendingAutomationLeads, summarizeRunQueue } from './lib/automation-queue.mjs';
@@ -84,11 +85,31 @@ function parseLeadIds(body) {
 }
 
 function isPublishedContact(candidate) {
-  return candidate?.provenance_source !== 'pattern_guess';
+  return isPublishedEmailCandidate(candidate);
 }
 
-function isSendApproved(candidate) {
-  return Boolean(candidate?.is_auto_sendable || candidate?.is_manual_sendable);
+function isSendApproved(candidate, lead = null) {
+  return isApprovedRouteCandidate(candidate, lead);
+}
+
+function presentEmailCandidate(candidate, lead = null) {
+  if (!candidate) {
+    return candidate;
+  }
+
+  if (!isOfficialSitePublishedContact(candidate, lead)) {
+    return candidate;
+  }
+
+  const approved = withApprovedTrustFloor(candidate, lead, candidate.trust_score, candidate.trust_reasons || []);
+  return {
+    ...candidate,
+    trust_score: approved.trust,
+    trust_reasons: approved.reasons,
+    is_manual_sendable: true,
+    is_auto_sendable: Boolean(candidate.is_auto_sendable || approved.trust >= 38),
+    is_research_only: false,
+  };
 }
 
 function isBenignSystemFailure(job) {
@@ -356,19 +377,28 @@ async function getLeadDetail(env, leadId) {
     return null;
   }
 
-  const discoveredEmails = emails.filter(isPublishedContact);
-  const guessedEmails = emails.filter((candidate) => !isPublishedContact(candidate));
-  const primary = emails.find((candidate) => candidate.is_primary) || null;
-  const fallback = emails.find((candidate) => candidate.is_fallback) || null;
-  const approvedPrimary = emails.find((candidate) => candidate.is_primary && isSendApproved(candidate))
-    || emails.find(isSendApproved)
+  const presentedEmails = emails.map((candidate) => presentEmailCandidate(candidate, lead));
+  const discoveredEmails = presentedEmails.filter(isPublishedContact);
+  const guessedEmails = presentedEmails.filter((candidate) => !isPublishedContact(candidate));
+  const primary = presentedEmails.find((candidate) => candidate.is_primary) || null;
+  const fallback = presentedEmails.find((candidate) => candidate.is_fallback) || null;
+  const approvedPrimary = presentedEmails.find((candidate) => candidate.is_primary && isSendApproved(candidate, lead))
+    || presentedEmails.find((candidate) => isSendApproved(candidate, lead))
     || null;
-  const approvedFallback = emails.find((candidate) => candidate.id !== approvedPrimary?.id && candidate.is_fallback && isSendApproved(candidate))
-    || emails.find((candidate) => candidate.id !== approvedPrimary?.id && isSendApproved(candidate))
+  const approvedFallback = presentedEmails.find((candidate) => candidate.id !== approvedPrimary?.id && candidate.is_fallback && isSendApproved(candidate, lead))
+    || presentedEmails.find((candidate) => candidate.id !== approvedPrimary?.id && isSendApproved(candidate, lead))
     || null;
 
   return {
-    lead: presentLead(lead),
+    lead: presentLead({
+      ...lead,
+      contact_email_trust: primary?.email_address === lead.contact_email
+        ? Number(primary?.trust_score || lead.contact_email_trust || 0)
+        : Number(lead.contact_email_trust || 0),
+      fallback_email_trust: fallback?.email_address === lead.fallback_email
+        ? Number(fallback?.trust_score || lead.fallback_email_trust || 0)
+        : Number(lead.fallback_email_trust || 0),
+    }),
     contacts: {
       phone: lead.contact_phone || '',
       primary,
@@ -380,7 +410,7 @@ async function getLeadDetail(env, leadId) {
     },
     candidates: {
       companies,
-      emails,
+      emails: presentedEmails,
     },
     draft: {
       subject: lead.draft_subject || '',

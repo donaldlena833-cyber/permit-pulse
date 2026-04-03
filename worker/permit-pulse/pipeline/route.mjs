@@ -1,4 +1,5 @@
 import { appendLeadEvent } from '../lib/events.mjs';
+import { isApprovedRouteCandidate, isAutoSendRouteCandidate, isPublishedEmailCandidate } from '../lib/email-approval.mjs';
 import { isGenericInbox, normalizeEmail } from '../lib/email.mjs';
 import { eq, order } from '../lib/supabase.mjs';
 import { daysSince } from '../lib/utils.mjs';
@@ -37,7 +38,7 @@ function sortCandidates(candidates) {
 }
 
 function isPublishedContact(candidate) {
-  return candidate?.provenance_source !== 'pattern_guess';
+  return isPublishedEmailCandidate(candidate);
 }
 
 function isSendApproved(candidate) {
@@ -113,7 +114,7 @@ export async function selectLeadRoute(db, runId, leadId) {
     ? candidates.find((candidate) => normalizeEmail(candidate.email_address) === normalizeEmail(lead.contact_email))
     : null;
   const approvedCandidates = sortCandidates(
-    candidates.filter((candidate) => Number(candidate.trust_score || 0) >= 25 && !candidate.is_research_only && isSendApproved(candidate)),
+    candidates.filter((candidate) => Number(candidate.trust_score || 0) >= 25 && !candidate.is_research_only && isApprovedRouteCandidate(candidate, lead)),
   );
 
   const approvedPrimary = operatorPreferredCandidate
@@ -162,7 +163,7 @@ export async function selectLeadRoute(db, runId, leadId) {
 
   const qualityTier = computeQualityTier(lead, routePrimary);
   const nextStatus = routePrimary?.email_address
-    ? approvedPrimary?.is_auto_sendable
+    ? isAutoSendRouteCandidate(approvedPrimary, lead)
       ? 'ready'
       : 'review'
     : 'archived';

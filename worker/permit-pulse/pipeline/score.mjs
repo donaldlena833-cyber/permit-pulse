@@ -1,11 +1,12 @@
 import { checkDomainHealth } from '../lib/dns.mjs';
+import { isOfficialSitePublishedContact, isPublishedEmailCandidate, withApprovedTrustFloor } from '../lib/email-approval.mjs';
 import { isDirectoryEmailDomain, isFreeMailbox, isGenericInbox, normalizeEmail } from '../lib/email.mjs';
 import { getAppConfig } from '../lib/config.mjs';
 import { eq } from '../lib/supabase.mjs';
 import { daysAgo, getBaseDomain } from '../lib/utils.mjs';
 
 function isPublishedCandidate(candidate) {
-  return candidate?.provenance_source !== 'pattern_guess';
+  return isPublishedEmailCandidate(candidate);
 }
 
 export function scoreEmail(candidate, domainHealth, domainReputation, lead = null, config = {}) {
@@ -18,6 +19,7 @@ export function scoreEmail(candidate, domainHealth, domainReputation, lead = nul
   const matchesChosenCompanyDomain = Boolean(officialDomain) && officialDomain === candidateDomain;
   const isDirectoryRecipient = isDirectoryEmailDomain(candidateDomain);
   const isDirectorySource = Boolean(sourceDomain) && isDirectoryEmailDomain(sourceDomain);
+  const officialSitePublished = isOfficialSitePublishedContact(candidate, lead);
   const autoSendThreshold = Math.max(0, Number(config.auto_send_trust_threshold ?? 50));
   const manualSendThreshold = Math.max(0, Number(config.manual_send_trust_threshold ?? 25));
   const autoSendPolicy = config.auto_send_policy === 'threshold' ? 'threshold' : 'any_published';
@@ -71,6 +73,9 @@ export function scoreEmail(candidate, domainHealth, domainReputation, lead = nul
   if (candidate.provenance_source === 'direct_fetch') {
     trust += 8; reasons.push('+8 direct fetch source');
   }
+  if (officialSitePublished) {
+    trust += 22; reasons.push('+22 published on chosen company site');
+  }
   if (matchesSourceDomain) {
     trust += 12; reasons.push('+12 email domain matches source site');
   }
@@ -98,14 +103,18 @@ export function scoreEmail(candidate, domainHealth, domainReputation, lead = nul
   if (candidate.provenance_source === 'pattern_guess') {
     trust -= 30; reasons.push('-30 pattern guessed');
   }
-  if (officialDomain && !matchesChosenCompanyDomain && candidate.provenance_source !== 'manual') {
+  if (officialDomain && !matchesChosenCompanyDomain && candidate.provenance_source !== 'manual' && !officialSitePublished) {
     trust -= 25; reasons.push('-25 email domain does not match chosen company');
   }
   if (isDirectorySource) {
     trust -= 10; reasons.push('-10 discovered on directory source');
   }
   if (isFreeMailbox(candidate.domain)) {
-    trust -= 25; reasons.push('-25 free mailbox');
+    if (officialSitePublished) {
+      trust -= 5; reasons.push('-5 free mailbox on official site');
+    } else {
+      trust -= 25; reasons.push('-25 free mailbox');
+    }
   }
   if (isGenericInbox(candidate.local_part)) {
     trust -= 15; reasons.push('-15 generic inbox');
@@ -138,20 +147,26 @@ export function scoreEmail(candidate, domainHealth, domainReputation, lead = nul
     reasons.push(`-${lost} time decay (${Math.round(ageDays)}d)`);
   }
 
+  if (officialSitePublished) {
+    const approvedFloor = withApprovedTrustFloor(candidate, lead, trust, reasons);
+    trust = approvedFloor.trust;
+    reasons.splice(0, reasons.length, ...approvedFloor.reasons);
+  }
+
   trust = Math.max(trust, 0);
   const isGuessed = candidate.provenance_source === 'pattern_guess';
   const isFree = isFreeMailbox(candidate.domain);
-  const canAutoSendByDomain = !officialDomain || matchesChosenCompanyDomain;
+  const canAutoSendByDomain = !officialDomain || matchesChosenCompanyDomain || officialSitePublished;
   const isPublished = isPublishedCandidate(candidate);
   const canAutoSendPublished = autoSendPolicy === 'any_published'
     && isPublished
     && candidate.provenance_source !== 'manual'
     && !isGuessed
-    && !isFree
+    && (!isFree || officialSitePublished)
     && !isDirectoryRecipient
     && canAutoSendByDomain
     && trust >= manualSendThreshold;
-  const autoSendableByThreshold = trust >= autoSendThreshold && !isGuessed && !isFree && canAutoSendByDomain;
+  const autoSendableByThreshold = trust >= autoSendThreshold && !isGuessed && (!isFree || officialSitePublished) && canAutoSendByDomain;
   const manualSendable = trust >= manualSendThreshold && !isGuessed && !isDirectoryRecipient;
 
   return {

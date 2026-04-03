@@ -1,3 +1,4 @@
+import { isApprovedRouteCandidate, isAutoSendRouteCandidate } from '../lib/email-approval.mjs';
 import { sendAutomationEmail } from '../lib/gmail.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
 import { eq, inList, order } from '../lib/supabase.mjs';
@@ -53,8 +54,8 @@ export async function sendLead(env, db, leadId, options = {}) {
 
   if (!options.force) {
     const isAllowed = options.requireAutoApproved
-      ? candidate?.is_auto_sendable
-      : candidate?.is_auto_sendable || candidate?.is_manual_sendable;
+      ? isAutoSendRouteCandidate(candidate, lead)
+      : isApprovedRouteCandidate(candidate, lead);
     if (!isAllowed) {
       throw new Error(options.requireAutoApproved ? 'No auto send approved email route' : 'No send approved email route');
     }
