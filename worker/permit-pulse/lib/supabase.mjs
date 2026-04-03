@@ -38,7 +38,15 @@ function buildQuery(params = {}) {
   return query ? `?${query}` : '';
 }
 
-async function request(env, table, options = {}) {
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetry(method, status) {
+  return method === 'GET' && [502, 503, 504].includes(Number(status || 0));
+}
+
+async function requestOnce(env, table, options = {}) {
   const {
     method = 'GET',
     query = '',
@@ -52,16 +60,34 @@ async function request(env, table, options = {}) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  if (!response.ok) {
+  return response;
+}
+
+async function request(env, table, options = {}) {
+  const method = options.method || 'GET';
+  const retryDelaysMs = [250, 900];
+  let attempt = 0;
+
+  while (true) {
+    const response = await requestOnce(env, table, options);
+
+    if (response.ok) {
+      if (response.status === 204) {
+        return null;
+      }
+
+      const text = await response.text();
+      return text ? JSON.parse(text) : null;
+    }
+
+    if (shouldRetry(method, response.status) && attempt < retryDelaysMs.length) {
+      await delay(retryDelaysMs[attempt]);
+      attempt += 1;
+      continue;
+    }
+
     throw new Error(`Supabase ${method} ${table} failed: ${response.status} ${await response.text()}`);
   }
-
-  if (response.status === 204) {
-    return null;
-  }
-
-  const text = await response.text();
-  return text ? JSON.parse(text) : null;
 }
 
 export function eq(field, value) {

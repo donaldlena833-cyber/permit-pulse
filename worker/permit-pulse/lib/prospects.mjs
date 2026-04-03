@@ -60,15 +60,38 @@ const FREE_EMAIL_DOMAINS = new Set([
 
 const FIELD_ALIASES = {
   company_name: ['company', 'company_name', 'company name', 'firm', 'organization', 'organisation', 'studio', 'business'],
-  contact_name: ['contact', 'contact_name', 'contact name', 'name', 'full_name', 'full name', 'person'],
+  contact_name: [
+    'contact',
+    'contact_name',
+    'contact name',
+    'name',
+    'full_name',
+    'full name',
+    'person',
+    'contacts',
+    'contacts_name_role',
+    'contacts_name_and_role',
+  ],
   contact_role: ['role', 'title', 'position', 'job_title', 'job title'],
-  email_address: ['email', 'email_address', 'email address', 'e-mail', 'work_email', 'work email'],
+  email_address: [
+    'email',
+    'email_address',
+    'email address',
+    'e-mail',
+    'work_email',
+    'work email',
+    'email_cc_list',
+    'email_and_cc_list',
+    'email_cc',
+    'cc_list',
+    'emails',
+  ],
   phone: ['phone', 'phone_number', 'phone number', 'mobile', 'cell', 'telephone'],
   website: ['website', 'site', 'url', 'domain', 'company website'],
   category: ['category', 'lane', 'segment'],
   city: ['city', 'town'],
   state: ['state', 'province'],
-  notes: ['notes', 'note', 'comments', 'comment', 'description', 'desc'],
+  notes: ['notes', 'note', 'comments', 'comment', 'description', 'desc', 'outreach_insight', 'insight'],
 };
 
 function categoryCounter(initialValue = 0) {
@@ -107,6 +130,20 @@ function normalizeEmail(value) {
     return null;
   }
   return email;
+}
+
+function extractPrimaryEmail(value) {
+  const text = compactText(value);
+  if (!text) {
+    return null;
+  }
+
+  const matches = text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi);
+  if (!matches?.length) {
+    return null;
+  }
+
+  return normalizeEmail(matches[0]);
 }
 
 function normalizePhone(value) {
@@ -151,6 +188,56 @@ function pickField(row, aliases) {
     }
   }
   return null;
+}
+
+function parseCombinedContact(value) {
+  const text = compactText(value);
+  if (!text) {
+    return { name: null, role: null };
+  }
+
+  const match = text.match(/^(.*?)(?:\s*\(([^()]+)\))$/);
+  if (!match) {
+    return { name: text, role: null };
+  }
+
+  return {
+    name: compactText(match[1]),
+    role: compactText(match[2]),
+  };
+}
+
+function normalizeProspectCategory(value, fallback = null) {
+  const text = compactText(value)?.toLowerCase() || null;
+  if (!text) {
+    return fallback;
+  }
+
+  if (PROSPECT_CATEGORIES.includes(text)) {
+    return text;
+  }
+  if (text.includes('architect') || text.includes('urban design')) {
+    return 'architect';
+  }
+  if (text.includes('interior')) {
+    return 'interior_designer';
+  }
+  if (text.includes('property manager') || text.includes('property management')) {
+    return 'property_manager';
+  }
+  if (text.includes('project manager') || text.includes('project management')) {
+    return 'project_manager';
+  }
+  if (
+    text.includes('gc')
+    || text.includes('general contractor')
+    || text.includes('general construction')
+    || text.includes('contractor')
+  ) {
+    return 'gc';
+  }
+
+  return fallback;
 }
 
 function greetingName(prospect) {
@@ -413,9 +500,11 @@ function mergeValue(nextValue, currentValue) {
 
 function normalizeProspectRow(row, category) {
   const normalized = normalizeRow(row);
-  const emailAddress = normalizeEmail(pickField(normalized, FIELD_ALIASES.email_address));
-  const rowCategory = compactText(pickField(normalized, FIELD_ALIASES.category));
-  const nextCategory = PROSPECT_CATEGORIES.includes(rowCategory) ? rowCategory : category;
+  const emailAddress = extractPrimaryEmail(pickField(normalized, FIELD_ALIASES.email_address));
+  const rowCategory = pickField(normalized, FIELD_ALIASES.category);
+  const nextCategory = normalizeProspectCategory(rowCategory, category);
+  const combinedContact = parseCombinedContact(pickField(normalized, FIELD_ALIASES.contact_name));
+  const explicitRole = compactText(pickField(normalized, FIELD_ALIASES.contact_role));
 
   if (!emailAddress) {
     return null;
@@ -424,8 +513,8 @@ function normalizeProspectRow(row, category) {
   return {
     category: nextCategory,
     company_name: compactText(pickField(normalized, FIELD_ALIASES.company_name)),
-    contact_name: compactText(pickField(normalized, FIELD_ALIASES.contact_name)),
-    contact_role: compactText(pickField(normalized, FIELD_ALIASES.contact_role)),
+    contact_name: combinedContact.name,
+    contact_role: explicitRole || combinedContact.role,
     email_address: emailAddress,
     email_normalized: emailAddress,
     phone: normalizePhone(pickField(normalized, FIELD_ALIASES.phone)),
