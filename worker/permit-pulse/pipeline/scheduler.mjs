@@ -1,7 +1,9 @@
 import { getAppConfig } from '../lib/config.mjs';
+import { hasGmailAutomation } from '../lib/gmail.mjs';
 import {
   runScheduledProspectPilot,
 } from '../lib/prospects.mjs';
+import { syncOutreachReplies } from '../lib/reply-sync.mjs';
 import {
   buildSlotKey,
   isWeekdayInZone,
@@ -19,11 +21,30 @@ async function runProspectSchedules(env, db, config, now) {
   }
 
   const results = [];
+  const initialTime = config.prospect_initial_send_time || '11:00';
+  const followUpTime = config.prospect_follow_up_send_time || initialTime;
+  const initialWindow = matchesLocalClock(now, timeZone, initialTime);
+  const followUpWindow = matchesLocalClock(now, timeZone, followUpTime);
 
-  if (matchesLocalClock(now, timeZone, config.prospect_initial_send_time || '11:00')) {
+  if (initialWindow && followUpWindow && initialTime === followUpTime) {
     results.push(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
       mode: 'prospect_daily_send',
       slotKey: buildSlotKey('prospect_daily_send', now, timeZone),
+    }));
+    return results;
+  }
+
+  if (initialWindow) {
+    results.push(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
+      mode: 'prospect_initial_send',
+      slotKey: buildSlotKey('prospect_initial_send', now, timeZone),
+    }));
+  }
+
+  if (followUpWindow) {
+    results.push(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
+      mode: 'prospect_follow_up_send',
+      slotKey: buildSlotKey('prospect_follow_up_send', now, timeZone),
     }));
   }
 
@@ -42,7 +63,15 @@ export async function runScheduledWork(env, now = new Date()) {
     permits: null,
     permit_follow_ups: null,
     permit_follow_up_backfill: null,
+    reply_sync: null,
   };
+
+  if (hasGmailAutomation(env)) {
+    results.reply_sync = await syncOutreachReplies(env, db, {
+      maxResults: 40,
+      newerThanDays: 21,
+    });
+  }
 
   if (config.prospect_pilot_enabled) {
     results.prospects = await runProspectSchedules(env, db, config, now);

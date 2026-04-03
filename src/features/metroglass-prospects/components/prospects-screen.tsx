@@ -1,5 +1,15 @@
 import { useMemo, useRef, useState } from "react"
-import { BarChart3, LoaderCircle, Search, ShieldBan, Upload } from "lucide-react"
+import {
+  BarChart3,
+  Clock3,
+  LoaderCircle,
+  Mail,
+  RefreshCw,
+  Search,
+  ShieldBan,
+  Upload,
+  WandSparkles,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -17,7 +27,7 @@ import type {
   ProspectsPayload,
   ProspectStatus,
 } from "@/features/metroglass-leads/types/api"
-import { parseCsvText } from "@/features/metroglass-prospects/lib/csv"
+import { analyzeCsvText, parseCsvText } from "@/features/metroglass-prospects/lib/csv"
 
 const CATEGORY_VALUES: ProspectCategory[] = [
   "architect",
@@ -39,7 +49,20 @@ interface ProspectsScreenProps {
   onQueryChange: (value: string) => void
   onOpenProspect: (prospect: ProspectRow) => void
   onImportCsv: (payload: { filename: string; category: ProspectCategory; rows: Array<Record<string, string>> }) => Promise<void>
+  onRunProspectBatch: () => void
+  onSyncReplies: () => void
+  onRepairPermitFollowUps: () => void
   actionTargetId: string | null
+}
+
+interface CsvPreview {
+  delimiter: string
+  headers: string[]
+  totalRows: number
+  importableRows: number
+  missingEmailRows: number
+  duplicateEmailRows: number
+  sampleRows: Array<Record<string, string>>
 }
 
 function queueCount(payload: ProspectsScreenProps["prospects"], category: ProspectCategory) {
@@ -61,6 +84,12 @@ function descriptionPreview(prospect: ProspectRow) {
   return `${text.slice(0, 117).trim()}...`
 }
 
+function delimiterLabel(value: string) {
+  if (value === "\t") return "tab"
+  if (value === ";") return "semicolon"
+  return "comma"
+}
+
 export function ProspectsScreen({
   prospects,
   statusFilter,
@@ -71,20 +100,47 @@ export function ProspectsScreen({
   onQueryChange,
   onOpenProspect,
   onImportCsv,
+  onRunProspectBatch,
+  onSyncReplies,
+  onRepairPermitFollowUps,
   actionTargetId,
 }: ProspectsScreenProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploadCategory, setUploadCategory] = useState<ProspectCategory>("architect")
   const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadPreview, setUploadPreview] = useState<CsvPreview | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
   const importBusy = uploading || actionTargetId === "prospects-import"
+  const replySyncBusy = actionTargetId === "sync-replies"
+  const prospectBatchBusy = actionTargetId === "run-prospect-batch"
+  const repairBusy = actionTargetId === "repair-follow-ups"
 
   const selectedFileLabel = useMemo(() => {
     if (!uploadFile) {
-      return "Choose a CSV to import"
+      return "Choose a CSV to preview and import"
     }
     return `${uploadFile.name} · ${Math.max(1, Math.round(uploadFile.size / 1024))} KB`
   }, [uploadFile])
+
+  async function handleFileChange(file: File | null) {
+    setUploadFile(file)
+    setUploadPreview(null)
+
+    if (!file) {
+      return
+    }
+
+    setPreviewing(true)
+    try {
+      const text = await file.text()
+      setUploadPreview(analyzeCsvText(text))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not read CSV preview")
+    } finally {
+      setPreviewing(false)
+    }
+  }
 
   async function handleImport() {
     if (!uploadFile) {
@@ -105,6 +161,7 @@ export function ProspectsScreen({
         rows,
       })
       setUploadFile(null)
+      setUploadPreview(null)
       if (fileInputRef.current) {
         fileInputRef.current.value = ""
       }
@@ -116,11 +173,14 @@ export function ProspectsScreen({
   }
 
   const metrics = prospects?.automation.metrics
-  const programs = prospects?.automation.campaigns ?? []
+  const categoryPrograms = prospects?.automation.campaigns ?? []
+  const campaignBatches = prospects?.automation.campaign_batches ?? []
+  const suppressedContacts = prospects?.automation.suppressed_contacts ?? []
+  const replySync = prospects?.automation.reply_sync
 
   return (
     <div className="space-y-5 pb-32">
-      <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+      <div className="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
         <Panel className="bg-white">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="max-w-3xl">
@@ -128,18 +188,18 @@ export function ProspectsScreen({
                 Outreach CRM
               </div>
               <h1 className="mt-4 text-4xl font-extrabold tracking-[-0.05em] text-steel-950 sm:text-[3rem]">
-                Contact store, sequences, and daily send control
+                Contact store, sequences, and send governance
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-steel-600">
-                This workspace is built for outbound execution: imports, personalization, send quotas, follow-up schedule, suppression safety, and contact-level visibility in one place.
+                This workspace is now about reliable outbound execution: imports, personalization, category quotas, follow-up queues, reply sync, and suppression safety in one modern ops board.
               </p>
             </div>
-            <div className="min-w-[260px] rounded-[20px] border border-steel-200 bg-steel-50/70 p-4">
-              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Sequence rules</div>
+            <div className="min-w-[280px] rounded-[20px] border border-steel-200 bg-steel-50/70 p-4">
+              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Send model</div>
               <div className="mt-3 grid gap-2 text-sm text-steel-700">
-                <div>Weekdays only at {prospects?.automation.initial_send_time ?? "11:00"} ET</div>
+                <div>Initial sends: weekdays at {prospects?.automation.initial_send_time ?? "11:00"} ET</div>
+                <div>Follow-ups: weekdays at {prospects?.automation.follow_up_send_time ?? "23:30"} ET</div>
                 <div>{prospects?.automation.initial_daily_per_category ?? 10} total sends per category per day</div>
-                <div>Follow-ups are prioritized before new initials</div>
                 <div>Cadence: {(prospects?.automation.follow_up_offsets_days ?? [3, 14]).join(" days, ")} days</div>
               </div>
             </div>
@@ -165,22 +225,28 @@ export function ProspectsScreen({
               <div className="text-xs uppercase tracking-[0.14em] text-steel-500">Positive replies</div>
               <div className="mt-2 text-3xl font-extrabold tracking-[-0.04em] text-steel-950">{metrics?.positive_replies_total ?? 0}</div>
             </div>
-          </div>
-          <div className="mt-3 rounded-[18px] border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-800">
-            {metrics?.suppressed_total ?? 0} contacts are currently suppressed by opt-out, reply, bounce, or company-domain protection.
+            <div className="rounded-[18px] border border-steel-200 bg-steel-50/70 p-4">
+              <div className="text-xs uppercase tracking-[0.14em] text-steel-500">Replied</div>
+              <div className="mt-2 text-3xl font-extrabold tracking-[-0.04em] text-steel-950">{metrics?.replied_total ?? 0}</div>
+            </div>
+            <div className="rounded-[18px] border border-steel-200 bg-steel-50/70 p-4">
+              <div className="text-xs uppercase tracking-[0.14em] text-steel-500">Suppressed</div>
+              <div className="mt-2 text-3xl font-extrabold tracking-[-0.04em] text-steel-950">{metrics?.suppressed_total ?? 0}</div>
+            </div>
           </div>
         </Panel>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+      <div className="grid gap-5 xl:grid-cols-[0.94fr_1.06fr]">
         <Panel className="bg-white">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Import dock</div>
-              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-950">Upload category-specific contact files</div>
+              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-950">Preview before you import</div>
             </div>
             <Upload className="h-5 w-5 text-brand-600" />
           </div>
+
           <div className="mt-4 flex flex-wrap gap-2">
             {CATEGORY_VALUES.map((category) => (
               <Button
@@ -194,109 +260,172 @@ export function ProspectsScreen({
               </Button>
             ))}
           </div>
+
           <div className="mt-4 rounded-[18px] border border-dashed border-steel-300 bg-steel-50/70 p-4">
             <input
               accept=".csv,text/csv"
               className="hidden"
-              onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+              onChange={(event) => void handleFileChange(event.target.files?.[0] ?? null)}
               ref={fileInputRef}
               type="file"
             />
             <div className="font-medium text-steel-900">{selectedFileLabel}</div>
             <div className="mt-1 text-sm text-steel-600">
-              Supported columns: <span className="font-mono">name, company, role, email, phone, website, category, description</span>
+              Expected columns: <span className="font-mono">name, company, role, email, phone, website, category, description</span>
             </div>
+
             <div className="mt-4 flex flex-wrap gap-2">
               <Button className="h-10 rounded-full px-4" onClick={() => fileInputRef.current?.click()} type="button" variant="outline">
                 <Upload className="h-4 w-4" />
                 Choose CSV
               </Button>
-              <Button className="h-10 rounded-full px-4" disabled={importBusy} onClick={() => void handleImport()} type="button">
+              <Button className="h-10 rounded-full px-4" disabled={importBusy || !uploadFile || previewing} onClick={() => void handleImport()} type="button">
                 {importBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                 Import contacts
               </Button>
             </div>
           </div>
 
-          <div className="mt-5">
-            <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Recent imports</div>
-            <div className="mt-3 grid gap-2">
-              {(prospects?.recent_imports ?? []).map((batch) => (
-                <div className="rounded-[16px] border border-steel-200 bg-steel-50/60 px-4 py-3" key={batch.id}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-medium text-steel-900">{batch.filename}</div>
-                      <div className="mt-1 text-sm text-steel-600">{formatProspectCategory(batch.category)} · {formatDate(batch.created_at)}</div>
-                    </div>
-                    <div className="text-right text-sm text-steel-600">
-                      <div>{batch.imported_count} imported</div>
-                      <div>{batch.skipped_count} skipped</div>
-                    </div>
+          <div className="mt-4 rounded-[18px] border border-steel-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-medium text-steel-950">Import preview</div>
+              {previewing ? <LoaderCircle className="h-4 w-4 animate-spin text-brand-600" /> : null}
+            </div>
+
+            {uploadPreview ? (
+              <div className="mt-4 space-y-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="rounded-[14px] border border-steel-200 bg-steel-50/70 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-steel-500">Rows</div>
+                    <div className="mt-1 text-2xl font-bold tracking-[-0.04em] text-steel-950">{uploadPreview.totalRows}</div>
+                  </div>
+                  <div className="rounded-[14px] border border-emerald-200 bg-emerald-50/70 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-emerald-700">Importable</div>
+                    <div className="mt-1 text-2xl font-bold tracking-[-0.04em] text-emerald-900">{uploadPreview.importableRows}</div>
+                  </div>
+                  <div className="rounded-[14px] border border-amber-200 bg-amber-50/70 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-amber-700">Missing email</div>
+                    <div className="mt-1 text-2xl font-bold tracking-[-0.04em] text-amber-900">{uploadPreview.missingEmailRows}</div>
+                  </div>
+                  <div className="rounded-[14px] border border-red-200 bg-red-50/70 p-3">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-red-700">Duplicates</div>
+                    <div className="mt-1 text-2xl font-bold tracking-[-0.04em] text-red-900">{uploadPreview.duplicateEmailRows}</div>
                   </div>
                 </div>
-              ))}
-              {!(prospects?.recent_imports ?? []).length ? (
-                <div className="rounded-[16px] border border-dashed border-steel-200 px-4 py-5 text-sm text-steel-500">
-                  No imports yet.
+
+                <div className="rounded-[14px] border border-steel-200 bg-steel-50/60 p-3 text-sm text-steel-700">
+                  Detected {delimiterLabel(uploadPreview.delimiter)}-delimited file with {uploadPreview.headers.length} mapped columns.
                 </div>
-              ) : null}
-            </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {uploadPreview.headers.slice(0, 10).map((header) => (
+                    <div key={header} className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
+                      {header}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 text-sm text-steel-500">Choose a CSV to see row counts, duplicate risk, and the detected column structure before import.</div>
+            )}
           </div>
         </Panel>
 
         <Panel className="bg-white">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Category programs</div>
-              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-950">Daily capacity and sequence health</div>
+              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Ops controls</div>
+              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-950">Automation visibility and manual overrides</div>
             </div>
-            <BarChart3 className="h-5 w-5 text-brand-600" />
+            <WandSparkles className="h-5 w-5 text-brand-600" />
           </div>
 
-          <div className="mt-4 grid gap-3">
-            {CATEGORY_VALUES.map((category) => {
-              const program = programs.find((item) => item.category === category)
-              return (
-                <button
-                  key={category}
-                  className={`grid grid-cols-[1.2fr_repeat(4,minmax(0,1fr))] items-center gap-3 rounded-[18px] border px-4 py-4 text-left transition ${
-                    categoryFilter === category
-                      ? "border-brand-300 bg-brand-50/60"
-                      : "border-steel-200 bg-white hover:border-steel-300"
-                  }`}
-                  onClick={() => onCategoryFilterChange(categoryFilter === category ? "all" : category)}
-                  type="button"
-                >
-                  <div>
-                    <div className="font-medium text-steel-950">{formatProspectCategory(category)}</div>
-                    <div className="mt-1 text-sm text-steel-600">{program?.contacts ?? 0} contacts stored</div>
-                  </div>
-                  <div className="text-sm text-steel-600">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Sent today</div>
-                    <div className="mt-1 font-medium text-steel-900">{program?.sent_today ?? 0}/{prospects?.automation.initial_daily_per_category ?? 10}</div>
-                  </div>
-                  <div className="text-sm text-steel-600">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Queued</div>
-                    <div className="mt-1 font-medium text-steel-900">{queueCount(prospects, category)}</div>
-                  </div>
-                  <div className="text-sm text-steel-600">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">F/U due</div>
-                    <div className="mt-1 font-medium text-steel-900">{followUpCount(prospects, category)}</div>
-                  </div>
-                  <div className="text-sm text-steel-600">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Suppressed</div>
-                    <div className="mt-1 font-medium text-steel-900">{suppressedCount(prospects, category)}</div>
-                  </div>
-                </button>
-              )
-            })}
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <Button className="h-11 rounded-full px-5" disabled={prospectBatchBusy} onClick={onRunProspectBatch} type="button">
+              {prospectBatchBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              Run outreach batch now
+            </Button>
+            <Button className="h-11 rounded-full px-5" disabled={replySyncBusy} onClick={onSyncReplies} type="button" variant="outline">
+              {replySyncBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Sync Gmail replies
+            </Button>
+            <Button className="h-11 rounded-full px-5" disabled={repairBusy} onClick={onRepairPermitFollowUps} type="button" variant="outline">
+              {repairBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Clock3 className="h-4 w-4" />}
+              Repair permit follow-ups
+            </Button>
+          </div>
+
+          <div className="mt-4 rounded-[18px] border border-steel-200 bg-steel-50/60 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-semibold text-steel-950">Reply sync status</div>
+              <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
+                {replySync?.checked_at ? formatRelativeTime(replySync.checked_at) : "Never run"}
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 text-sm text-steel-700 sm:grid-cols-4">
+              <div>Scanned: <span className="font-semibold text-steel-950">{replySync?.scanned_messages ?? 0}</span></div>
+              <div>Processed: <span className="font-semibold text-steel-950">{replySync?.processed_messages ?? 0}</span></div>
+              <div>Opt-outs: <span className="font-semibold text-steel-950">{replySync?.opt_outs ?? 0}</span></div>
+              <div>Positive: <span className="font-semibold text-steel-950">{replySync?.positive_replies ?? 0}</span></div>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Category programs</div>
+                <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-950">Daily capacity and queue health</div>
+              </div>
+              <BarChart3 className="h-5 w-5 text-brand-600" />
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              {CATEGORY_VALUES.map((category) => {
+                const program = categoryPrograms.find((item) => item.key === category)
+                return (
+                  <button
+                    key={category}
+                    className={`grid grid-cols-[1.2fr_repeat(4,minmax(0,1fr))] items-center gap-3 rounded-[18px] border px-4 py-4 text-left transition ${
+                      categoryFilter === category
+                        ? "border-brand-300 bg-brand-50/60"
+                        : "border-steel-200 bg-white hover:border-steel-300"
+                    }`}
+                    onClick={() => onCategoryFilterChange(categoryFilter === category ? "all" : category)}
+                    type="button"
+                  >
+                    <div>
+                      <div className="font-medium text-steel-950">{formatProspectCategory(category)}</div>
+                      <div className="mt-1 text-sm text-steel-600">{program?.contacts ?? 0} contacts stored</div>
+                    </div>
+                    <div className="text-sm text-steel-600">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Sent today</div>
+                      <div className="mt-1 font-medium text-steel-900">
+                        {prospects?.automation.sent_today_by_category?.[category] ?? 0}/{prospects?.automation.initial_daily_per_category ?? 10}
+                      </div>
+                    </div>
+                    <div className="text-sm text-steel-600">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Queued</div>
+                      <div className="mt-1 font-medium text-steel-900">{queueCount(prospects, category)}</div>
+                    </div>
+                    <div className="text-sm text-steel-600">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">F/U due</div>
+                      <div className="mt-1 font-medium text-steel-900">{followUpCount(prospects, category)}</div>
+                    </div>
+                    <div className="text-sm text-steel-600">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Suppressed</div>
+                      <div className="mt-1 font-medium text-steel-900">{suppressedCount(prospects, category)}</div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
           </div>
         </Panel>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+      <div className="grid gap-5 xl:grid-cols-[0.94fr_1.06fr]">
         <Panel className="bg-white">
-          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Today’s automation queues</div>
+          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Queues and suppression</div>
           <div className="mt-4 grid gap-4">
             <div className="rounded-[18px] border border-steel-200 bg-steel-50/60 p-4">
               <div className="flex items-center justify-between gap-2">
@@ -306,7 +435,7 @@ export function ProspectsScreen({
                 </div>
               </div>
               <div className="mt-3 grid gap-2">
-                {(prospects?.initial_queue ?? []).slice(0, 6).map((prospect) => (
+                {(prospects?.initial_queue ?? []).slice(0, 5).map((prospect) => (
                   <button
                     key={prospect.id}
                     className="rounded-[14px] border border-steel-200 bg-white px-4 py-3 text-left transition hover:border-brand-300"
@@ -328,7 +457,7 @@ export function ProspectsScreen({
                 </div>
               </div>
               <div className="mt-3 grid gap-2">
-                {(prospects?.follow_up_queue ?? []).slice(0, 6).map((followUp) => (
+                {(prospects?.follow_up_queue ?? []).slice(0, 5).map((followUp) => (
                   <div className="rounded-[14px] border border-steel-200 bg-white px-4 py-3" key={followUp.id}>
                     <div className="font-medium text-steel-900">{followUp.contact_name || followUp.company_name || followUp.email_address}</div>
                     <div className="mt-1 text-sm text-steel-600">
@@ -342,15 +471,22 @@ export function ProspectsScreen({
             <div className="rounded-[18px] border border-amber-200 bg-amber-50/60 p-4">
               <div className="inline-flex items-center gap-2 font-semibold text-amber-900">
                 <ShieldBan className="h-4 w-4" />
-                Suppression and exceptions
+                Suppression center
               </div>
               <div className="mt-3 grid gap-2">
-                {(prospects?.automation.exceptions ?? []).slice(0, 6).map((item) => (
-                  <div className="rounded-[14px] border border-amber-200 bg-white px-4 py-3" key={item.id}>
-                    <div className="font-medium text-steel-900">{item.label}</div>
-                    <div className="mt-1 text-sm text-amber-800">{item.event_type.replace(/_/g, " ")}</div>
+                {suppressedContacts.slice(0, 6).map((contact) => (
+                  <div className="rounded-[14px] border border-amber-200 bg-white px-4 py-3" key={contact.id}>
+                    <div className="font-medium text-steel-900">{contact.contact_name || contact.company_name || contact.email_address}</div>
+                    <div className="mt-1 text-sm text-amber-800">
+                      {contact.reason?.replace(/_/g, " ") || "suppressed"} · {formatRelativeTime(contact.updated_at)}
+                    </div>
                   </div>
                 ))}
+                {!suppressedContacts.length ? (
+                  <div className="rounded-[14px] border border-amber-200 bg-white px-4 py-3 text-sm text-amber-800">
+                    No suppressed contacts are visible right now.
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -359,8 +495,8 @@ export function ProspectsScreen({
         <Panel className="bg-white">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Contact store</div>
-              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-950">Search, filter, and inspect every contact</div>
+              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Campaign performance</div>
+              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-950">Import batches and delivery quality</div>
             </div>
             <div className="relative w-full max-w-sm">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-steel-400" />
@@ -368,7 +504,41 @@ export function ProspectsScreen({
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-4 grid gap-3">
+            {campaignBatches.slice(0, 8).map((batch) => (
+              <div className="grid grid-cols-[1.2fr_repeat(4,minmax(0,1fr))] gap-3 rounded-[16px] border border-steel-200 bg-steel-50/60 px-4 py-4" key={batch.id}>
+                <div>
+                  <div className="font-medium text-steel-950">{batch.filename}</div>
+                  <div className="mt-1 text-sm text-steel-600">
+                    {formatProspectCategory(batch.category)} · imported {batch.imported_count} / skipped {batch.skipped_count}
+                  </div>
+                </div>
+                <div className="text-sm text-steel-700">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Sent</div>
+                  <div className="mt-1 font-medium text-steel-950">{batch.sent_total}</div>
+                </div>
+                <div className="text-sm text-steel-700">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Delivered</div>
+                  <div className="mt-1 font-medium text-steel-950">{batch.delivered_total}</div>
+                </div>
+                <div className="text-sm text-steel-700">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Replied</div>
+                  <div className="mt-1 font-medium text-steel-950">{batch.replied_total}</div>
+                </div>
+                <div className="text-sm text-steel-700">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Positive</div>
+                  <div className="mt-1 font-medium text-steel-950">{batch.positive_replies_total}</div>
+                </div>
+              </div>
+            ))}
+            {!campaignBatches.length ? (
+              <div className="rounded-[16px] border border-steel-200 bg-steel-50/60 px-4 py-6 text-sm text-steel-500">
+                Campaign metrics will populate as soon as imports and sends accumulate.
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2">
             <Button className="h-9 rounded-full px-4" onClick={() => onStatusFilterChange("all")} type="button" variant={statusFilter === "all" ? "default" : "outline"}>
               All
             </Button>

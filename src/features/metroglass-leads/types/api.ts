@@ -160,6 +160,17 @@ export interface ProspectFollowUp {
   email_address?: string | null
 }
 
+export interface ReplySyncSummary {
+  checked_at: string
+  scanned_messages: number
+  processed_messages: number
+  prospect_replies: number
+  lead_replies: number
+  opt_outs: number
+  positive_replies: number
+  unmatched_messages: number
+}
+
 export interface FollowUp {
   id: string
   lead_id: string
@@ -292,7 +303,10 @@ export interface ProspectAutomationSummary {
     contacts_total: number
     sent_total: number
     delivered_total: number
+    replied_total?: number
     positive_replies_total: number
+    opted_out_total?: number
+    bounced_total?: number
     suppressed_total: number
   }
   campaigns?: Array<{
@@ -308,6 +322,31 @@ export interface ProspectAutomationSummary {
     positive_replies: number
     suppressed_total: number
   }>
+  campaign_batches?: Array<{
+    id: string
+    filename: string
+    category: ProspectCategory
+    imported_count: number
+    skipped_count: number
+    created_at: string
+    sent_total: number
+    delivered_total: number
+    replied_total: number
+    positive_replies_total: number
+    opted_out_total: number
+    bounced_total: number
+    contacts_total: number
+  }>
+  suppressed_contacts?: Array<{
+    id: string
+    category: ProspectCategory
+    company_name: string | null
+    contact_name: string | null
+    email_address: string
+    reason: string | null
+    updated_at: string
+  }>
+  reply_sync?: ReplySyncSummary | null
   recent_sends: Array<{
     id: string
     prospect_id: string
@@ -443,4 +482,5 @@ export interface SystemPayload {
     checked_at: string
   }>
   recent_runs: Array<AutomationRun>
+  reply_sync?: ReplySyncSummary | null
 }

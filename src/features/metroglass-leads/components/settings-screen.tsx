@@ -122,10 +122,9 @@ export function SettingsScreen({ health, config, system, onSaveConfig }: Setting
             <label className="grid gap-2 text-sm text-steel-600">
               Sequence send time
               <Input
-                value={form.prospect_initial_send_time}
+                value={form.prospect_follow_up_send_time}
                 onChange={(event) => setForm({
                   ...form,
-                  prospect_initial_send_time: event.target.value,
                   prospect_follow_up_send_time: event.target.value,
                 })}
               />

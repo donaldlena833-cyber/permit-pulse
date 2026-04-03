@@ -245,11 +245,12 @@ export async function logPhoneFollowUp(db, leadId, stepNumber, notes, actorId = 
   });
 }
 
-export async function processDueFollowUps(env, db) {
+export async function processDueFollowUps(env, db, options = {}) {
+  const limit = Math.min(Math.max(Number(options.limit || 0), 1), 50);
   const due = await db.select('v2_follow_ups', {
     filters: [eq('status', 'pending'), lte('scheduled_at', new Date().toISOString())],
     ordering: [order('scheduled_at', 'asc')],
-    limit: 20,
+    limit,
   });
 
   let sent = 0;

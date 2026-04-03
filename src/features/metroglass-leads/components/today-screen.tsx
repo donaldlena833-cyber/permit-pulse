@@ -11,7 +11,10 @@ interface TodayScreenProps {
   actionLeadId: string | null
   onOpenLead: (lead: LeadRow) => void
   onScan: () => void
+  onRunProspectBatch: () => void
   onSendAllReady: () => void
+  onSendDueFollowUps: (limit?: number) => void
+  onSyncReplies: () => void
   onSendFollowUp: (leadId: string, step: number) => void
   onLogPhoneFollowUp: (leadId: string, step: number) => void
 }
@@ -19,9 +22,9 @@ interface TodayScreenProps {
 const CATEGORIES: ProspectCategory[] = [
   "architect",
   "interior_designer",
-  "gc",
   "property_manager",
   "project_manager",
+  "gc",
 ]
 
 function leadSummary(lead: LeadRow) {
@@ -59,7 +62,10 @@ export function TodayScreen({
   actionLeadId,
   onOpenLead,
   onScan,
+  onRunProspectBatch,
   onSendAllReady,
+  onSendDueFollowUps,
+  onSyncReplies,
   onSendFollowUp,
   onLogPhoneFollowUp,
 }: TodayScreenProps) {
@@ -146,7 +152,7 @@ export function TodayScreen({
               </div>
               <p className="mt-2 text-sm leading-6 text-steel-600">
                 {prospect?.pilot_enabled
-                  ? `${prospect.initial_daily_per_category}/category at ${prospect.initial_send_time}, with follow-ups queued for ${(prospect.follow_up_offsets_days ?? [3, 14]).join(" and ")} days in the same daily window.`
+                  ? `${prospect.initial_daily_per_category}/category at ${prospect.initial_send_time}, with follow-ups queued for ${(prospect.follow_up_offsets_days ?? [3, 14]).join(" and ")} days at ${prospect.follow_up_send_time}.`
                   : "The prospect pilot is currently disabled in config."}
               </p>
             </div>
@@ -166,16 +172,31 @@ export function TodayScreen({
               </div>
             ))}
           </div>
+
+          <div className="mt-4 rounded-[16px] border border-steel-200 bg-steel-50/80 p-3 text-sm leading-6 text-steel-600">
+            Reply sync {prospect?.reply_sync?.checked_at ? `last checked ${formatRelativeTime(prospect.reply_sync.checked_at)}` : "has not run yet"}.
+            {" "}
+            Processed {prospect?.reply_sync?.processed_messages ?? 0} inbox replies and captured {prospect?.reply_sync?.opt_outs ?? 0} opt-outs.
+          </div>
         </Panel>
 
         <Panel>
           <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Actions</div>
-          <div className="mt-4 space-y-3">
+          <div className="mt-4 grid gap-3">
             <Button className="h-11 w-full rounded-full" onClick={onScan} type="button">
               {isScanRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Run permit scan"}
             </Button>
             <Button className="h-11 w-full rounded-full bg-emerald-600 text-white hover:bg-emerald-700" onClick={onSendAllReady} type="button">
-              {actionLeadId === null ? "Send ready permits" : "Working"}
+              {actionLeadId === "send-ready" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Send ready permits"}
+            </Button>
+            <Button className="h-11 w-full rounded-full" onClick={() => onSendDueFollowUps(20)} type="button" variant="outline">
+              {actionLeadId === "send-due-follow-ups" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Send 20 due follow-ups"}
+            </Button>
+            <Button className="h-11 w-full rounded-full" onClick={onRunProspectBatch} type="button" variant="outline">
+              {actionLeadId === "run-prospect-batch" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Run outreach batch now"}
+            </Button>
+            <Button className="h-11 w-full rounded-full" onClick={onSyncReplies} type="button" variant="outline">
+              {actionLeadId === "sync-replies" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Sync Gmail replies"}
             </Button>
           </div>
           <div className="mt-4 rounded-[16px] border border-steel-200 bg-steel-50/80 p-3 text-sm leading-6 text-steel-600">

@@ -22,12 +22,15 @@ import {
   markOutcome,
   optOutProspect as optOutProspectRequest,
   refreshDraft,
+  repairLeadFollowUps,
   selectLeadEmail,
   sendAllReady,
+  sendDueLeadFollowUps,
   sendFollowUp,
   sendLeadNow,
   sendProspectNow,
   skipFollowUp,
+  syncOutreachRepliesNow,
   switchToFallback,
   triggerScan,
   updateConfig,
@@ -36,6 +39,7 @@ import {
   updateProspectNotes,
   updateProspectStatus,
   vouchLead,
+  runProspectDailySendNow,
 } from "@/features/metroglass-leads/lib/remote"
 import type {
   AppTab,
@@ -133,7 +137,7 @@ export function useMetroglassLeads() {
             permit_auto_send_enabled: false,
             timezone: "America/New_York",
             initial_send_time: "11:00",
-            follow_up_send_time: "11:00",
+            follow_up_send_time: "23:30",
             initial_daily_per_category: 10,
             follow_up_daily_per_category: 10,
             follow_up_delay_days: 3,
@@ -198,10 +202,16 @@ export function useMetroglassLeads() {
               contacts_total: 0,
               sent_total: 0,
               delivered_total: 0,
+              replied_total: 0,
               positive_replies_total: 0,
+              opted_out_total: 0,
+              bounced_total: 0,
               suppressed_total: 0,
             },
             campaigns: [],
+            campaign_batches: [],
+            suppressed_contacts: [],
+            reply_sync: null,
             initial_queue: [],
             follow_up_queue: [],
             recent_sends: [],
@@ -368,6 +378,26 @@ export function useMetroglassLeads() {
     }
   }, [refreshProspects, refreshSelectedProspect, refreshSystem, refreshToday])
 
+  const runGlobalAction = useCallback(async (actionId: string, work: () => Promise<void>, successMessage: string) => {
+    setActionLeadId(actionId)
+    try {
+      await work()
+      toast.success(successMessage)
+      await Promise.all([
+        refreshToday(),
+        refreshLeads(),
+        refreshProspects(),
+        refreshSelectedLead(selectedLeadId),
+        refreshSelectedProspect(selectedProspectId),
+        refreshSystem(),
+      ])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Action failed")
+    } finally {
+      setActionLeadId(null)
+    }
+  }, [refreshLeads, refreshProspects, refreshSelectedLead, refreshSelectedProspect, refreshSystem, refreshToday, selectedLeadId, selectedProspectId])
+
   const scan = useCallback(async () => {
     setActionLeadId("scan")
     try {
@@ -418,7 +448,44 @@ export function useMetroglassLeads() {
 
   const actions = useMemo(() => ({
     scan,
-    sendAllReady: () => runAction(null, async () => { await sendAllReady() }, "Ready leads sent"),
+    sendAllReady: () => runGlobalAction("send-ready", async () => { await sendAllReady() }, "Ready leads sent"),
+    sendDueFollowUps: (limit = 20) => runGlobalAction("send-due-follow-ups", async () => {
+      await sendDueLeadFollowUps(limit)
+    }, `Sent up to ${limit} due permit follow-ups`),
+    repairFollowUps: () => runGlobalAction("repair-follow-ups", async () => {
+      await repairLeadFollowUps()
+    }, "Permit follow-up queue repaired"),
+    syncReplies: () => runGlobalAction("sync-replies", async () => {
+      await syncOutreachRepliesNow()
+    }, "Reply sync complete"),
+    runProspectBatch: async () => {
+      setActionLeadId("run-prospect-batch")
+      try {
+        const result = await runProspectDailySendNow()
+        if (!result.started) {
+          throw new Error(
+            result.reason === "prospect_pilot_disabled"
+              ? "Prospect pilot is disabled in settings"
+              : result.reason === "slot_already_processed"
+                ? "This outreach slot already ran"
+                : "Outreach batch did not start",
+          )
+        }
+        toast.success(`Outreach batch started${result.summary?.selected_count ? ` for ${result.summary.selected_count} contacts` : ""}`)
+        await Promise.all([
+          refreshToday(),
+          refreshLeads(),
+          refreshProspects(),
+          refreshSelectedLead(selectedLeadId),
+          refreshSelectedProspect(selectedProspectId),
+          refreshSystem(),
+        ])
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Action failed")
+      } finally {
+        setActionLeadId(null)
+      }
+    },
     enrichLead: (leadId: string) => runAction(leadId, async () => { await enrichLeadNow(leadId) }, "Lead automation started"),
     sendLead: (leadId: string) => runAction(leadId, async () => { await sendLeadNow(leadId) }, "Email sent"),
     archiveLead: (leadId: string) => runAction(leadId, async () => { await archiveLead(leadId) }, "Lead archived"),
@@ -512,7 +579,7 @@ export function useMetroglassLeads() {
         toast.error(error instanceof Error ? error.message : "Settings update failed")
       }
     },
-  }), [refreshProspects, refreshSystem, refreshToday, runAction, runProspectAction, scan])
+  }), [refreshLeads, refreshProspects, refreshSelectedLead, refreshSelectedProspect, refreshSystem, refreshToday, runAction, runGlobalAction, runProspectAction, scan, selectedLeadId, selectedProspectId])
 
   return {
     tab,

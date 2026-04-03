@@ -274,6 +274,37 @@ export function sendFollowUp(leadId: string, step: number) {
   })
 }
 
+export function sendDueLeadFollowUps(limit = 20) {
+  return requestJson<{
+    checked?: number
+    attempted?: number
+    succeeded?: number
+    failed?: number
+    processed?: number
+  }>("/api/leads/follow-ups/send-due", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ limit }),
+  })
+}
+
+export function repairLeadFollowUps(lookbackDays = 60, limit = 500) {
+  return requestJson<{
+    scanned?: number
+    repaired?: number
+    created?: number
+    upgraded_legacy?: number
+  }>("/api/leads/follow-ups/repair", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ lookback_days: lookbackDays, limit }),
+  })
+}
+
 export function skipFollowUp(leadId: string, step: number) {
   return requestJson<{ success: boolean }>(`/api/leads/${encodeURIComponent(leadId)}/follow-ups/${step}/skip`, {
     method: "POST",
@@ -306,4 +337,36 @@ export function updateConfig(patch: Partial<ConfigPayload>) {
 
 export function fetchSystem() {
   return requestJson<SystemPayload>("/api/system")
+}
+
+export function syncOutreachRepliesNow() {
+  return requestJson<{
+    checked_at: string
+    scanned_messages: number
+    processed_messages: number
+    prospect_replies: number
+    lead_replies: number
+    opt_outs: number
+    positive_replies: number
+    unmatched_messages: number
+  }>("/api/outreach/sync-replies", {
+    method: "POST",
+  })
+}
+
+export function runProspectDailySendNow() {
+  return requestJson<{
+    started: boolean
+    reason?: string
+    summary?: {
+      attempted_by_category: Record<string, number>
+      sent_by_category: Record<string, number>
+      skipped_by_category: Record<string, number>
+      selected_count: number
+      selected_initial_count?: number
+      selected_follow_up_count?: number
+    }
+  }>("/api/prospects/run-daily-send", {
+    method: "POST",
+  })
 }

@@ -12,6 +12,7 @@ import {
   saveProspectNotes,
   sendProspect,
   updateProspectStatus,
+  runScheduledProspectPilot,
 } from './lib/prospects.mjs';
 import { createSupabaseClient, eq, inList, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
@@ -19,7 +20,7 @@ import { countPendingAutomationLeads, listPendingAutomationLeads, summarizeRunQu
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle, startLeadBatchAutomation } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
 import { sendLead, sendReadyLeads } from './pipeline/send.mjs';
-import { logPhoneFollowUp, sendFollowUp, skipFollowUp } from './pipeline/follow-up.mjs';
+import { backfillPermitFollowUps, logPhoneFollowUp, processDueFollowUps, sendFollowUp, skipFollowUp } from './pipeline/follow-up.mjs';
 import {
   addManualLeadEmail,
   chooseLeadEmailCandidate,
@@ -29,6 +30,8 @@ import {
   switchLeadToFallback,
   vouchLeadEmail,
 } from './pipeline/outcomes.mjs';
+import { readReplySyncState, syncOutreachReplies } from './lib/reply-sync.mjs';
+import { completeRun, createRun, failRun } from './lib/runs.mjs';
 
 function corsHeaders() {
   return {
@@ -274,6 +277,7 @@ async function getTodayPayload(env) {
     sentOutcomes,
     processedLeads,
     prospectAutomation,
+    replySync,
   ] = await Promise.all([
     presentRun(db, currentRun),
     presentRun(db, lastRun),
@@ -306,6 +310,7 @@ async function getTodayPayload(env) {
     }),
     getProcessedLeadsForRun(db, displayRun),
     getProspectAutomationOverview(db, config),
+    readReplySyncState(env),
   ]);
 
   const leadIds = [...new Set([...followUps.map((row) => row.lead_id), ...sentOutcomes.map((row) => row.lead_id)])];
@@ -377,7 +382,10 @@ async function getTodayPayload(env) {
       sent_at: item.sent_at,
       outcome: item.outcome,
     })),
-    prospect_automation: prospectAutomation,
+    prospect_automation: {
+      ...prospectAutomation,
+      reply_sync: replySync,
+    },
   };
 }
 
@@ -616,18 +624,58 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/api/prospects' && request.method === 'GET') {
-      return json(await listProspects(db, {
-        status: url.searchParams.get('status') || 'all',
-        category: url.searchParams.get('category') || 'all',
-        q: url.searchParams.get('q') || '',
-        page: Number(url.searchParams.get('page') || 1),
-        limit: Number(url.searchParams.get('limit') || 20),
-      }));
+      const [payload, replySync] = await Promise.all([
+        listProspects(db, {
+          status: url.searchParams.get('status') || 'all',
+          category: url.searchParams.get('category') || 'all',
+          q: url.searchParams.get('q') || '',
+          page: Number(url.searchParams.get('page') || 1),
+          limit: Number(url.searchParams.get('limit') || 20),
+        }),
+        readReplySyncState(env),
+      ]);
+      return json({
+        ...payload,
+        automation: {
+          ...payload.automation,
+          reply_sync: replySync,
+        },
+      });
     }
 
     if (url.pathname === '/api/prospects/import' && request.method === 'POST') {
       const body = await parseBody(request);
       return json(await importProspects(db, body, user.email || null));
+    }
+
+    if (url.pathname === '/api/outreach/sync-replies' && request.method === 'POST') {
+      return json(await syncOutreachReplies(env, db, {
+        maxResults: 60,
+        newerThanDays: 21,
+      }));
+    }
+
+    if (url.pathname === '/api/prospects/run-daily-send' && request.method === 'POST') {
+      return json(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
+        mode: 'prospect_manual_send',
+        slotKey: null,
+      }));
+    }
+
+    if (url.pathname === '/api/leads/follow-ups/send-due' && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await processDueFollowUps(env, db, {
+        limit: Number(body?.limit || 20),
+      }));
+    }
+
+    if (url.pathname === '/api/leads/follow-ups/repair' && request.method === 'POST') {
+      const body = await parseBody(request);
+      const config = await getAppConfig(db);
+      return json(await backfillPermitFollowUps(db, config, {
+        limit: Number(body?.limit || 500),
+        lookbackDays: Number(body?.lookback_days || 60),
+      }));
     }
 
     const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
@@ -842,6 +890,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
         recent_failures: recentFailures,
         domain_health: domainHealth,
         recent_runs: await Promise.all(runs.map((run) => presentRun(db, run))),
+        reply_sync: await readReplySyncState(env),
       });
     }
 

@@ -16,7 +16,7 @@ const DEFAULT_CONFIG = {
   prospect_follow_up_daily_per_category: 10,
   prospect_timezone: 'America/New_York',
   prospect_initial_send_time: '11:00',
-  prospect_follow_up_send_time: '11:00',
+  prospect_follow_up_send_time: '23:30',
   prospect_follow_up_delay_days: 3,
   prospect_follow_up_offsets_days: [3, 14],
   permit_auto_send_enabled: false,

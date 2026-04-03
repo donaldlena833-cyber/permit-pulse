@@ -630,24 +630,25 @@ function baseFollowUpDraft(prospect) {
   const personalizedLine = personalizedContextLine(prospect);
   const followUpStep = Number(prospect?.follow_up_step || 1);
   const secondTouch = followUpStep >= 2;
+  const company = compactText(prospect.company_name) || 'your team';
 
   return {
     subject: secondTouch
-      ? `Final follow-up from MetroGlass Pro${prospect.company_name ? ` for ${prospect.company_name}` : ''}`
-      : `Quick follow-up from MetroGlass Pro${prospect.company_name ? ` for ${prospect.company_name}` : ''}`,
+      ? `Final follow-up for ${company} | MetroGlass Pro`
+      : `Quick follow-up for ${company} | MetroGlass Pro`,
     body: [
       greetingLine(prospect),
       '',
       secondTouch
-        ? `One last follow-up from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`
+        ? `One last note from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`
         : `Following up on my note from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`,
       personalizedLine,
       '',
       categoryFocusLine(prospect),
       '',
       secondTouch
-        ? 'If there is any upcoming glass scope, I would still be glad to send over our MetroGlass Pro About Us one-pager and put together quick next steps.'
-        : 'If there is any upcoming glass scope, I would be happy to connect and send over our MetroGlass Pro About Us one-pager again if helpful.',
+        ? 'If there is any upcoming glass scope, I would still be glad to share our MetroGlass Pro About Us one-pager again and map out quick next steps.'
+        : 'If there is any upcoming glass scope, I would be glad to send over our MetroGlass Pro About Us one-pager again and put together quick next steps.',
       '',
       'Warm regards,',
       'Donald Lena',
@@ -661,24 +662,29 @@ function baseFollowUpDraft(prospect) {
 function initialSubject(prospect) {
   const subjectBase = compactText(prospect.company_name) || compactText(prospect.contact_name) || 'your team';
   const snippet = firstDescriptionSnippet(prospect, 48);
-  return snippet ? `MetroGlass Pro for ${subjectBase} | ${snippet}` : `MetroGlass Pro for ${subjectBase}`;
+  return snippet ? `${subjectBase} | ${snippet} | MetroGlass Pro` : `${subjectBase} | MetroGlass Pro`;
 }
 
 function initialBody(prospect) {
   const personalizedLine = personalizedContextLine(prospect);
+  const company = compactText(prospect.company_name);
 
   return [
     greetingLine(prospect),
     '',
-    `I’m Donald from MetroGlass Pro. We ${categoryPitch(prospect.category)} across NYC, New Jersey, and Connecticut.`,
+    company
+      ? `I’m Donald from MetroGlass Pro, and I’m reaching out because ${company} looks closely aligned with the kind of glass scope we help support.`
+      : `I’m Donald from MetroGlass Pro, and I’m reaching out because your work looks closely aligned with the kind of glass scope we help support.`,
+    '',
+    `We ${categoryPitch(prospect.category)} across NYC, New Jersey, and Connecticut.`,
     '',
     personalizedLine,
     '',
     categoryFocusLine(prospect),
     '',
-    'I attached our MetroGlass Pro About Us one-pager so you can get a quick feel for the work and responsiveness we bring to projects.',
+    'I attached our MetroGlass Pro About Us one-pager so you can get a quick feel for the work, responsiveness, and detail we bring to projects.',
     '',
-    'If you have a project where glass scope still needs a responsive partner, I’d be happy to connect, turn around pricing quickly, and help keep things moving.',
+    'If you have a project where glass scope still needs a responsive partner, I would be glad to connect, turn around pricing quickly, and help keep things moving.',
     '',
     'Warm regards,',
     'Donald Lena',
@@ -751,7 +757,7 @@ async function ensureProspectFollowUp(db, prospect, config) {
     const scheduledDateKey = addDaysToDateKey(dateKey, offset);
     const scheduledAt = zonedDateTimeToUtcIso(
       scheduledDateKey,
-      config.prospect_initial_send_time || '11:00',
+      config.prospect_follow_up_send_time || config.prospect_initial_send_time || '11:00',
       config.prospect_timezone || 'America/New_York',
     );
     const draft = buildProspectFollowUpDraft({ ...prospect, follow_up_step: stepNumber });
@@ -1016,6 +1022,9 @@ function categoryMetricTemplate() {
     sent_today: 0,
     sent_total: 0,
     delivered_total: 0,
+    replied_total: 0,
+    opted_out_total: 0,
+    bounced_total: 0,
     positive_replies: 0,
     suppressed_total: 0,
   }]));
@@ -1025,11 +1034,15 @@ export async function getProspectAutomationOverview(db, config = null) {
   const resolvedConfig = config || await getAppConfig(db);
   const timeZone = resolvedConfig.prospect_timezone || 'America/New_York';
   const todayKey = formatLocalDateKey(new Date(), timeZone);
-  const [prospects, followUps, outcomes, events] = await Promise.all([
+  const [prospects, followUps, outcomes, events, recentImports] = await Promise.all([
     listAllProspects(db),
     listAllProspectFollowUps(db),
     listRecentProspectOutcomes(db),
     listRecentProspectEvents(db),
+    db.select('v2_prospect_import_batches', {
+      ordering: [order('created_at', 'desc')],
+      limit: 12,
+    }).catch(() => []),
   ]);
 
   const prospectMap = Object.fromEntries(prospects.map((prospect) => [prospect.id, prospect]));
@@ -1046,9 +1059,28 @@ export async function getProspectAutomationOverview(db, config = null) {
   const deliveredByCategory = categoryCounter(0);
   const positiveRepliesByCategory = categoryCounter(0);
   const categoryMetrics = categoryMetricTemplate();
+  const campaignMetrics = new Map(
+    recentImports.map((batch) => [String(batch.id), {
+      id: batch.id,
+      filename: batch.filename,
+      category: batch.category,
+      imported_count: Number(batch.imported_count || 0),
+      skipped_count: Number(batch.skipped_count || 0),
+      created_at: batch.created_at,
+      sent_total: 0,
+      delivered_total: 0,
+      replied_total: 0,
+      positive_replies_total: 0,
+      opted_out_total: 0,
+      bounced_total: 0,
+      contacts_total: 0,
+    }]),
+  );
 
   let sentTotal = 0;
   let bouncedTotal = 0;
+  let repliedTotal = 0;
+  let optOutTotal = 0;
   let positiveRepliesTotal = 0;
   let suppressedTotal = 0;
 
@@ -1058,10 +1090,19 @@ export async function getProspectAutomationOverview(db, config = null) {
     }
 
     categoryMetrics[prospect.category].contacts += 1;
+    if (prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
+      campaignMetrics.get(String(prospect.import_batch_id)).contacts_total += 1;
+    }
 
     const companySuppressed = companySuppressionReason(prospect, suppressedDomains);
     if (prospect.status === 'opted_out' || prospect.do_not_contact || prospect.opted_out_at) {
       optOutsByCategory[prospect.category] += 1;
+      categoryMetrics[prospect.category].opted_out_total += 1;
+      optOutTotal += 1;
+    }
+    if (prospect.status === 'replied' || prospect.last_replied_at) {
+      categoryMetrics[prospect.category].replied_total += 1;
+      repliedTotal += 1;
     }
     if (isProspectSuppressed(prospect) || companySuppressed) {
       categoryMetrics[prospect.category].suppressed_total += 1;
@@ -1081,11 +1122,27 @@ export async function getProspectAutomationOverview(db, config = null) {
       categoryMetrics[prospect.category].sent_total += 1;
       deliveredByCategory[prospect.category] += 1;
       categoryMetrics[prospect.category].delivered_total += 1;
+      if (prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
+        const campaign = campaignMetrics.get(String(prospect.import_batch_id));
+        campaign.sent_total += 1;
+        campaign.delivered_total += 1;
+      }
     }
     if (outcomeType === 'bounced') {
       bouncedTotal += 1;
       deliveredByCategory[prospect.category] = Math.max(0, deliveredByCategory[prospect.category] - 1);
       categoryMetrics[prospect.category].delivered_total = Math.max(0, categoryMetrics[prospect.category].delivered_total - 1);
+      categoryMetrics[prospect.category].bounced_total += 1;
+      if (prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
+        const campaign = campaignMetrics.get(String(prospect.import_batch_id));
+        campaign.bounced_total += 1;
+        campaign.delivered_total = Math.max(0, campaign.delivered_total - 1);
+      }
+    }
+    if (outcomeType === 'replied') {
+      if (prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
+        campaignMetrics.get(String(prospect.import_batch_id)).replied_total += 1;
+      }
     }
 
     if (outcomeType !== 'sent' || !matchesLocalDate(outcome.sent_at || outcome.created_at, todayKey, timeZone)) {
@@ -1110,11 +1167,18 @@ export async function getProspectAutomationOverview(db, config = null) {
       positiveRepliesTotal += 1;
       positiveRepliesByCategory[prospect.category] += 1;
       categoryMetrics[prospect.category].positive_replies += 1;
+      if (prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
+        campaignMetrics.get(String(prospect.import_batch_id)).positive_replies_total += 1;
+      }
+    }
+    if (event.event_type === 'opted_out' && prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
+      campaignMetrics.get(String(prospect.import_batch_id)).opted_out_total += 1;
     }
   }
 
   const initialQueue = [];
   const followUpQueue = [];
+  const suppressedContacts = [];
 
   for (const prospect of prospects) {
     const prospectFollowUps = followUpsByProspect[prospect.id] || [];
@@ -1132,6 +1196,18 @@ export async function getProspectAutomationOverview(db, config = null) {
         categoryMetrics[prospect.category].follow_ups_due += 1;
         followUpQueue.push(hydrateFollowUpItem(followUp, hydratedProspect));
       }
+    }
+
+    if ((hydratedProspect.queue_state === 'suppressed' || hydratedProspect.queue_state === 'opted_out') && suppressedContacts.length < 20) {
+      suppressedContacts.push({
+        id: hydratedProspect.id,
+        category: hydratedProspect.category,
+        company_name: hydratedProspect.company_name,
+        contact_name: hydratedProspect.contact_name,
+        email_address: hydratedProspect.email_address,
+        reason: hydratedProspect.automation_block_reason || hydratedProspect.queue_state,
+        updated_at: hydratedProspect.updated_at,
+      });
     }
   }
 
@@ -1171,7 +1247,7 @@ export async function getProspectAutomationOverview(db, config = null) {
     permit_auto_send_enabled: Boolean(resolvedConfig.permit_auto_send_enabled),
     timezone: timeZone,
     initial_send_time: resolvedConfig.prospect_initial_send_time || '11:00',
-    follow_up_send_time: resolvedConfig.prospect_initial_send_time || '11:00',
+    follow_up_send_time: resolvedConfig.prospect_follow_up_send_time || resolvedConfig.prospect_initial_send_time || '11:00',
     initial_daily_per_category: Number(resolvedConfig.prospect_daily_per_category || resolvedConfig.prospect_initial_daily_per_category || 10),
     follow_up_daily_per_category: Number(resolvedConfig.prospect_daily_per_category || resolvedConfig.prospect_follow_up_daily_per_category || 10),
     follow_up_delay_days: Number(Array.isArray(resolvedConfig.prospect_follow_up_offsets_days) ? resolvedConfig.prospect_follow_up_offsets_days[0] || 3 : resolvedConfig.prospect_follow_up_delay_days || 3),
@@ -1194,10 +1270,15 @@ export async function getProspectAutomationOverview(db, config = null) {
       contacts_total: prospects.length,
       sent_total: sentTotal,
       delivered_total: Math.max(sentTotal - bouncedTotal, 0),
+      replied_total: repliedTotal,
       positive_replies_total: positiveRepliesTotal,
+      opted_out_total: optOutTotal,
+      bounced_total: bouncedTotal,
       suppressed_total: suppressedTotal,
     },
     campaigns: PROSPECT_CATEGORIES.map((category) => categoryMetrics[category]),
+    campaign_batches: [...campaignMetrics.values()],
+    suppressed_contacts: suppressedContacts,
   };
 }
 
@@ -1509,7 +1590,7 @@ export async function saveProspectNotes(db, prospectId, notes, actorId = null) {
   });
 }
 
-export async function updateProspectStatus(db, prospectId, status, actorId = null) {
+export async function updateProspectStatus(db, prospectId, status, actorId = null, actorType = 'operator', detail = null) {
   if (!PROSPECT_STATUSES.includes(status)) {
     throw new Error('Invalid prospect status');
   }
@@ -1542,18 +1623,25 @@ export async function updateProspectStatus(db, prospectId, status, actorId = nul
     });
   }
 
-  await recordProspectEvent(db, prospectId, status === 'opted_out' ? 'opted_out' : 'status_changed', 'operator', actorId, { status });
+  await recordProspectEvent(
+    db,
+    prospectId,
+    status === 'opted_out' ? 'opted_out' : 'status_changed',
+    actorType,
+    actorId,
+    { status, ...(detail && typeof detail === 'object' ? detail : {}) },
+  );
 
   return hydrateProspect(updated, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
   });
 }
 
-export async function optOutProspect(db, prospectId, actorId = null) {
-  return updateProspectStatus(db, prospectId, 'opted_out', actorId);
+export async function optOutProspect(db, prospectId, actorId = null, actorType = 'operator', detail = null) {
+  return updateProspectStatus(db, prospectId, 'opted_out', actorId, actorType, detail);
 }
 
-export async function markProspectReply(db, prospectId, actorId = null, tone = 'neutral') {
+export async function markProspectReply(db, prospectId, actorId = null, tone = 'neutral', actorType = 'operator', detail = null) {
   const prospect = await db.single('v2_prospects', { filters: [eq('id', prospectId)] });
   if (!prospect) {
     throw new Error('Prospect not found');
@@ -1574,14 +1662,21 @@ export async function markProspectReply(db, prospectId, actorId = null, tone = '
     outcome: 'replied',
     detail: { tone },
   });
-  await recordProspectEvent(db, prospectId, tone === 'positive' ? 'positive_reply' : 'replied', 'operator', actorId, { tone });
+  await recordProspectEvent(
+    db,
+    prospectId,
+    tone === 'positive' ? 'positive_reply' : 'replied',
+    actorType,
+    actorId,
+    { tone, ...(detail && typeof detail === 'object' ? detail : {}) },
+  );
 
   return hydrateProspect(updated, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
   });
 }
 
-export async function markProspectBounced(db, prospectId, actorId = null) {
+export async function markProspectBounced(db, prospectId, actorId = null, actorType = 'operator', detail = null) {
   const prospect = await db.single('v2_prospects', { filters: [eq('id', prospectId)] });
   if (!prospect) {
     throw new Error('Prospect not found');
@@ -1601,7 +1696,7 @@ export async function markProspectBounced(db, prospectId, actorId = null) {
     outcome: 'bounced',
     detail: { source: 'operator' },
   });
-  await recordProspectEvent(db, prospectId, 'bounced', 'operator', actorId, null);
+  await recordProspectEvent(db, prospectId, 'bounced', actorType, actorId, detail);
 
   return hydrateProspect(updated, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
@@ -1938,7 +2033,15 @@ export async function runScheduledProspectPilot(env, db, createRun, completeRun,
   );
 
   try {
-    const summary = await runProspectDailyBatch(env, db, config, slotKey);
+    let summary;
+
+    if (mode === 'prospect_initial_send') {
+      summary = await runProspectInitialBatch(env, db, config, slotKey);
+    } else if (mode === 'prospect_follow_up_send') {
+      summary = await runProspectFollowUpBatch(env, db, config, slotKey);
+    } else {
+      summary = await runProspectDailyBatch(env, db, config, slotKey);
+    }
 
     await completeRun(db, run.id, {
       sends_attempted: Object.values(summary.attempted_by_category).reduce((total, value) => total + Number(value || 0), 0),

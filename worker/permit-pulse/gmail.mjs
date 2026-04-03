@@ -18,6 +18,13 @@ async function fetchAccessToken(env) {
   return payload.access_token;
 }
 
+function gmailHeaders(accessToken) {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+  };
+}
+
 function encodeBase64Url(value) {
   const bytes = new TextEncoder().encode(String(value));
   return encodeBase64Bytes(bytes)
@@ -209,4 +216,82 @@ export async function sendAutomationEmail(env, draft) {
   }
 
   return response.json();
+}
+
+function parseHeader(headers = [], name) {
+  return headers.find((header) => String(header.name || '').toLowerCase() === String(name || '').toLowerCase())?.value || null;
+}
+
+function parseEmailAddress(value) {
+  const match = String(value || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].toLowerCase() : null;
+}
+
+async function gmailRequest(env, path, init = {}) {
+  const accessToken = await fetchAccessToken(env);
+  const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`, {
+    ...init,
+    headers: {
+      ...gmailHeaders(accessToken),
+      ...(init.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Gmail request failed: ${response.status} ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
+async function listMessageIds(env, query, maxResults = 50) {
+  const params = new URLSearchParams();
+  params.set('q', query);
+  params.set('includeSpamTrash', 'false');
+  params.set('maxResults', String(Math.min(Math.max(Number(maxResults || 0), 1), 100)));
+
+  const payload = await gmailRequest(env, `messages?${params.toString()}`);
+  return Array.isArray(payload?.messages) ? payload.messages : [];
+}
+
+async function getMessageMetadata(env, messageId) {
+  const params = new URLSearchParams();
+  params.set('format', 'metadata');
+  for (const header of ['From', 'Subject', 'Date', 'To']) {
+    params.append('metadataHeaders', header);
+  }
+
+  const payload = await gmailRequest(env, `messages/${encodeURIComponent(messageId)}?${params.toString()}`);
+  const headers = payload?.payload?.headers || [];
+
+  return {
+    id: payload?.id || messageId,
+    threadId: payload?.threadId || null,
+    snippet: payload?.snippet || '',
+    internalDate: payload?.internalDate ? new Date(Number(payload.internalDate)).toISOString() : null,
+    from: parseHeader(headers, 'From'),
+    fromEmail: parseEmailAddress(parseHeader(headers, 'From')),
+    to: parseHeader(headers, 'To'),
+    subject: parseHeader(headers, 'Subject'),
+    date: parseHeader(headers, 'Date'),
+  };
+}
+
+export async function listRecentInboxReplies(env, options = {}) {
+  const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
+  const newerThanDays = Math.max(1, Number(options.newerThanDays || 30));
+  const maxResults = Math.min(Math.max(Number(options.maxResults || 0), 1), 100);
+  const query = options.query || `in:inbox newer_than:${newerThanDays}d -from:${sender} -from:me`;
+  const messageRefs = await listMessageIds(env, query, maxResults);
+  const messages = [];
+
+  for (const message of messageRefs) {
+    const metadata = await getMessageMetadata(env, message.id);
+    if (!metadata.fromEmail) {
+      continue;
+    }
+    messages.push(metadata);
+  }
+
+  return messages;
 }

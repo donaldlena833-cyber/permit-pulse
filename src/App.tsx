@@ -166,9 +166,12 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
               void actions.logPhoneFollowUp(leadId, step, notes)
             }}
             onOpenLead={openLead}
+            onRunProspectBatch={() => void actions.runProspectBatch()}
             onScan={() => void actions.scan()}
             onSendAllReady={() => void actions.sendAllReady()}
+            onSendDueFollowUps={(limit) => void actions.sendDueFollowUps(limit)}
             onSendFollowUp={(leadId, step) => void actions.sendFollowUp(leadId, step)}
+            onSyncReplies={() => void actions.syncReplies()}
             today={today}
           />
         ) : null}
@@ -201,7 +204,10 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
             onImportCsv={actions.importProspects}
             onOpenProspect={openProspect}
             onQueryChange={setProspectQuery}
+            onRepairPermitFollowUps={() => void actions.repairFollowUps()}
+            onRunProspectBatch={() => void actions.runProspectBatch()}
             onStatusFilterChange={setProspectStatusFilter}
+            onSyncReplies={() => void actions.syncReplies()}
             prospects={prospects}
             query={prospectQuery}
             statusFilter={prospectStatusFilter}
