@@ -1,4 +1,5 @@
 import { sendAutomationEmail } from '../gmail.mjs';
+import { formatPriorOutreachMessage, getPriorOutreach } from './outreach-guard.mjs';
 import { eq, inList, order } from './supabase.mjs';
 
 export const PROSPECT_CATEGORIES = [
@@ -510,6 +511,47 @@ export async function sendProspect(env, db, prospectId, actorId = null) {
 
   if (!recipient) {
     throw new Error('Prospect does not have a valid email address');
+  }
+
+  const priorOutreach = await getPriorOutreach(db, recipient);
+  if (priorOutreach) {
+    const sameProspect = priorOutreach.prospect_id && String(priorOutreach.prospect_id) === String(prospectId);
+    if (!sameProspect && prospect.status !== 'sent') {
+      await db.update('v2_prospects', [eq('id', prospectId)], {
+        status: 'archived',
+        updated_at: new Date().toISOString(),
+      });
+
+      await db.insert('v2_prospect_outcomes', {
+        prospect_id: prospectId,
+        email_address: recipient,
+        outcome: 'archived',
+        detail: {
+          reason: 'duplicate_recipient_suppressed',
+          prior_outcome: priorOutreach.outcome || null,
+          prior_sent_at: priorOutreach.sent_at || priorOutreach.created_at || null,
+          source_table: priorOutreach.source_table || null,
+        },
+        created_at: new Date().toISOString(),
+      });
+
+      await db.insert('v2_prospect_events', {
+        prospect_id: prospectId,
+        actor_type: 'operator',
+        actor_id: actorId,
+        event_type: 'duplicate_recipient_suppressed',
+        detail: {
+          recipient,
+          prior_outcome: priorOutreach.outcome || null,
+          prior_sent_at: priorOutreach.sent_at || priorOutreach.created_at || null,
+          source_table: priorOutreach.source_table || null,
+        },
+      });
+
+      throw new Error(`${formatPriorOutreachMessage(priorOutreach)}. Prospect archived to prevent duplicate outreach.`);
+    }
+
+    throw new Error(`${formatPriorOutreachMessage(priorOutreach)}. Repeat outreach is disabled.`);
   }
 
   const gmail = await sendAutomationEmail(env, {

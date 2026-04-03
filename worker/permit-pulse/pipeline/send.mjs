@@ -1,6 +1,7 @@
 import { isApprovedRouteCandidate, isAutoSendRouteCandidate } from '../lib/email-approval.mjs';
 import { sendAutomationEmail } from '../lib/gmail.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
+import { formatPriorOutreachMessage, getPriorOutreach } from '../lib/outreach-guard.mjs';
 import { eq, inList, order } from '../lib/supabase.mjs';
 import { inferEmailPattern, nowIso } from '../lib/utils.mjs';
 import { scheduleFollowUps } from './follow-up.mjs';
@@ -37,6 +38,29 @@ async function getActiveCandidate(db, lead) {
   });
 }
 
+async function suppressDuplicateLeadRecipient(db, lead, recipient, prior, options = {}) {
+  const timestamp = nowIso();
+
+  await db.update('v2_leads', [`id=eq.${lead.id}`], {
+    status: 'archived',
+    updated_at: timestamp,
+  });
+
+  await appendLeadEvent(db, {
+    lead_id: lead.id,
+    run_id: options.runId || null,
+    event_type: 'duplicate_recipient_suppressed',
+    actor_type: options.actorId ? 'operator' : 'system',
+    actor_id: options.actorId || null,
+    detail: {
+      recipient,
+      prior_outcome: prior?.outcome || null,
+      prior_sent_at: prior?.sent_at || prior?.created_at || null,
+      source_table: prior?.source_table || null,
+    },
+  });
+}
+
 export async function sendLead(env, db, leadId, options = {}) {
   const lead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
@@ -50,6 +74,17 @@ export async function sendLead(env, db, leadId, options = {}) {
 
   if (!recipient) {
     throw new Error('No email available');
+  }
+
+  const normalizedRecipient = String(recipient).trim().toLowerCase();
+  const priorOutreach = await getPriorOutreach(db, normalizedRecipient);
+  if (priorOutreach) {
+    const sameLead = priorOutreach.lead_id && String(priorOutreach.lead_id) === String(lead.id);
+    if (!sameLead && lead.status !== 'sent') {
+      await suppressDuplicateLeadRecipient(db, lead, normalizedRecipient, priorOutreach, options);
+      throw new Error(`${formatPriorOutreachMessage(priorOutreach)}. Lead archived to prevent duplicate outreach.`);
+    }
+    throw new Error(`${formatPriorOutreachMessage(priorOutreach)}. Repeat outreach is disabled.`);
   }
 
   if (!options.force) {
@@ -70,7 +105,7 @@ export async function sendLead(env, db, leadId, options = {}) {
   });
 
   await sendAutomationEmail(env, {
-    recipient,
+    recipient: normalizedRecipient,
     subject: refreshedLead.draft_subject,
     body: refreshedLead.draft_body,
   });
@@ -78,10 +113,10 @@ export async function sendLead(env, db, leadId, options = {}) {
   await db.insert('v2_email_outcomes', {
     lead_id: leadId,
     run_id: options.runId || null,
-    email_address: recipient,
-    domain: recipient.split('@')[1],
-    local_part: recipient.split('@')[0],
-    email_pattern: inferEmailPattern(recipient, refreshedLead.contact_name || ''),
+    email_address: normalizedRecipient,
+    domain: normalizedRecipient.split('@')[1],
+    local_part: normalizedRecipient.split('@')[0],
+    email_pattern: inferEmailPattern(normalizedRecipient, refreshedLead.contact_name || ''),
     outcome: 'sent',
     sent_at: nowIso(),
   });
@@ -100,17 +135,15 @@ export async function sendLead(env, db, leadId, options = {}) {
     actor_id: options.actorId || null,
     detail: {
       recipient,
+      normalized_recipient: normalizedRecipient,
       step_number: options.stepNumber || null,
     },
   });
-
-  if (!options.stepNumber) {
-    await scheduleFollowUps(db, leadId, options.followUpSequence || ['email:0', 'email:4', 'phone:7', 'email:14'], nowIso());
-  }
+  await scheduleFollowUps(db, leadId, options.followUpSequence || ['email:0', 'email:4', 'phone:7', 'email:14'], nowIso());
 
   return {
     success: true,
-    recipient,
+    recipient: normalizedRecipient,
     sentAt: nowIso(),
   };
 }

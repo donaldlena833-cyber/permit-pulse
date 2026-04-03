@@ -1,5 +1,6 @@
 import { sendAutomationEmail } from '../lib/gmail.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
+import { formatPriorOutreachMessage, getPriorOutreach } from '../lib/outreach-guard.mjs';
 import { eq, lte, order } from '../lib/supabase.mjs';
 import { buildFollowUpDraft } from './draft.mjs';
 
@@ -12,23 +13,21 @@ export async function scheduleFollowUps(db, leadId, sequence, sentAt) {
     return existing;
   }
 
-  const rows = [];
+  const firstEntry = Array.isArray(sequence) && sequence.length > 0 ? String(sequence[0]) : 'email:0';
+  const [channel, dayString] = firstEntry.split(':');
+  const days = Number(dayString || 0);
+  const scheduledAt = new Date(baseDate);
+  scheduledAt.setDate(scheduledAt.getDate() + days);
 
-  sequence.forEach((entry, index) => {
-    const [channel, dayString] = String(entry).split(':');
-    const days = Number(dayString || 0);
-    const scheduledAt = new Date(baseDate);
-    scheduledAt.setDate(scheduledAt.getDate() + days);
-
-    rows.push({
-      lead_id: leadId,
-      step_number: index + 1,
-      channel,
-      status: index === 0 ? 'sent' : 'pending',
-      scheduled_at: scheduledAt.toISOString(),
-      sent_at: index === 0 ? baseDate.toISOString() : null,
-    });
-  });
+  const rows = [{
+    lead_id: leadId,
+    step_number: 1,
+    channel,
+    status: 'sent',
+    scheduled_at: scheduledAt.toISOString(),
+    sent_at: baseDate.toISOString(),
+    outcome_notes: 'Repeat outreach disabled: initial email only',
+  }];
 
   return db.insert('v2_follow_ups', rows);
 }
@@ -63,6 +62,29 @@ export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null) 
   const recipient = lead.active_email_role === 'fallback' && lead.fallback_email ? lead.fallback_email : lead.contact_email;
   if (!recipient) {
     throw new Error('No email available');
+  }
+
+  const priorOutreach = await getPriorOutreach(db, recipient);
+  if (priorOutreach) {
+    await db.update('v2_follow_ups', [`id=eq.${followUp.id}`], {
+      status: 'skipped',
+      cancelled_reason: 'repeat_contact_disabled',
+      outcome_notes: formatPriorOutreachMessage(priorOutreach),
+    });
+
+    await appendLeadEvent(db, {
+      lead_id: leadId,
+      event_type: 'follow_up_suppressed',
+      actor_type: actorId ? 'operator' : 'system',
+      actor_id: actorId,
+      detail: {
+        step_number: stepNumber,
+        recipient,
+        reason: 'repeat_contact_disabled',
+      },
+    });
+
+    throw new Error('Repeat outreach is disabled for this recipient');
   }
 
   await sendAutomationEmail(env, {
@@ -164,8 +186,14 @@ export async function processDueFollowUps(env, db) {
     if (item.channel !== 'email') {
       continue;
     }
-    await sendFollowUp(env, db, item.lead_id, item.step_number);
-    sent += 1;
+    try {
+      await sendFollowUp(env, db, item.lead_id, item.step_number);
+      sent += 1;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('Repeat outreach is disabled')) {
+        throw error;
+      }
+    }
   }
 
   return { sent };
