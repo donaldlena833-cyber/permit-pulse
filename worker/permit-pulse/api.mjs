@@ -1,5 +1,14 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
 import { isApprovedRouteCandidate, isPublishedEmailCandidate, isOfficialSitePublishedContact, withApprovedTrustFloor } from './lib/email-approval.mjs';
+import {
+  getProspectDetail,
+  importProspects,
+  listProspects,
+  saveProspectDraft,
+  saveProspectNotes,
+  sendProspect,
+  updateProspectStatus,
+} from './lib/prospects.mjs';
 import { createSupabaseClient, eq, inList, order } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
 import { countPendingAutomationLeads, listPendingAutomationLeads, summarizeRunQueue } from './lib/automation-queue.mjs';
@@ -286,10 +295,19 @@ async function getTodayPayload(env) {
     : [];
   const leadMap = Object.fromEntries(relatedLeads.map((lead) => [lead.id, lead]));
 
-  const sentToday = await db.select('v2_email_outcomes', {
-    columns: 'id',
-    filters: [eq('outcome', 'sent'), `sent_at=gte.${encodeURIComponent(new Date(new Date().setHours(0, 0, 0, 0)).toISOString())}`],
-  });
+  const sentSince = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+  const [leadSentToday, prospectSentToday] = await Promise.all([
+    db.select('v2_email_outcomes', {
+      columns: 'id',
+      filters: [eq('outcome', 'sent'), `sent_at=gte.${encodeURIComponent(sentSince)}`],
+    }),
+    db.select('v2_prospect_outcomes', {
+      columns: 'id',
+      filters: [eq('outcome', 'sent'), `sent_at=gte.${encodeURIComponent(sentSince)}`],
+    }).catch(() => []),
+  ]);
+
+  const sentToday = [...leadSentToday, ...prospectSentToday];
 
   const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 5) : Number(config.daily_send_cap || 20);
   const legacyEmailRequiredLeads = reviewLeads.filter((lead) => isLeadMarkedEmailRequired(lead.operator_notes));
@@ -577,10 +595,53 @@ export async function handlePermitPulseRequest(request, env, ctx) {
       return json(await listLeads(env, url));
     }
 
+    if (url.pathname === '/api/prospects' && request.method === 'GET') {
+      return json(await listProspects(db, {
+        status: url.searchParams.get('status') || 'all',
+        category: url.searchParams.get('category') || 'all',
+        page: Number(url.searchParams.get('page') || 1),
+        limit: Number(url.searchParams.get('limit') || 20),
+      }));
+    }
+
+    if (url.pathname === '/api/prospects/import' && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await importProspects(db, body, user.email || null));
+    }
+
     const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (runMatch && request.method === 'GET') {
       const run = await getRunById(env, decodeURIComponent(runMatch[1]));
       return json(run ? await presentRun(db, run) : { error: 'Run not found' }, run ? 200 : 404);
+    }
+
+    const prospectMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)$/);
+    if (prospectMatch && request.method === 'GET') {
+      const detail = await getProspectDetail(db, decodeURIComponent(prospectMatch[1]));
+      return json(detail || { error: 'Prospect not found' }, detail ? 200 : 404);
+    }
+
+    const prospectSendMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/send$/);
+    if (prospectSendMatch && request.method === 'POST') {
+      return json(await sendProspect(env, db, decodeURIComponent(prospectSendMatch[1]), user.email || null));
+    }
+
+    const prospectDraftMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/draft$/);
+    if (prospectDraftMatch && request.method === 'PUT') {
+      const body = await parseBody(request);
+      return json(await saveProspectDraft(db, decodeURIComponent(prospectDraftMatch[1]), body, user.email || null));
+    }
+
+    const prospectNotesMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/notes$/);
+    if (prospectNotesMatch && request.method === 'PUT') {
+      const body = await parseBody(request);
+      return json(await saveProspectNotes(db, decodeURIComponent(prospectNotesMatch[1]), body?.notes || '', user.email || null));
+    }
+
+    const prospectStatusMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/status$/);
+    if (prospectStatusMatch && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await updateProspectStatus(db, decodeURIComponent(prospectStatusMatch[1]), body?.status, user.email || null));
     }
 
     const leadMatch = url.pathname.match(/^\/api\/leads\/([^/]+)$/);

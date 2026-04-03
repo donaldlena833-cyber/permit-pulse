@@ -9,9 +9,12 @@ import {
   fetchHealth,
   fetchLeadDetail,
   fetchLeads,
+  fetchProspectDetail,
+  fetchProspects,
   fetchRun,
   fetchSystem,
   fetchToday,
+  importProspectsCsv,
   logPhoneFollowUp,
   markLeadEmailRequired,
   markOutcome,
@@ -20,11 +23,15 @@ import {
   sendAllReady,
   sendFollowUp,
   sendLeadNow,
+  sendProspectNow,
   skipFollowUp,
   switchToFallback,
   triggerScan,
   updateConfig,
   updateDraft,
+  updateProspectDraft,
+  updateProspectNotes,
+  updateProspectStatus,
   vouchLead,
 } from "@/features/metroglass-leads/lib/remote"
 import type {
@@ -34,6 +41,10 @@ import type {
   LeadDetailResponse,
   LeadRow,
   LeadsPayload,
+  ProspectCategory,
+  ProspectDetailResponse,
+  ProspectsPayload,
+  ProspectStatus,
   SystemPayload,
   TodayPayload,
 } from "@/features/metroglass-leads/types/api"
@@ -43,9 +54,14 @@ export function useMetroglassLeads() {
   const [health, setHealth] = useState<HealthPayload | null>(null)
   const [today, setToday] = useState<TodayPayload | null>(null)
   const [leads, setLeads] = useState<LeadsPayload["leads"]>([])
+  const [prospects, setProspects] = useState<ProspectsPayload | null>(null)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [selectedLead, setSelectedLead] = useState<LeadDetailResponse | null>(null)
+  const [selectedProspectId, setSelectedProspectId] = useState<string | null>(null)
+  const [selectedProspect, setSelectedProspect] = useState<ProspectDetailResponse | null>(null)
   const [leadFilter, setLeadFilter] = useState<string>("all")
+  const [prospectStatusFilter, setProspectStatusFilter] = useState<"all" | ProspectStatus>("all")
+  const [prospectCategoryFilter, setProspectCategoryFilter] = useState<"all" | ProspectCategory>("all")
   const [config, setConfig] = useState<ConfigPayload | null>(null)
   const [system, setSystem] = useState<SystemPayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -77,6 +93,42 @@ export function useMetroglassLeads() {
     return payload
   }, [leadFilter])
 
+  const refreshProspects = useCallback(async () => {
+    try {
+      const payload = await fetchProspects(prospectStatusFilter, prospectCategoryFilter, 1, 50)
+      setProspects(payload)
+      return payload
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ""
+      if (message.includes("v2_prospects") || message.includes("v2_prospect")) {
+        const fallback: ProspectsPayload = {
+          prospects: [],
+          page: 1,
+          limit: 50,
+          counts: {
+            all: 0,
+            new: 0,
+            drafted: 0,
+            sent: 0,
+            replied: 0,
+            archived: 0,
+          },
+          categories: {
+            architect: 0,
+            interior_designer: 0,
+            gc: 0,
+            property_manager: 0,
+            project_manager: 0,
+          },
+          recent_imports: [],
+        }
+        setProspects(fallback)
+        return fallback
+      }
+      throw error
+    }
+  }, [prospectCategoryFilter, prospectStatusFilter])
+
   const refreshSelectedLead = useCallback(async (leadId?: string | null) => {
     const id = leadId ?? selectedLeadId
     if (!id) return null
@@ -84,6 +136,14 @@ export function useMetroglassLeads() {
     setSelectedLead(detail)
     return detail
   }, [selectedLeadId])
+
+  const refreshSelectedProspect = useCallback(async (prospectId?: string | null) => {
+    const id = prospectId ?? selectedProspectId
+    if (!id) return null
+    const detail = await fetchProspectDetail(id)
+    setSelectedProspect(detail)
+    return detail
+  }, [selectedProspectId])
 
   const refreshConfig = useCallback(async () => {
     const payload = await fetchConfig()
@@ -104,13 +164,14 @@ export function useMetroglassLeads() {
         fetchHealth().then(setHealth),
         refreshToday(),
         refreshLeads(),
+        refreshProspects(),
         refreshConfig(),
         refreshSystem(),
       ])
     } finally {
       setLoading(false)
     }
-  }, [refreshConfig, refreshLeads, refreshSystem, refreshToday])
+  }, [refreshConfig, refreshLeads, refreshProspects, refreshSystem, refreshToday])
 
   useEffect(() => {
     void refreshAll()
@@ -121,12 +182,24 @@ export function useMetroglassLeads() {
   }, [refreshLeads])
 
   useEffect(() => {
+    void refreshProspects()
+  }, [refreshProspects])
+
+  useEffect(() => {
     if (!selectedLeadId) {
       setSelectedLead(null)
       return
     }
     void refreshSelectedLead(selectedLeadId)
   }, [refreshSelectedLead, selectedLeadId])
+
+  useEffect(() => {
+    if (!selectedProspectId) {
+      setSelectedProspect(null)
+      return
+    }
+    void refreshSelectedProspect(selectedProspectId)
+  }, [refreshSelectedProspect, selectedProspectId])
 
   useEffect(() => {
     if (!runId) {
@@ -166,11 +239,21 @@ export function useMetroglassLeads() {
   }, [refreshLeads, refreshSystem, refreshToday, runId])
 
   const openLead = useCallback((lead: LeadRow) => {
+    setSelectedProspectId(null)
     setSelectedLeadId(lead.id)
   }, [])
 
   const closeLead = useCallback(() => {
     setSelectedLeadId(null)
+  }, [])
+
+  const openProspect = useCallback((prospect: ProspectsPayload["prospects"][number]) => {
+    setSelectedLeadId(null)
+    setSelectedProspectId(prospect.id)
+  }, [])
+
+  const closeProspect = useCallback(() => {
+    setSelectedProspectId(null)
   }, [])
 
   const runAction = useCallback(async (leadId: string | null, work: () => Promise<void>, successMessage: string) => {
@@ -185,6 +268,19 @@ export function useMetroglassLeads() {
       setActionLeadId(null)
     }
   }, [refreshLeads, refreshSelectedLead, refreshSystem, refreshToday])
+
+  const runProspectAction = useCallback(async (prospectId: string | null, work: () => Promise<void>, successMessage: string) => {
+    setActionLeadId(prospectId)
+    try {
+      await work()
+      toast.success(successMessage)
+      await Promise.all([refreshToday(), refreshProspects(), refreshSelectedProspect(prospectId), refreshSystem()])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Action failed")
+    } finally {
+      setActionLeadId(null)
+    }
+  }, [refreshProspects, refreshSelectedProspect, refreshSystem, refreshToday])
 
   const scan = useCallback(async () => {
     setActionLeadId("scan")
@@ -278,6 +374,33 @@ export function useMetroglassLeads() {
     logPhoneFollowUp: (leadId: string, step: number, notes: string) => runAction(leadId, async () => {
       await logPhoneFollowUp(leadId, step, notes)
     }, "Phone note logged"),
+    importProspects: async (payload: { filename: string; category: ProspectCategory; rows: Array<Record<string, string>> }) => {
+      setActionLeadId("prospects-import")
+      try {
+        const result = await importProspectsCsv(payload)
+        toast.success(`Imported ${result.imported} prospects${result.skipped ? `, skipped ${result.skipped}` : ""}`)
+        await Promise.all([refreshProspects(), refreshToday(), refreshSystem()])
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Import failed")
+      } finally {
+        setActionLeadId(null)
+      }
+    },
+    sendProspect: (prospectId: string) => runProspectAction(prospectId, async () => {
+      await sendProspectNow(prospectId)
+    }, "Prospect email sent"),
+    saveProspectDraft: (prospectId: string, draft: { subject: string; body: string }) => runProspectAction(prospectId, async () => {
+      await updateProspectDraft(prospectId, draft)
+    }, "Prospect draft saved"),
+    saveProspectNotes: (prospectId: string, notes: string) => runProspectAction(prospectId, async () => {
+      await updateProspectNotes(prospectId, notes)
+    }, "Notes saved"),
+    archiveProspect: (prospectId: string) => runProspectAction(prospectId, async () => {
+      await updateProspectStatus(prospectId, "archived")
+    }, "Prospect archived"),
+    markProspectReplied: (prospectId: string) => runProspectAction(prospectId, async () => {
+      await updateProspectStatus(prospectId, "replied")
+    }, "Marked replied"),
     saveConfig: async (patch: Partial<ConfigPayload>) => {
       try {
         const nextConfig = await updateConfig(patch)
@@ -287,7 +410,7 @@ export function useMetroglassLeads() {
         toast.error(error instanceof Error ? error.message : "Settings update failed")
       }
     },
-  }), [runAction, scan])
+  }), [refreshProspects, refreshSystem, refreshToday, runAction, runProspectAction, scan])
 
   return {
     tab,
@@ -295,12 +418,21 @@ export function useMetroglassLeads() {
     health,
     today,
     leads,
+    prospects,
     selectedLeadId,
     selectedLead,
+    selectedProspectId,
+    selectedProspect,
     openLead,
     closeLead,
+    openProspect,
+    closeProspect,
     leadFilter,
     setLeadFilter,
+    prospectStatusFilter,
+    setProspectStatusFilter,
+    prospectCategoryFilter,
+    setProspectCategoryFilter,
     config,
     system,
     loading,

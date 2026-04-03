@@ -32,3 +32,14 @@ export function formatLeadStatus(value: string | null | undefined): string {
   if (value === "email_required") return "Email Required"
   return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }
+
+export function formatProspectCategory(value: string | null | undefined): string {
+  if (!value) return "Prospect"
+  if (value === "gc") return "GC"
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+export function formatProspectStatus(value: string | null | undefined): string {
+  if (!value) return "Unknown"
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+}

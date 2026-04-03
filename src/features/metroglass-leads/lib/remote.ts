@@ -4,6 +4,8 @@ import type {
   HealthPayload,
   LeadDetailResponse,
   LeadsPayload,
+  ProspectDetailResponse,
+  ProspectsPayload,
   SystemPayload,
   TodayPayload,
 } from "@/features/metroglass-leads/types/api"
@@ -66,13 +68,34 @@ export function fetchLeads(status: string, page = 1, limit = 20) {
   return requestJson<LeadsPayload>(`/api/leads?${params.toString()}`)
 }
 
+export function fetchProspects(status: string, category: string, page = 1, limit = 20) {
+  const params = new URLSearchParams({
+    status,
+    category,
+    page: String(page),
+    limit: String(limit),
+  })
+  return requestJson<ProspectsPayload>(`/api/prospects?${params.toString()}`)
+}
+
 export function fetchLeadDetail(leadId: string) {
   return requestJson<LeadDetailResponse>(`/api/leads/${encodeURIComponent(leadId)}`)
+}
+
+export function fetchProspectDetail(prospectId: string) {
+  return requestJson<ProspectDetailResponse>(`/api/prospects/${encodeURIComponent(prospectId)}`)
 }
 
 export function sendLeadNow(leadId: string) {
   return requestJson<{ success: boolean; recipient: string; sentAt: string }>(
     `/api/leads/${encodeURIComponent(leadId)}/send`,
+    { method: "POST" },
+  )
+}
+
+export function sendProspectNow(prospectId: string) {
+  return requestJson<{ success: boolean; recipient: string; sentAt: string }>(
+    `/api/prospects/${encodeURIComponent(prospectId)}/send`,
     { method: "POST" },
   )
 }
@@ -166,6 +189,49 @@ export function updateDraft(leadId: string, draft: { subject: string; body: stri
       "Content-Type": "application/json",
     },
     body: JSON.stringify(draft),
+  })
+}
+
+export function importProspectsCsv(payload: { filename: string; category: string; rows: Array<Record<string, string>> }) {
+  return requestJson<{ batch_id: string; filename: string; category: string; imported: number; skipped: number }>(
+    "/api/prospects/import",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function updateProspectDraft(prospectId: string, draft: { subject: string; body: string }) {
+  return requestJson(`/api/prospects/${encodeURIComponent(prospectId)}/draft`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(draft),
+  })
+}
+
+export function updateProspectNotes(prospectId: string, notes: string) {
+  return requestJson(`/api/prospects/${encodeURIComponent(prospectId)}/notes`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ notes }),
+  })
+}
+
+export function updateProspectStatus(prospectId: string, status: string) {
+  return requestJson(`/api/prospects/${encodeURIComponent(prospectId)}/status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status }),
   })
 }
 

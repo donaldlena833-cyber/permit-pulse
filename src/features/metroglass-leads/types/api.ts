@@ -1,6 +1,8 @@
 export type LeadStatus = "new" | "ready" | "review" | "email_required" | "sent" | "archived"
 export type QualityTier = "hot" | "warm" | "cold"
-export type AppTab = "today" | "leads" | "settings"
+export type AppTab = "today" | "leads" | "prospects" | "settings"
+export type ProspectCategory = "interior_designer" | "gc" | "property_manager" | "project_manager" | "architect"
+export type ProspectStatus = "new" | "drafted" | "sent" | "replied" | "archived"
 
 export interface LeadRow {
   id: string
@@ -87,6 +89,52 @@ export interface LeadEvent {
   created_at: string
 }
 
+export interface ProspectRow {
+  id: string
+  category: ProspectCategory
+  company_name: string | null
+  contact_name: string | null
+  contact_role: string | null
+  email_address: string
+  email_normalized: string
+  phone: string | null
+  website: string | null
+  city: string | null
+  state: string | null
+  source: string
+  import_batch_id: string | null
+  status: ProspectStatus
+  draft_subject: string | null
+  draft_body: string | null
+  notes: string | null
+  gmail_thread_id: string | null
+  sent_count: number
+  last_sent_at: string | null
+  last_replied_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProspectEvent {
+  id: string
+  event_type: string
+  actor_type: string
+  actor_id: string | null
+  detail: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface ProspectImportBatch {
+  id: string
+  filename: string
+  category: ProspectCategory
+  row_count: number
+  imported_count: number
+  skipped_count: number
+  actor_id: string | null
+  created_at: string
+}
+
 export interface FollowUp {
   id: string
   lead_id: string
@@ -134,6 +182,16 @@ export interface LeadDetailResponse {
   follow_ups: FollowUp[]
   timeline: LeadEvent[]
   related_permits: RelatedPermit[]
+}
+
+export interface ProspectDetailResponse {
+  prospect: ProspectRow
+  draft: {
+    subject: string
+    body: string
+  }
+  timeline: ProspectEvent[]
+  import_batch: ProspectImportBatch | null
 }
 
 export interface RunCounters {
@@ -248,6 +306,15 @@ export interface LeadsPayload {
   leads: LeadRow[]
   page: number
   limit: number
+}
+
+export interface ProspectsPayload {
+  prospects: ProspectRow[]
+  page: number
+  limit: number
+  counts: Record<"all" | ProspectStatus, number>
+  categories: Record<ProspectCategory, number>
+  recent_imports: ProspectImportBatch[]
 }
 
 export interface SystemPayload {
