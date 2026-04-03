@@ -1400,7 +1400,6 @@ export async function importProspects(db, payload, actorId = null) {
   const prepared = normalizedRows.map((row) => {
     const current = existingMap[row.email_normalized] || null;
     const merged = {
-      id: current?.id,
       category: row.category,
       company_name: mergeValue(row.company_name, current?.company_name),
       contact_name: mergeValue(row.contact_name, current?.contact_name),
