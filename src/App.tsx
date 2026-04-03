@@ -28,7 +28,7 @@ function AppTabs({
 
   return (
     <nav className="fixed bottom-4 left-0 right-0 z-30 px-3">
-      <div className="mx-auto grid max-w-[680px] grid-cols-4 gap-2 rounded-[22px] border border-[#D9CCBE] bg-[rgba(255,248,240,0.94)] p-2 shadow-[0_18px_40px_rgba(26,26,26,0.12)] backdrop-blur-xl">
+      <div className="mx-auto grid max-w-[720px] grid-cols-4 gap-2 rounded-[20px] border border-steel-200 bg-[rgba(255,255,255,0.88)] p-2 shadow-[0_16px_36px_rgba(15,23,42,0.12)] backdrop-blur-xl">
         {items.map((item) => {
           const Icon = item.icon
           const active = tab === item.id
@@ -37,8 +37,8 @@ function AppTabs({
               key={item.id}
               className={`flex min-h-[54px] flex-col items-center justify-center rounded-[16px] text-xs font-medium transition ${
                 active
-                  ? "bg-[#1A1A1A] text-white shadow-[0_12px_24px_rgba(26,26,26,0.18)]"
-                  : "bg-white/80 text-[#5F564C] hover:bg-white"
+                  ? "bg-steel-900 text-white shadow-[0_12px_24px_rgba(15,23,42,0.2)]"
+                  : "bg-white/70 text-steel-600 hover:bg-steel-50"
               }`}
               onClick={() => onChange(item.id)}
               type="button"
@@ -83,53 +83,64 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
   } = useMetroglassLeads()
 
   const title = tab === "prospects" ? "Prospects" : "Leads"
+  const subtitle = tab === "prospects" ? "Manual outreach pilot" : "Permit automation"
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(212,105,26,0.12),transparent_22%),linear-gradient(180deg,#efe4d5,#eadfce_36%,#efe7dc)] text-[#1A1A1A]">
-      <header className="sticky top-0 z-20 border-b border-[#D9CCBE] bg-[rgba(239,228,213,0.88)] backdrop-blur-xl">
+    <div className="min-h-screen text-foreground">
+      <header className="sticky top-0 z-20 border-b border-steel-200 bg-[rgba(248,250,252,0.9)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-4">
           <div className="min-w-0">
-            <div className="text-[11px] uppercase tracking-[0.24em] text-[#D4691A]">MetroGlassPro</div>
-            <div className="mt-1 font-['Instrument_Serif'] text-3xl leading-none sm:text-[2.4rem]">{title}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em] text-brand-700">
+                MetroGlass Pro
+              </div>
+              <div className="rounded-full border border-steel-200 bg-white px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">
+                {subtitle}
+              </div>
+            </div>
+            <div className="mt-3 text-3xl font-extrabold tracking-[-0.05em] text-steel-900 sm:text-[2.4rem]">{title}</div>
             <div className="mt-2 flex flex-wrap gap-2">
               {tab === "prospects" ? (
                 <>
-                  <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {prospects?.counts.all ?? 0} total
                   </div>
-                  <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {prospects?.counts.new ?? 0} new
                   </div>
-                  <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {prospects?.counts.drafted ?? 0} drafted
                   </div>
-                  <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {prospects?.counts.sent ?? 0} sent
+                  </div>
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
+                    {prospects?.counts.opted_out ?? 0} opted out
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {today?.automation_backlog_pending ?? today?.counts.new ?? 0} backlog
                   </div>
-                  <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {today?.counts.review ?? 0} exceptions
                   </div>
-                  <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {today?.counts.email_required ?? 0} email required
                   </div>
-                  <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {today?.counts.ready ?? 0} ready
                   </div>
                 </>
               )}
-              <div className="rounded-full border border-[#D9CCBE] bg-white/80 px-3 py-1 text-xs text-[#5F564C]">
+              <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                 Worker {health?.ok ? "healthy" : "offline"}
               </div>
             </div>
           </div>
 
-          <Button className="h-11 rounded-full border border-[#D6C6B6] bg-white px-5 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => void onLogout()} type="button" variant="outline">
+          <Button className="h-11 rounded-full px-5" onClick={() => void onLogout()} type="button" variant="outline">
             Log out
           </Button>
         </div>
@@ -223,6 +234,7 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onArchive={(prospectId) => void actions.archiveProspect(prospectId)}
         onClose={closeProspect}
         onMarkReplied={(prospectId) => void actions.markProspectReplied(prospectId)}
+        onOptOut={(prospectId) => void actions.optOutProspect(prospectId)}
         onSaveDraft={(prospectId, draft) => void actions.saveProspectDraft(prospectId, draft)}
         onSaveNotes={(prospectId, notes) => void actions.saveProspectNotes(prospectId, notes)}
         onSend={(prospectId) => void actions.sendProspect(prospectId)}
@@ -240,8 +252,8 @@ export default function App() {
 
   if (auth.status === "loading") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#E8E2D9]">
-        <LoaderCircle className="h-7 w-7 animate-spin text-[#D4691A]" />
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <LoaderCircle className="h-7 w-7 animate-spin text-primary" />
       </div>
     )
   }

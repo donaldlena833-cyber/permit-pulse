@@ -10,6 +10,14 @@ const DEFAULT_CONFIG = {
   active_sources: ['nyc_dob'],
   warm_up_mode: false,
   warm_up_daily_cap: 100,
+  prospect_pilot_enabled: true,
+  prospect_initial_daily_per_category: 10,
+  prospect_follow_up_daily_per_category: 10,
+  prospect_timezone: 'America/New_York',
+  prospect_initial_send_time: '11:00',
+  prospect_follow_up_send_time: '23:30',
+  prospect_follow_up_delay_days: 3,
+  permit_auto_send_enabled: false,
 };
 
 function parseValue(value) {
@@ -57,6 +65,25 @@ export async function getAppConfig(db) {
 
   mapped.daily_send_cap = Math.max(Number(mapped.daily_send_cap || 0), DEFAULT_CONFIG.daily_send_cap);
   mapped.warm_up_daily_cap = Math.max(Number(mapped.warm_up_daily_cap || 0), DEFAULT_CONFIG.warm_up_daily_cap);
+  mapped.prospect_initial_daily_per_category = Math.max(
+    1,
+    Number(mapped.prospect_initial_daily_per_category || DEFAULT_CONFIG.prospect_initial_daily_per_category),
+  );
+  mapped.prospect_follow_up_daily_per_category = Math.max(
+    1,
+    Number(mapped.prospect_follow_up_daily_per_category || DEFAULT_CONFIG.prospect_follow_up_daily_per_category),
+  );
+  mapped.prospect_follow_up_delay_days = Math.max(
+    1,
+    Number(mapped.prospect_follow_up_delay_days || DEFAULT_CONFIG.prospect_follow_up_delay_days),
+  );
+  mapped.prospect_timezone = String(mapped.prospect_timezone || DEFAULT_CONFIG.prospect_timezone);
+  mapped.prospect_initial_send_time = String(mapped.prospect_initial_send_time || DEFAULT_CONFIG.prospect_initial_send_time);
+  mapped.prospect_follow_up_send_time = String(
+    mapped.prospect_follow_up_send_time || DEFAULT_CONFIG.prospect_follow_up_send_time,
+  );
+  mapped.prospect_pilot_enabled = Boolean(mapped.prospect_pilot_enabled);
+  mapped.permit_auto_send_enabled = Boolean(mapped.permit_auto_send_enabled);
 
   return mapped;
 }

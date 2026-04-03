@@ -1,10 +1,10 @@
-import { LoaderCircle, Mail, PhoneCall, RefreshCw } from "lucide-react"
+import { AlertTriangle, LoaderCircle, Mail, PhoneCall, RefreshCw, ShieldCheck, Users2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Panel } from "@/features/metroglass-leads/components/panel"
-import { formatLeadStatus, formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
-import type { LeadRow, TodayPayload } from "@/features/metroglass-leads/types/api"
+import { formatProspectCategory, formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
+import type { LeadRow, ProspectCategory, TodayPayload } from "@/features/metroglass-leads/types/api"
 
 interface TodayScreenProps {
   today: TodayPayload | null
@@ -16,8 +16,42 @@ interface TodayScreenProps {
   onLogPhoneFollowUp: (leadId: string, step: number) => void
 }
 
+const CATEGORIES: ProspectCategory[] = [
+  "architect",
+  "interior_designer",
+  "gc",
+  "property_manager",
+  "project_manager",
+]
+
 function leadSummary(lead: LeadRow) {
   return `${formatScore(lead.relevance_score)}${lead.relevance_keyword ? ` (${lead.relevance_keyword})` : ""}`
+}
+
+function runHeadline(run: TodayPayload["current_run"] | TodayPayload["last_run"]) {
+  if (!run) return "No automation running"
+  if (run.mode?.startsWith("prospect_")) {
+    return run.mode === "prospect_follow_up_send" ? "Prospect follow-up batch" : "Prospect initial batch"
+  }
+  if (run.status === "running") {
+    return "Permit scan in progress"
+  }
+  return "Last permit automation run"
+}
+
+function queueChip(label: string, value: number, tone: "default" | "success" | "warning" = "default") {
+  const toneClass =
+    tone === "success"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : tone === "warning"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : "border-steel-200 bg-white text-steel-600"
+
+  return (
+    <div className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${toneClass}`}>
+      {label} {value}
+    </div>
+  )
 }
 
 export function TodayScreen({
@@ -32,299 +66,307 @@ export function TodayScreen({
   const progress = today ? (today.daily_cap.sent / Math.max(today.daily_cap.cap, 1)) * 100 : 0
   const run = today?.current_run ?? today?.last_run ?? null
   const isScanRunning = actionLeadId === "scan" || run?.status === "running"
-  const runProgress = run?.progress
-  const runOutcomeMessage = run?.status === "completed"
+  const prospect = today?.prospect_automation
+  const permitRunMessage = run?.status === "completed"
     ? ((run.summary?.processed ?? 0) === 0
-      ? "No pending backlog and no new matching permits were found."
+      ? "No claimable permit work was found in the visible automation queue."
       : (run.summary?.sent ?? 0) === 0
-        ? "Backlog moved, but nothing sendable was ready this run."
-        : `${run.summary?.sent ?? 0} emails sent from this run.`)
-    : null
+        ? "Permit backlog moved, but nothing new was send-approved."
+        : `${run.summary?.sent ?? 0} permit emails went out in the last visible run.`)
+    : run?.status === "running"
+      ? "Permit automation is draining backlog and checking fresh permits."
+      : "No active permit run right now."
 
   return (
     <div className="space-y-5 pb-32">
-      <Panel className="overflow-hidden bg-[linear-gradient(135deg,#fff7ef,white_55%,#f7ebdd)]">
-        <div className="text-[11px] uppercase tracking-[0.24em] text-[#D4691A]">MetroGlass Leads</div>
-        <h1 className="mt-2 font-['Instrument_Serif'] text-4xl leading-none text-[#1A1A1A] sm:text-5xl">
-          {today?.greeting ?? "Good afternoon, Donald"}
-        </h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-[#5F564C]">
-          {today?.daily_cap.sent ?? 0} / {today?.daily_cap.cap ?? 20} sent today. The dashboard below is organized around what needs a decision right now, not just what exists in the database.
-        </p>
-        <Progress className="mt-4 h-2.5 bg-[#F1E6D9]" value={progress} />
-        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="rounded-[16px] bg-white/85 px-4 py-4">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Backlog</div>
-            <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.automation_backlog_pending ?? today?.counts.new ?? 0}</div>
+      <Panel className="overflow-hidden bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(248,250,252,0.94))]">
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div className="max-w-3xl">
+            <div className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em] text-brand-700">
+              Ops command center
+            </div>
+            <h1 className="mt-4 text-4xl font-extrabold tracking-[-0.05em] text-steel-900 sm:text-5xl">
+              {today?.greeting ?? "Good morning, Donald"}
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-steel-600">
+              Permit automation and the prospects pilot now share the same control room. This surface is about throughput, queue health, and exceptions, not marketing chrome.
+            </p>
           </div>
-          <div className="rounded-[16px] bg-white/85 px-4 py-4">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Exceptions</div>
-            <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.review ?? 0}</div>
-          </div>
-          <div className="rounded-[16px] bg-white/85 px-4 py-4">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Email required</div>
-            <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.email_required ?? 0}</div>
-          </div>
-          <div className="rounded-[16px] bg-white/85 px-4 py-4">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Ready</div>
-            <div className="mt-1 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.ready ?? 0}</div>
+          <div className="min-w-[260px] rounded-[20px] border border-steel-200 bg-white p-4 shadow-soft">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Daily send budget</div>
+                <div className="mt-2 text-3xl font-extrabold tracking-[-0.04em] text-steel-900">
+                  {today?.daily_cap.sent ?? 0}
+                  <span className="ml-2 text-base font-semibold text-steel-500">/ {today?.daily_cap.cap ?? 0}</span>
+                </div>
+              </div>
+              <ShieldCheck className="h-6 w-6 text-brand-600" />
+            </div>
+            <Progress className="mt-4 h-2.5 bg-steel-100" value={progress} />
+            <div className="mt-4 flex flex-wrap gap-2">
+              {queueChip("Permit backlog", today?.automation_backlog_pending ?? 0)}
+              {queueChip("Prospect queue", prospect?.initial_queue.length ?? 0)}
+              {queueChip("Follow-ups", prospect?.follow_up_queue.length ?? 0, "warning")}
+            </div>
           </div>
         </div>
-        {today?.warm_up.enabled ? (
-          <p className="mt-4 text-xs font-medium text-[#8F5B22]">Warm up mode is on, cap {today.warm_up.cap}</p>
-        ) : null}
       </Panel>
 
-      <div className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
+      <div className="grid gap-5 xl:grid-cols-[1.1fr_1fr_0.8fr]">
         <Panel>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Current scan</div>
-              <div className="mt-2 text-lg font-semibold text-[#1A1A1A]">
-                {run?.status === "running"
-                  ? `${run.current_stage ?? "working"}`
-                  : run?.status === "failed"
-                    ? "Last scan failed"
-                    : "Last scan"}
-              </div>
-              <p className="mt-1 text-sm leading-6 text-[#5F564C]">
-                {run?.status === "running"
-                  ? `${runProgress?.claimed ?? 0} claimed, ${runProgress?.processed ?? 0} processed, ${runProgress?.sent ?? 0} sent`
-                  : run?.summary
-                    ? `${run.summary.claimed ?? 0} claimed, ${run.summary.processed ?? 0} processed, ${run.summary.sent ?? 0} sent`
-                    : "No runs yet"}
-              </p>
-              {runProgress ? (
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[#6B5A48] sm:grid-cols-5">
-                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Backlog {runProgress.backlog_pending}</div>
-                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Claimed {runProgress.claimed}</div>
-                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Processed {runProgress.processed}</div>
-                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Fresh {runProgress.fresh_inserted}</div>
-                  <div className="rounded-full bg-[#F6EEE4] px-3 py-2">Remaining {runProgress.remaining}</div>
-                </div>
-              ) : null}
-              {runOutcomeMessage ? (
-                <p className="mt-3 text-sm leading-6 text-[#5F564C]">{runOutcomeMessage}</p>
-              ) : null}
+              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Permit automation</div>
+              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-900">{runHeadline(run)}</div>
+              <p className="mt-2 text-sm leading-6 text-steel-600">{permitRunMessage}</p>
             </div>
             {run?.status === "running" ? (
-              <LoaderCircle className="h-5 w-5 animate-spin text-[#D4691A]" />
+              <LoaderCircle className="h-5 w-5 animate-spin text-brand-600" />
             ) : (
-              <RefreshCw className="h-5 w-5 text-[#D4691A]" />
+              <RefreshCw className="h-5 w-5 text-brand-600" />
             )}
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-5">
+            {queueChip("Claimed", run?.progress?.claimed ?? 0)}
+            {queueChip("Processed", run?.progress?.processed ?? 0)}
+            {queueChip("Fresh", run?.progress?.fresh_inserted ?? 0)}
+            {queueChip("Ready", run?.progress?.ready ?? 0, "success")}
+            {queueChip("Exceptions", run?.progress?.review ?? 0, "warning")}
           </div>
         </Panel>
 
-        <Panel className="bg-[linear-gradient(180deg,#fffdfa,#f8efe4)]">
-          <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Quick actions</div>
-          <div className="mt-3 space-y-3">
-            <Button className="h-11 w-full rounded-full bg-[#1A1A1A] text-white hover:bg-[#111111]" onClick={onScan} type="button">
-              {isScanRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Run scan now"}
+        <Panel>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Prospects pilot</div>
+              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-900">
+                {prospect?.pilot_enabled ? "Active" : "Paused"}
+              </div>
+              <p className="mt-2 text-sm leading-6 text-steel-600">
+                {prospect?.pilot_enabled
+                  ? `${prospect.initial_daily_per_category}/category at ${prospect.initial_send_time}, one follow-up ${prospect.follow_up_delay_days} days later at ${prospect.follow_up_send_time}.`
+                  : "The prospect pilot is currently disabled in config."}
+              </p>
+            </div>
+            <Users2 className="h-5 w-5 text-brand-600" />
+          </div>
+
+          <div className="mt-4 grid gap-2">
+            {CATEGORIES.map((category) => (
+              <div key={category} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-[16px] border border-steel-200 bg-steel-50/60 px-3 py-3">
+                <div className="font-medium text-steel-900">{formatProspectCategory(category)}</div>
+                <div className="font-mono text-xs text-steel-600">
+                  Initial {prospect?.initial_sent_today?.[category] ?? 0}/{prospect?.initial_daily_per_category ?? 0}
+                </div>
+                <div className="font-mono text-xs text-steel-600">
+                  F/U {prospect?.follow_up_sent_today?.[category] ?? 0}/{prospect?.follow_up_daily_per_category ?? 0}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel>
+          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Actions</div>
+          <div className="mt-4 space-y-3">
+            <Button className="h-11 w-full rounded-full" onClick={onScan} type="button">
+              {isScanRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : "Run permit scan"}
             </Button>
-            <Button className="h-11 w-full rounded-full bg-[#2D6A4F] text-white hover:bg-[#25573F]" onClick={onSendAllReady} type="button">
-              {actionLeadId === null ? "Send all ready" : "Working"}
+            <Button className="h-11 w-full rounded-full bg-emerald-600 text-white hover:bg-emerald-700" onClick={onSendAllReady} type="button">
+              {actionLeadId === null ? "Send ready permits" : "Working"}
             </Button>
           </div>
-          <div className="mt-4 text-sm leading-6 text-[#5F564C]">
-            Scan now drains queued backlog first, tops up with fresh DOB permits only when needed, then resolves, enriches, routes, drafts, and sends in the background.
+          <div className="mt-4 rounded-[16px] border border-steel-200 bg-steel-50/80 p-3 text-sm leading-6 text-steel-600">
+            Scheduled permit auto-send is intentionally separated from the prospects pilot. Manual permit workflows stay available while the pilot runs.
           </div>
         </Panel>
       </div>
 
-      <Panel>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Automation backlog</div>
-        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.automation_backlog_pending ?? today?.counts.new ?? 0} pending leads</div>
-        <div className="mt-2 text-sm leading-6 text-[#5F564C]">
-          This is the true unprocessed queue. Scan claims from here first, then only fetches fresh permits if it still needs more work to fill the run.
-        </div>
-        <div className="mt-4 space-y-3">
-          {(today?.automation_backlog ?? today?.new_leads ?? []).slice(0, 6).map((lead) => (
-            <div key={lead.id} className="rounded-[16px] border border-[#EEE4D7] px-4 py-4">
-              <button className="w-full text-left transition hover:text-[#D4691A]" onClick={() => onOpenLead(lead)} type="button">
-                <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.applicant_name || lead.address}</div>
-                <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
-                <div className="mt-2 text-xs text-[#8B7D6B]">
-                  Relevance {leadSummary(lead)} | Waiting to be processed
-                </div>
-              </button>
-              <div className="mt-3 flex gap-2">
-                <Button
-                  className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]"
+      <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+        <Panel>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Permit queues</div>
+              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-900">Manual work and send-ready lanes</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {queueChip("Backlog", today?.automation_backlog_pending ?? 0)}
+              {queueChip("Email required", today?.counts.email_required ?? 0, "warning")}
+              {queueChip("Ready", today?.counts.ready ?? 0, "success")}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            <div className="space-y-3">
+              <div className="text-sm font-semibold text-steel-900">Backlog</div>
+              {(today?.automation_backlog ?? []).slice(0, 4).map((lead) => (
+                <button
+                  key={lead.id}
+                  className="w-full rounded-[16px] border border-steel-200 bg-white px-4 py-4 text-left transition hover:border-brand-300 hover:bg-brand-50/40"
                   onClick={() => onOpenLead(lead)}
                   type="button"
-                  variant="outline"
                 >
-                  Open
-                </Button>
-              </div>
+                  <div className="font-medium text-steel-900">{lead.company_name || lead.applicant_name || lead.address}</div>
+                  <div className="mt-1 text-sm text-steel-600">{lead.address}</div>
+                  <div className="mt-2 font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">
+                    {leadSummary(lead)}
+                  </div>
+                </button>
+              ))}
             </div>
-          ))}
-          {!(today?.automation_backlog ?? today?.new_leads ?? []).length ? (
-            <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
-              There is no pending backlog right now.
-            </div>
-          ) : null}
-        </div>
-      </Panel>
 
-      <Panel>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Processed this run</div>
-        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.processed_this_run.length ?? 0} recently processed leads</div>
-        <div className="mt-2 text-sm leading-6 text-[#5F564C]">
-          These leads were claimed by the current or last scan run and already moved through resolve, enrichment, route selection, and draft generation.
-        </div>
-        <div className="mt-4 space-y-3">
-          {(today?.processed_this_run ?? []).slice(0, 6).map((lead) => (
-            <div key={lead.id} className="rounded-[16px] border border-[#EEE4D7] px-4 py-4">
-              <button className="w-full text-left transition hover:text-[#D4691A]" onClick={() => onOpenLead(lead)} type="button">
-                <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.applicant_name || lead.address}</div>
-                <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
-                <div className="mt-2 text-xs text-[#8B7D6B]">
-                  Relevance {leadSummary(lead)} | Status {formatLeadStatus(lead.status)}
-                </div>
-              </button>
+            <div className="space-y-3">
+              <div className="text-sm font-semibold text-steel-900">Ready</div>
+              {(today?.ready ?? []).slice(0, 4).map((lead) => (
+                <button
+                  key={lead.id}
+                  className="w-full rounded-[16px] border border-emerald-200 bg-emerald-50/70 px-4 py-4 text-left transition hover:border-emerald-300"
+                  onClick={() => onOpenLead(lead)}
+                  type="button"
+                >
+                  <div className="font-medium text-steel-900">{lead.company_name || lead.address}</div>
+                  <div className="mt-1 text-sm text-steel-600">{lead.address}</div>
+                  <div className="mt-2 font-mono text-[11px] uppercase tracking-[0.14em] text-emerald-700">
+                    Trust {Math.round(lead.contact_email_trust ?? 0)}
+                  </div>
+                </button>
+              ))}
             </div>
-          ))}
-          {!(today?.processed_this_run ?? []).length ? (
-            <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
-              Nothing has been processed in the current visible run yet.
-            </div>
-          ) : null}
-        </div>
-      </Panel>
 
-      <Panel>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Ready to send</div>
-            <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.ready ?? 0} leads ready</div>
+            <div className="space-y-3">
+              <div className="text-sm font-semibold text-steel-900">Email required</div>
+              {(today?.email_required ?? []).slice(0, 4).map((lead) => (
+                <button
+                  key={lead.id}
+                  className="w-full rounded-[16px] border border-amber-200 bg-amber-50/70 px-4 py-4 text-left transition hover:border-amber-300"
+                  onClick={() => onOpenLead(lead)}
+                  type="button"
+                >
+                  <div className="font-medium text-steel-900">{lead.company_name || lead.address}</div>
+                  <div className="mt-1 text-sm text-steel-600">{lead.address}</div>
+                  <div className="mt-2 font-mono text-[11px] uppercase tracking-[0.14em] text-amber-700">
+                    Waiting on a verified email
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
-          <Button className="h-11 rounded-full bg-[#2D6A4F] px-4 text-white hover:bg-[#25573F]" onClick={onSendAllReady}>
-            {actionLeadId === null ? "Send all ready" : "Working"}
-          </Button>
-        </div>
-        <div className="mt-4 space-y-3">
-          {(today?.ready ?? []).slice(0, 6).map((lead) => (
-            <button
-              key={lead.id}
-              className="w-full rounded-[16px] border border-[#EEE4D7] px-4 py-4 text-left transition hover:border-[#D4691A]"
-              onClick={() => onOpenLead(lead)}
-              type="button"
-            >
-              <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.address}</div>
-              <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
-              <div className="mt-2 text-xs text-[#8B7D6B]">
-                Relevance {leadSummary(lead)} | Trust {Math.round(lead.contact_email_trust ?? 0)}
-              </div>
-            </button>
-          ))}
-        </div>
-      </Panel>
+        </Panel>
 
-      <Panel>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Exceptions</div>
-        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.review ?? 0} leads need a decision</div>
-        <div className="mt-4 space-y-3">
-          {(today?.review ?? []).slice(0, 6).map((lead) => (
-            <button
-              key={lead.id}
-              className="w-full rounded-[16px] border border-[#EEE4D7] px-4 py-4 text-left transition hover:border-[#D4691A]"
-              onClick={() => onOpenLead(lead)}
-              type="button"
-            >
-              <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.address}</div>
-              <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
-              <div className="mt-2 text-xs text-[#8B7D6B]">
-                Relevance {leadSummary(lead)} | Trust {Math.round(lead.contact_email_trust ?? 0)}
-              </div>
-            </button>
-          ))}
-          {!(today?.review ?? []).length ? (
-            <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
-              No plain review leads right now.
+        <Panel>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Prospect automation board</div>
+              <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-900">Initial queue, due follow-ups, and exceptions</div>
             </div>
-          ) : null}
-        </div>
-      </Panel>
+          </div>
 
-      <Panel className="bg-[linear-gradient(180deg,#fffdfa,#f8efe4)]">
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Email required</div>
-        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.counts.email_required ?? 0} leads waiting on a verified address</div>
-        <div className="mt-2 max-w-2xl text-sm leading-6 text-[#5F564C]">
-          These are the leads you intentionally parked because enrichment did not surface a usable email. Open any of them to add a verified address manually or keep working from text/phone.
-        </div>
-        <div className="mt-4 space-y-3">
-          {(today?.email_required ?? []).slice(0, 6).map((lead) => (
-            <button
-              key={lead.id}
-              className="w-full rounded-[16px] border border-[#EEE4D7] px-4 py-4 text-left transition hover:border-[#D4691A]"
-              onClick={() => onOpenLead(lead)}
-              type="button"
-            >
-              <div className="font-medium text-[#1A1A1A]">{lead.company_name || lead.address}</div>
-              <div className="mt-1 text-sm text-[#5F564C]">{lead.address}</div>
-              <div className="mt-2 text-xs text-[#8B7D6B]">
-                Relevance {leadSummary(lead)} | No verified email chosen yet
+          <div className="mt-5 grid gap-4">
+            <div className="rounded-[18px] border border-steel-200 bg-white p-4">
+              <div className="text-sm font-semibold text-steel-900">Follow-ups due tonight</div>
+              <div className="mt-3 grid gap-2">
+                {(prospect?.follow_up_queue ?? []).slice(0, 5).map((followUp) => (
+                  <div key={followUp.id} className="rounded-[14px] border border-steel-200 bg-steel-50/70 px-3 py-3">
+                    <div className="font-medium text-steel-900">{followUp.contact_name || followUp.company_name || followUp.email_address}</div>
+                    <div className="mt-1 text-sm text-steel-600">
+                      {followUp.category ? formatProspectCategory(followUp.category) : "Prospect"} · due {formatRelativeTime(followUp.scheduled_at)}
+                    </div>
+                  </div>
+                ))}
+                {!(prospect?.follow_up_queue ?? []).length ? (
+                  <div className="rounded-[14px] border border-dashed border-steel-200 px-3 py-4 text-sm text-steel-500">
+                    No prospect follow-ups are waiting right now.
+                  </div>
+                ) : null}
               </div>
-            </button>
-          ))}
-          {!(today?.email_required ?? []).length ? (
-            <div className="rounded-[16px] border border-dashed border-[#E2D4C6] px-4 py-6 text-sm text-[#6B5A48]">
-              Nothing is parked in Email Required right now.
             </div>
-          ) : null}
-        </div>
-      </Panel>
 
-      <Panel>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Follow ups due</div>
-        <div className="mt-2 text-2xl font-semibold text-[#1A1A1A]">{today?.follow_ups_due.length ?? 0} due today</div>
-        <div className="mt-4 space-y-3">
-          {(today?.follow_ups_due ?? []).map((followUp) => (
-            <div key={followUp.id} className="rounded-[16px] border border-[#EEE4D7] px-4 py-4">
-              <div className="font-medium text-[#1A1A1A]">{followUp.company_name}</div>
-              <div className="mt-1 text-sm text-[#5F564C]">Step {followUp.step} via {followUp.channel}</div>
-              {followUp.channel === "email" ? (
-                <Button className="mt-3 h-10 rounded-full bg-[#D4691A] text-white hover:bg-[#BA5A12]" onClick={() => onSendFollowUp(followUp.lead_id, followUp.step)}>
-                  <Mail className="h-4 w-4" />
-                  Send
-                </Button>
-              ) : (
-                <div className="mt-3 space-y-3">
-                  <p className="rounded-[14px] bg-[#F6F1EA] p-3 text-sm text-[#5F564C]">
-                    {followUp.phone_script || "Call the contact and ask if the glass scope is still open."}
-                  </p>
-                  <Button className="h-10 rounded-full border border-[#D4691A] bg-white text-[#D4691A] hover:bg-[#FFF5ED]" onClick={() => onLogPhoneFollowUp(followUp.lead_id, followUp.step)} variant="outline">
-                    <PhoneCall className="h-4 w-4" />
-                    Log outcome
+            <div className="rounded-[18px] border border-steel-200 bg-white p-4">
+              <div className="text-sm font-semibold text-steel-900">Recent prospect sends</div>
+              <div className="mt-3 grid gap-2">
+                {(prospect?.recent_sends ?? []).slice(0, 5).map((send) => (
+                  <div key={send.id} className="rounded-[14px] border border-steel-200 bg-steel-50/70 px-3 py-3">
+                    <div className="font-medium text-steel-900">{send.contact_name}</div>
+                    <div className="mt-1 text-sm text-steel-600">
+                      {(send.category && formatProspectCategory(send.category)) || "Prospect"} · {send.kind === "follow_up" ? "Follow-up" : "Initial"} · {formatRelativeTime(send.sent_at)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-[18px] border border-steel-200 bg-white p-4">
+              <div className="inline-flex items-center gap-2 text-sm font-semibold text-steel-900">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                Prospect exceptions
+              </div>
+              <div className="mt-3 grid gap-2">
+                {(prospect?.exceptions ?? []).slice(0, 5).map((item) => (
+                  <div key={item.id} className="rounded-[14px] border border-amber-200 bg-amber-50/70 px-3 py-3">
+                    <div className="font-medium text-steel-900">{item.label}</div>
+                    <div className="mt-1 text-sm text-amber-800">
+                      {item.category ? formatProspectCategory(item.category) : "Prospect"} · {item.event_type.replace(/_/g, " ")}
+                    </div>
+                  </div>
+                ))}
+                {!(prospect?.exceptions ?? []).length ? (
+                  <div className="rounded-[14px] border border-dashed border-steel-200 px-3 py-4 text-sm text-steel-500">
+                    No prospect exceptions have been logged recently.
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+        <Panel>
+          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Permit follow-ups</div>
+          <div className="mt-2 text-2xl font-bold tracking-[-0.04em] text-steel-900">{today?.follow_ups_due.length ?? 0} due today</div>
+          <div className="mt-4 space-y-3">
+            {(today?.follow_ups_due ?? []).map((followUp) => (
+              <div key={followUp.id} className="rounded-[16px] border border-steel-200 bg-white px-4 py-4">
+                <div className="font-medium text-steel-900">{followUp.company_name}</div>
+                <div className="mt-1 text-sm text-steel-600">Step {followUp.step} via {followUp.channel}</div>
+                {followUp.channel === "email" ? (
+                  <Button className="mt-3 h-10 rounded-full" onClick={() => onSendFollowUp(followUp.lead_id, followUp.step)}>
+                    <Mail className="h-4 w-4" />
+                    Send
                   </Button>
+                ) : (
+                  <div className="mt-3 space-y-3">
+                    <p className="rounded-[14px] border border-steel-200 bg-steel-50/70 p-3 text-sm text-steel-600">
+                      {followUp.phone_script || "Call the contact and ask if the glass scope is still open."}
+                    </p>
+                    <Button className="h-10 rounded-full" onClick={() => onLogPhoneFollowUp(followUp.lead_id, followUp.step)} variant="outline">
+                      <PhoneCall className="h-4 w-4" />
+                      Log outcome
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel>
+          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Recent permit sends</div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {(today?.recent_sends ?? []).map((send) => (
+              <div key={`${send.lead_id}-${send.sent_at}`} className="rounded-[16px] border border-steel-200 bg-white px-4 py-4">
+                <div className="font-medium text-steel-900">{send.company_name}</div>
+                <div className="mt-1 text-sm text-steel-600">{send.email}</div>
+                <div className="mt-2 font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">
+                  {send.outcome} · {formatRelativeTime(send.sent_at)}
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-      <Panel>
-        <div className="text-xs uppercase tracking-[0.2em] text-[#8B7D6B]">Recent sends</div>
-        <div className="mt-4 space-y-3">
-          {(today?.recent_sends ?? []).map((send) => (
-            <div key={`${send.lead_id}-${send.sent_at}`} className="rounded-[16px] border border-[#EEE4D7] px-4 py-4">
-              <div className="font-medium text-[#1A1A1A]">{send.company_name}</div>
-              <div className="mt-1 text-sm text-[#5F564C]">{send.email}</div>
-              <div className="mt-2 text-xs text-[#8B7D6B]">{send.outcome} · {formatRelativeTime(send.sent_at)}</div>
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-      <button
-        className="fixed bottom-24 right-4 flex h-14 min-w-[56px] items-center justify-center rounded-full bg-[#D4691A] px-5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(212,105,26,0.35)] transition hover:bg-[#BA5A12]"
-        onClick={onScan}
-        type="button"
-      >
-        {isScanRunning ? <LoaderCircle className="h-5 w-5 animate-spin" /> : "Scan"}
-      </button>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
     </div>
   )
 }

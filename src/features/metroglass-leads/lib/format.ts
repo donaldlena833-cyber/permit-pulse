@@ -41,5 +41,15 @@ export function formatProspectCategory(value: string | null | undefined): string
 
 export function formatProspectStatus(value: string | null | undefined): string {
   if (!value) return "Unknown"
+  if (value === "opted_out") return "Opted out"
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+export function formatProspectQueueState(value: string | null | undefined): string {
+  if (!value) return "Queued"
+  if (value === "queued_initial") return "Queued for Initial"
+  if (value === "queued_follow_up") return "Queued for Follow-up"
+  if (value === "follow_up_sent") return "Follow-up Sent"
+  if (value === "opted_out") return "Opted out"
   return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }

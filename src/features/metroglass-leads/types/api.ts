@@ -2,7 +2,8 @@ export type LeadStatus = "new" | "ready" | "review" | "email_required" | "sent" 
 export type QualityTier = "hot" | "warm" | "cold"
 export type AppTab = "today" | "leads" | "prospects" | "settings"
 export type ProspectCategory = "interior_designer" | "gc" | "property_manager" | "project_manager" | "architect"
-export type ProspectStatus = "new" | "drafted" | "sent" | "replied" | "archived"
+export type ProspectStatus = "new" | "drafted" | "sent" | "replied" | "opted_out" | "archived"
+export type ProspectQueueState = "queued_initial" | "sent" | "queued_follow_up" | "follow_up_sent" | "replied" | "opted_out" | "archived"
 
 export interface LeadRow {
   id: string
@@ -109,8 +110,15 @@ export interface ProspectRow {
   notes: string | null
   gmail_thread_id: string | null
   sent_count: number
+  do_not_contact?: boolean
+  opted_out_at?: string | null
+  first_sent_at?: string | null
   last_sent_at: string | null
+  last_follow_up_at?: string | null
   last_replied_at: string | null
+  queue_state?: ProspectQueueState
+  automation_block_reason?: string | null
+  next_follow_up?: ProspectFollowUp | null
   created_at: string
   updated_at: string
 }
@@ -133,6 +141,22 @@ export interface ProspectImportBatch {
   skipped_count: number
   actor_id: string | null
   created_at: string
+}
+
+export interface ProspectFollowUp {
+  id: string
+  prospect_id: string
+  step_number: number
+  scheduled_at: string
+  status: "pending" | "sent" | "skipped" | "cancelled"
+  slot_key?: string | null
+  draft_subject?: string | null
+  draft_body?: string | null
+  sent_at?: string | null
+  category?: ProspectCategory | null
+  contact_name?: string | null
+  company_name?: string | null
+  email_address?: string | null
 }
 
 export interface FollowUp {
@@ -192,6 +216,7 @@ export interface ProspectDetailResponse {
   }
   timeline: ProspectEvent[]
   import_batch: ProspectImportBatch | null
+  follow_ups: ProspectFollowUp[]
 }
 
 export interface RunCounters {
@@ -228,11 +253,53 @@ export interface AutomationRun {
   started_at: string | null
   completed_at?: string | null
   mode?: string | null
+  slot_key?: string | null
   target_claim_count?: number
   backlog_pending_at_start?: number
   counters?: RunCounters
   progress?: RunProgress
   summary?: Record<string, number>
+  per_category?: {
+    attempted_by_category: Record<ProspectCategory, number>
+    sent_by_category: Record<ProspectCategory, number>
+    skipped_by_category: Record<ProspectCategory, number>
+    selected_count: number
+  } | null
+}
+
+export interface ProspectAutomationSummary {
+  pilot_enabled: boolean
+  permit_auto_send_enabled: boolean
+  timezone: string
+  initial_send_time: string
+  follow_up_send_time: string
+  initial_daily_per_category: number
+  follow_up_daily_per_category: number
+  follow_up_delay_days: number
+  initial_sent_today: Record<ProspectCategory, number>
+  follow_up_sent_today: Record<ProspectCategory, number>
+  initial_queue_by_category: Record<ProspectCategory, number>
+  follow_up_due_by_category: Record<ProspectCategory, number>
+  opted_out_by_category: Record<ProspectCategory, number>
+  initial_queue: ProspectRow[]
+  follow_up_queue: ProspectFollowUp[]
+  recent_sends: Array<{
+    id: string
+    prospect_id: string
+    category: ProspectCategory | null
+    contact_name: string
+    email_address: string
+    sent_at: string
+    kind: "initial" | "follow_up"
+  }>
+  exceptions: Array<{
+    id: string
+    prospect_id: string
+    label: string
+    category: ProspectCategory | null
+    event_type: string
+    created_at: string
+  }>
 }
 
 export interface TodayPayload {
@@ -277,6 +344,7 @@ export interface TodayPayload {
     sent_at: string
     outcome: string
   }>
+  prospect_automation: ProspectAutomationSummary
 }
 
 export interface HealthPayload {
@@ -300,6 +368,14 @@ export interface ConfigPayload {
   active_sources: string[]
   warm_up_mode: boolean
   warm_up_daily_cap: number
+  prospect_pilot_enabled: boolean
+  prospect_initial_daily_per_category: number
+  prospect_follow_up_daily_per_category: number
+  prospect_timezone: string
+  prospect_initial_send_time: string
+  prospect_follow_up_send_time: string
+  prospect_follow_up_delay_days: number
+  permit_auto_send_enabled: boolean
 }
 
 export interface LeadsPayload {
@@ -315,6 +391,9 @@ export interface ProspectsPayload {
   counts: Record<"all" | ProspectStatus, number>
   categories: Record<ProspectCategory, number>
   recent_imports: ProspectImportBatch[]
+  initial_queue: ProspectRow[]
+  follow_up_queue: ProspectFollowUp[]
+  automation: ProspectAutomationSummary
 }
 
 export interface SystemPayload {
@@ -323,6 +402,7 @@ export interface SystemPayload {
     has_gmail: boolean
   }
   total_leads: number
+  total_prospects?: number
   recent_failures: Array<{
     id: string
     job_type: string

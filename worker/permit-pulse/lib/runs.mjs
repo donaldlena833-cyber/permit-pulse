@@ -1,11 +1,13 @@
 import { nowIso } from './utils.mjs';
+import { order } from './supabase.mjs';
 
-export async function createRun(db, triggerType, triggeredBy, config, sourceScope = ['nyc_dob']) {
+export async function createRun(db, triggerType, triggeredBy, config, sourceScope = ['nyc_dob'], options = {}) {
+  const initialStage = options.initialStage || 'scan';
   const [run] = await db.insert('v2_automation_runs', {
     trigger_type: triggerType,
     triggered_by: triggeredBy || null,
     status: 'running',
-    current_stage: 'scan',
+    current_stage: initialStage,
     config_snapshot: config,
     source_scope: sourceScope,
     started_at: nowIso(),
@@ -57,10 +59,30 @@ export async function failRun(db, runId, error, counters = {}, extraPatch = {}) 
   });
 }
 
-export async function getRunningRun(db) {
-  return db.single('v2_automation_runs', {
+export async function getRunningRun(db, options = {}) {
+  const rows = await db.select('v2_automation_runs', {
     filters: ['status=eq.running'],
     ordering: ['order=created_at.desc.nullslast'],
+    limit: 10,
+  });
+
+  const excludeProspect = options.excludeProspect !== false;
+  if (!excludeProspect) {
+    return rows[0] || null;
+  }
+
+  return rows.find((run) => {
+    const scope = run?.source_scope && typeof run.source_scope === 'object' && !Array.isArray(run.source_scope)
+      ? run.source_scope
+      : {};
+    return !String(scope.mode || '').startsWith('prospect_');
+  }) || null;
+}
+
+export async function listRecentRuns(db, limit = 25) {
+  return db.select('v2_automation_runs', {
+    ordering: [order('created_at', 'desc')],
+    limit,
   });
 }
 

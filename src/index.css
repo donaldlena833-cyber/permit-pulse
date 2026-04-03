@@ -1,30 +1,30 @@
-@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --background: 36 25% 88%;
-  --foreground: 0 0% 10%;
+  --background: 210 25% 97%;
+  --foreground: 221 34% 12%;
   --card: 0 0% 100%;
-  --card-foreground: 0 0% 10%;
+  --card-foreground: 221 34% 12%;
   --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 10%;
-  --primary: 25 78% 47%;
+  --popover-foreground: 221 34% 12%;
+  --primary: 214 86% 51%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 34 30% 94%;
-  --secondary-foreground: 0 0% 10%;
-  --muted: 36 21% 92%;
-  --muted-foreground: 34 10% 37%;
-  --accent: 28 79% 47%;
+  --secondary: 210 35% 95%;
+  --secondary-foreground: 221 34% 12%;
+  --muted: 214 26% 92%;
+  --muted-foreground: 216 16% 38%;
+  --accent: 214 86% 51%;
   --accent-foreground: 0 0% 100%;
-  --destructive: 356 79% 41%;
+  --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
-  --border: 32 24% 78%;
-  --input: 32 24% 78%;
-  --ring: 25 78% 47%;
-  --radius: 0.75rem;
+  --border: 214 23% 86%;
+  --input: 214 23% 86%;
+  --ring: 214 86% 51%;
+  --radius: 1rem;
 }
 
 @layer base {
@@ -40,25 +40,28 @@
     @apply bg-background text-foreground font-sans antialiased;
     min-height: 100vh;
     background-image:
-      radial-gradient(circle at top left, rgba(212, 105, 26, 0.08), transparent 28%),
-      linear-gradient(180deg, rgba(255, 251, 246, 0.7), rgba(232, 226, 217, 0.2));
-    font-family: "Inter", "Segoe UI", sans-serif;
+      radial-gradient(circle at top left, rgba(14, 116, 248, 0.08), transparent 26%),
+      linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(239, 244, 250, 0.88)),
+      linear-gradient(rgba(15, 23, 42, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(15, 23, 42, 0.03) 1px, transparent 1px);
+    background-size: auto, auto, 22px 22px, 22px 22px;
+    font-family: "Manrope", "Segoe UI", sans-serif;
   }
 
   ::selection {
-    background: rgba(212, 105, 26, 0.18);
+    background: rgba(14, 116, 248, 0.18);
   }
 }
 
 @layer utilities {
   .surface-glow {
-    box-shadow: 0 24px 80px rgba(26, 26, 26, 0.08);
+    box-shadow: 0 24px 80px rgba(15, 23, 42, 0.1);
   }
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(113, 98, 84, 0.45) transparent;
+  scrollbar-color: rgba(71, 85, 105, 0.35) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -73,6 +76,6 @@
 *::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
-  background: rgba(95, 86, 76, 0.35);
+  background: rgba(71, 85, 105, 0.3);
   background-clip: padding-box;
 }

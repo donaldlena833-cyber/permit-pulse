@@ -235,6 +235,12 @@ export function updateProspectStatus(prospectId: string, status: string) {
   })
 }
 
+export function optOutProspect(prospectId: string) {
+  return requestJson(`/api/prospects/${encodeURIComponent(prospectId)}/opt-out`, {
+    method: "POST",
+  })
+}
+
 export function sendFollowUp(leadId: string, step: number) {
   return requestJson<{ success: boolean }>(`/api/leads/${encodeURIComponent(leadId)}/follow-ups/${step}/send`, {
     method: "POST",

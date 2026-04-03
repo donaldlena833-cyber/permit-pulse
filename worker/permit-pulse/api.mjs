@@ -1,9 +1,11 @@
 import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
 import { isApprovedRouteCandidate, isPublishedEmailCandidate, isOfficialSitePublishedContact, withApprovedTrustFloor } from './lib/email-approval.mjs';
 import {
+  getProspectAutomationOverview,
   getProspectDetail,
   importProspects,
   listProspects,
+  optOutProspect,
   saveProspectDraft,
   saveProspectNotes,
   sendProspect,
@@ -182,6 +184,7 @@ async function presentRun(db, run) {
     started_at: run.started_at,
     completed_at: run.completed_at || null,
     mode: scope.mode || null,
+    slot_key: scope.slot_key || null,
     target_claim_count: targetClaimCount,
     backlog_pending_at_start: Number(scope.backlog_pending_at_start || 0),
     counters: {
@@ -209,6 +212,7 @@ async function presentRun(db, run) {
       archived_no_email: queueSummary.archived,
       sent: queueSummary.sent,
     },
+    per_category: scope.per_category || null,
     summary: run.status === 'completed' || run.status === 'failed'
       ? {
           harvested: Number(run.permits_found || 0),
@@ -256,7 +260,19 @@ async function getTodayPayload(env) {
   const config = await getAppConfig(db);
   const { currentRun, lastRun } = await getLatestRuns(env);
   const displayRun = currentRun || lastRun || null;
-  const [presentedCurrentRun, presentedLastRun, backlogPending, backlogLeads, readyLeads, reviewLeads, explicitEmailRequiredLeads, followUps, sentOutcomes, processedLeads] = await Promise.all([
+  const [
+    presentedCurrentRun,
+    presentedLastRun,
+    backlogPending,
+    backlogLeads,
+    readyLeads,
+    reviewLeads,
+    explicitEmailRequiredLeads,
+    followUps,
+    sentOutcomes,
+    processedLeads,
+    prospectAutomation,
+  ] = await Promise.all([
     presentRun(db, currentRun),
     presentRun(db, lastRun),
     countPendingAutomationLeads(db),
@@ -287,6 +303,7 @@ async function getTodayPayload(env) {
       limit: 5,
     }),
     getProcessedLeadsForRun(db, displayRun),
+    getProspectAutomationOverview(db, config),
   ]);
 
   const leadIds = [...new Set([...followUps.map((row) => row.lead_id), ...sentOutcomes.map((row) => row.lead_id)])];
@@ -358,6 +375,7 @@ async function getTodayPayload(env) {
       sent_at: item.sent_at,
       outcome: item.outcome,
     })),
+    prospect_automation: prospectAutomation,
   };
 }
 
@@ -626,6 +644,11 @@ export async function handlePermitPulseRequest(request, env, ctx) {
       return json(await sendProspect(env, db, decodeURIComponent(prospectSendMatch[1]), user.email || null));
     }
 
+    const prospectOptOutMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/opt-out$/);
+    if (prospectOptOutMatch && request.method === 'POST') {
+      return json(await optOutProspect(db, decodeURIComponent(prospectOptOutMatch[1]), user.email || null));
+    }
+
     const prospectDraftMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/draft$/);
     if (prospectDraftMatch && request.method === 'PUT') {
       const body = await parseBody(request);
@@ -773,13 +796,14 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/api/system' && request.method === 'GET') {
-      const [recentFailureRows, totalLeads, domainHealth, runs] = await Promise.all([
+      const [recentFailureRows, totalLeads, totalProspects, domainHealth, runs] = await Promise.all([
         db.select('v2_lead_jobs', {
           filters: [eq('status', 'failed')],
           ordering: [order('created_at', 'desc')],
           limit: 25,
         }),
         db.select('v2_leads', { columns: 'id' }),
+        db.select('v2_prospects', { columns: 'id' }).catch(() => []),
         db.select('v2_domain_health', { columns: 'domain,health_score,checked_at', limit: 20 }),
         db.select('v2_automation_runs', {
           ordering: [order('created_at', 'desc')],
@@ -796,6 +820,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
           has_gmail: hasGmailAutomation(env),
         },
         total_leads: totalLeads.length,
+        total_prospects: totalProspects.length,
         recent_failures: recentFailures,
         domain_health: domainHealth,
         recent_runs: await Promise.all(runs.map((run) => presentRun(db, run))),

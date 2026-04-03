@@ -18,6 +18,7 @@ import {
   logPhoneFollowUp,
   markLeadEmailRequired,
   markOutcome,
+  optOutProspect as optOutProspectRequest,
   refreshDraft,
   selectLeadEmail,
   sendAllReady,
@@ -111,6 +112,7 @@ export function useMetroglassLeads() {
             drafted: 0,
             sent: 0,
             replied: 0,
+            opted_out: 0,
             archived: 0,
           },
           categories: {
@@ -121,6 +123,57 @@ export function useMetroglassLeads() {
             project_manager: 0,
           },
           recent_imports: [],
+          initial_queue: [],
+          follow_up_queue: [],
+          automation: {
+            pilot_enabled: false,
+            permit_auto_send_enabled: false,
+            timezone: "America/New_York",
+            initial_send_time: "11:00",
+            follow_up_send_time: "23:30",
+            initial_daily_per_category: 10,
+            follow_up_daily_per_category: 10,
+            follow_up_delay_days: 3,
+            initial_sent_today: {
+              architect: 0,
+              interior_designer: 0,
+              gc: 0,
+              property_manager: 0,
+              project_manager: 0,
+            },
+            follow_up_sent_today: {
+              architect: 0,
+              interior_designer: 0,
+              gc: 0,
+              property_manager: 0,
+              project_manager: 0,
+            },
+            initial_queue_by_category: {
+              architect: 0,
+              interior_designer: 0,
+              gc: 0,
+              property_manager: 0,
+              project_manager: 0,
+            },
+            follow_up_due_by_category: {
+              architect: 0,
+              interior_designer: 0,
+              gc: 0,
+              property_manager: 0,
+              project_manager: 0,
+            },
+            opted_out_by_category: {
+              architect: 0,
+              interior_designer: 0,
+              gc: 0,
+              property_manager: 0,
+              project_manager: 0,
+            },
+            initial_queue: [],
+            follow_up_queue: [],
+            recent_sends: [],
+            exceptions: [],
+          },
         }
         setProspects(fallback)
         return fallback
@@ -401,6 +454,9 @@ export function useMetroglassLeads() {
     markProspectReplied: (prospectId: string) => runProspectAction(prospectId, async () => {
       await updateProspectStatus(prospectId, "replied")
     }, "Marked replied"),
+    optOutProspect: (prospectId: string) => runProspectAction(prospectId, async () => {
+      await optOutProspectRequest(prospectId)
+    }, "Prospect opted out"),
     saveConfig: async (patch: Partial<ConfigPayload>) => {
       try {
         const nextConfig = await updateConfig(patch)

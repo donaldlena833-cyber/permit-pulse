@@ -1,5 +1,5 @@
 import { handlePermitPulseRequest } from './api.mjs';
-import { runAutomationCycle } from './pipeline/engine.mjs';
+import { runScheduledWork } from './pipeline/scheduler.mjs';
 
 export default {
   async fetch(request, env, ctx) {
@@ -12,10 +12,7 @@ export default {
   },
 
   async scheduled(_event, env, ctx) {
-    const task = runAutomationCycle(env, {
-      triggerType: 'schedule',
-      triggeredBy: null,
-    }).catch((error) => {
+    const task = runScheduledWork(env).catch((error) => {
       console.error('Scheduled automation failed', error);
     });
 
