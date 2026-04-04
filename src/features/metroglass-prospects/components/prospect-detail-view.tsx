@@ -36,6 +36,9 @@ interface ProspectDetailViewProps {
   onMarkPositiveReply: (prospectId: string) => void
   onMarkBounced: (prospectId: string) => void
   onOptOut: (prospectId: string) => void
+  onSuppress: (prospectId: string, scopeType: "email" | "domain" | "company", reason?: string) => void
+  onRemoveSuppression: (suppressionId: string, prospectId: string) => void
+  onResolveReview: (reviewId: string, prospectId: string, action: string) => void
 }
 
 function blockReasonLabel(value: string | null | undefined) {
@@ -44,6 +47,7 @@ function blockReasonLabel(value: string | null | undefined) {
   if (value === "company_opted_out") return "Company domain opted out"
   if (value === "company_replied") return "Company domain already replied"
   if (value === "company_bounced") return "Company domain previously bounced"
+  if (value === "reply_review_pending" || value === "auto_reply_review") return "Waiting on inbound reply review"
   return value.replace(/_/g, " ")
 }
 
@@ -66,6 +70,9 @@ export function ProspectDetailView({
   onMarkPositiveReply,
   onMarkBounced,
   onOptOut,
+  onSuppress,
+  onRemoveSuppression,
+  onResolveReview,
 }: ProspectDetailViewProps) {
   const [subject, setSubject] = useState(detail?.draft.subject || "")
   const [body, setBody] = useState(detail?.draft.body || "")
@@ -184,6 +191,24 @@ export function ProspectDetailView({
               >
                 Archive
               </Button>
+              <Button
+                className="h-11 rounded-full px-5"
+                disabled={working}
+                onClick={() => onSuppress(detail.prospect.id, "email", "manual_suppression")}
+                type="button"
+                variant="outline"
+              >
+                Suppress email
+              </Button>
+              <Button
+                className="h-11 rounded-full px-5"
+                disabled={working}
+                onClick={() => onSuppress(detail.prospect.id, detail.prospect.company_domain ? "domain" : "company", "manual_suppression")}
+                type="button"
+                variant="outline"
+              >
+                Suppress company
+              </Button>
             </div>
           </section>
 
@@ -237,6 +262,13 @@ export function ProspectDetailView({
                         Open website
                       </a>
                     ) : null}
+                  </div>
+                  <div className="rounded-[16px] border border-steel-200 bg-steel-50/60 px-4 py-4">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-steel-500">Campaign</div>
+                    <div className="mt-2 font-medium text-steel-900">{detail.prospect.campaign?.name || "Default category campaign"}</div>
+                    <div className="mt-1 text-sm text-steel-600">
+                      {detail.prospect.campaign?.send_time_local || "11:00"} · {detail.prospect.campaign?.timezone || "America/New_York"}
+                    </div>
                   </div>
                 </div>
 
@@ -299,6 +331,61 @@ export function ProspectDetailView({
                   {!(detail.follow_ups ?? []).length ? (
                     <div className="rounded-[16px] border border-dashed border-steel-200 px-4 py-5 text-sm text-steel-500">
                       No automated follow-up is scheduled yet.
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="rounded-[22px] border border-steel-200 bg-white p-5 shadow-soft">
+                <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Reply review</div>
+                <div className="mt-4 grid gap-3">
+                  {(detail.review_items ?? []).map((item) => (
+                    <div className="rounded-[16px] border border-amber-200 bg-amber-50/60 px-4 py-4" key={String(item.id)}>
+                      <div className="font-medium text-steel-900">{String(item.reason || "reply review pending").replace(/_/g, " ")}</div>
+                      <div className="mt-1 text-sm text-steel-600">{String(item.subject || "No subject")}</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button className="h-9 rounded-full px-4" disabled={working} onClick={() => onResolveReview(String(item.id), detail.prospect.id, "mark_positive_reply")} type="button" variant="outline">
+                          Positive
+                        </Button>
+                        <Button className="h-9 rounded-full px-4" disabled={working} onClick={() => onResolveReview(String(item.id), detail.prospect.id, "mark_reply")} type="button" variant="outline">
+                          Replied
+                        </Button>
+                        <Button className="h-9 rounded-full px-4" disabled={working} onClick={() => onResolveReview(String(item.id), detail.prospect.id, "mark_bounced")} type="button" variant="outline">
+                          Bounced
+                        </Button>
+                        <Button className="h-9 rounded-full px-4" disabled={working} onClick={() => onResolveReview(String(item.id), detail.prospect.id, "mark_opt_out")} type="button" variant="outline">
+                          Opt out
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {!(detail.review_items ?? []).length ? (
+                    <div className="rounded-[16px] border border-dashed border-steel-200 px-4 py-5 text-sm text-steel-500">
+                      No pending inbound review on this contact.
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="rounded-[22px] border border-steel-200 bg-white p-5 shadow-soft">
+                <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Suppressions</div>
+                <div className="mt-4 grid gap-3">
+                  {(detail.suppressions ?? []).map((suppression) => (
+                    <div className="rounded-[16px] border border-steel-200 bg-steel-50/60 px-4 py-4" key={suppression.id}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="font-medium text-steel-900">{suppression.scope_type} · {suppression.scope_value}</div>
+                          <div className="mt-1 text-sm text-steel-600">{suppression.reason || "manual suppression"}</div>
+                        </div>
+                        <Button className="h-9 rounded-full px-4" disabled={working} onClick={() => onRemoveSuppression(suppression.id, detail.prospect.id)} type="button" variant="outline">
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {!(detail.suppressions ?? []).length ? (
+                    <div className="rounded-[16px] border border-dashed border-steel-200 px-4 py-5 text-sm text-steel-500">
+                      No manual or derived suppressions are attached to this contact right now.
                     </div>
                   ) : null}
                 </div>

@@ -268,6 +268,32 @@ export function optOutProspect(prospectId: string) {
   })
 }
 
+export function suppressProspect(prospectId: string, payload: { scope_type: "email" | "domain" | "company"; reason?: string }) {
+  return requestJson(`/api/prospects/${encodeURIComponent(prospectId)}/suppress`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function removeProspectSuppressionRequest(suppressionId: string) {
+  return requestJson(`/api/outreach/suppressions/${encodeURIComponent(suppressionId)}/remove`, {
+    method: "POST",
+  })
+}
+
+export function resolveOutreachReviewRequest(reviewId: string, payload: { action: string; prospect_id?: string | null }) {
+  return requestJson(`/api/outreach/review/${encodeURIComponent(reviewId)}/resolve`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
 export function sendFollowUp(leadId: string, step: number) {
   return requestJson<{ success: boolean }>(`/api/leads/${encodeURIComponent(leadId)}/follow-ups/${step}/send`, {
     method: "POST",
@@ -349,6 +375,8 @@ export function syncOutreachRepliesNow() {
     opt_outs: number
     positive_replies: number
     unmatched_messages: number
+    bounces?: number
+    review_items?: number
   }>("/api/outreach/sync-replies", {
     method: "POST",
   })

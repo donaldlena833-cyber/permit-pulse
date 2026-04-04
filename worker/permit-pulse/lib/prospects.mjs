@@ -298,6 +298,40 @@ function companyDomainForProspect(prospect) {
   return domain;
 }
 
+function normalizeCompanyNameKey(value) {
+  const text = compactText(value)?.toLowerCase() || null;
+  if (!text) {
+    return null;
+  }
+  return text.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function companyNameForProspect(prospect) {
+  return compactText(prospect?.company_name)
+    || compactText(prospect?.contact_name)
+    || compactText(prospect?.email_address)
+    || 'Unknown company';
+}
+
+function normalizeSuppressionScopeValue(value) {
+  return compactText(value)?.toLowerCase() || null;
+}
+
+function isMissingProspectCrmError(error) {
+  const message = String(error instanceof Error ? error.message : error || '');
+  return message.includes('42P01')
+    || message.includes('42703')
+    || message.includes('schema cache')
+    || message.includes('v2_prospect_companies')
+    || message.includes('v2_prospect_campaigns')
+    || message.includes('v2_prospect_suppressions')
+    || message.includes('v2_outreach_review_queue')
+    || message.includes('company_id')
+    || message.includes('campaign_id')
+    || message.includes('personalization_summary')
+    || message.includes('skipped_by_reason');
+}
+
 function greetingLine(prospect) {
   const localPart = emailLocalPart(prospect?.email_address);
   const firstName = greetingName(prospect);
@@ -412,6 +446,155 @@ function shouldUseStoredInitialDraft(prospect) {
 
 function isProspectSuppressed(prospect) {
   return Boolean(prospect?.do_not_contact || prospect?.status === 'opted_out' || prospect?.opted_out_at);
+}
+
+function buildSuppressionMaps(rows = []) {
+  const byEmail = new Map();
+  const byDomain = new Map();
+  const byCompanyId = new Map();
+  const byCompanyName = new Map();
+
+  for (const row of rows) {
+    if (!row || row.active === false) {
+      continue;
+    }
+    const scopeValue = normalizeSuppressionScopeValue(row.scope_value);
+    if (!scopeValue) {
+      continue;
+    }
+    if (row.scope_type === 'email' && !byEmail.has(scopeValue)) {
+      byEmail.set(scopeValue, row);
+    }
+    if (row.scope_type === 'domain' && !byDomain.has(scopeValue)) {
+      byDomain.set(scopeValue, row);
+    }
+    if (row.scope_type === 'company' && row.company_id && !byCompanyId.has(String(row.company_id))) {
+      byCompanyId.set(String(row.company_id), row);
+    }
+    if (row.scope_type === 'company') {
+      const normalizedName = normalizeCompanyNameKey(scopeValue);
+      if (normalizedName && !byCompanyName.has(normalizedName)) {
+        byCompanyName.set(normalizedName, row);
+      }
+    }
+  }
+
+  return {
+    byEmail,
+    byDomain,
+    byCompanyId,
+    byCompanyName,
+  };
+}
+
+function explicitSuppressionReason(prospect, suppressionMaps) {
+  if (!suppressionMaps) {
+    return null;
+  }
+
+  const email = normalizeEmail(prospect?.email_address);
+  if (email && suppressionMaps.byEmail?.has(email)) {
+    return suppressionMaps.byEmail.get(email)?.reason || 'suppressed_email';
+  }
+
+  const domain = normalizeSuppressionScopeValue(companyDomainForProspect(prospect));
+  if (domain && suppressionMaps.byDomain?.has(domain)) {
+    return suppressionMaps.byDomain.get(domain)?.reason || 'suppressed_domain';
+  }
+
+  if (prospect?.company_id && suppressionMaps.byCompanyId?.has(String(prospect.company_id))) {
+    return suppressionMaps.byCompanyId.get(String(prospect.company_id))?.reason || 'suppressed_company';
+  }
+
+  const companyName = normalizeCompanyNameKey(prospect?.company_name);
+  if (companyName && suppressionMaps.byCompanyName?.has(companyName)) {
+    return suppressionMaps.byCompanyName.get(companyName)?.reason || 'suppressed_company';
+  }
+
+  return null;
+}
+
+function buildReviewMaps(rows = []) {
+  const byEmail = new Map();
+  const byThreadId = new Map();
+
+  for (const row of rows) {
+    if (!row || row.status !== 'pending') {
+      continue;
+    }
+
+    const email = normalizeEmail(row.target_email || row.sender_email);
+    if (email && !byEmail.has(email)) {
+      byEmail.set(email, row);
+    }
+
+    if (row.gmail_thread_id && !byThreadId.has(String(row.gmail_thread_id))) {
+      byThreadId.set(String(row.gmail_thread_id), row);
+    }
+  }
+
+  return {
+    byEmail,
+    byThreadId,
+  };
+}
+
+function buildCompanyMap(rows = []) {
+  return Object.fromEntries((rows || []).filter(Boolean).map((row) => [String(row.id), row]));
+}
+
+function buildCampaignMap(rows = []) {
+  return Object.fromEntries((rows || []).filter(Boolean).map((row) => [String(row.id), row]));
+}
+
+function companyPreview(prospect, company) {
+  if (!company && !prospect) {
+    return null;
+  }
+
+  return {
+    id: company?.id || prospect?.company_id || null,
+    name: company?.name || companyNameForProspect(prospect),
+    domain: company?.domain || companyDomainForProspect(prospect),
+    website: company?.website || normalizeWebsite(prospect?.website),
+    category: company?.category || prospect?.category || null,
+    suppressed: Boolean(company?.suppressed),
+    suppressed_reason: company?.suppressed_reason || null,
+  };
+}
+
+function campaignPreview(prospect, campaign) {
+  if (!campaign && !prospect?.category) {
+    return null;
+  }
+
+  return {
+    id: campaign?.id || prospect?.campaign_id || null,
+    name: campaign?.name || `${CATEGORY_LABELS[prospect?.category] || 'Prospect'} Outreach`,
+    category: campaign?.category || prospect?.category || null,
+    status: campaign?.status || 'active',
+    template_variant: campaign?.template_variant || 'default',
+    daily_cap: Number(campaign?.daily_cap || 10),
+    timezone: campaign?.timezone || 'America/New_York',
+    send_time_local: campaign?.send_time_local || '11:00',
+  };
+}
+
+function pendingReviewReason(prospect, reviewMaps) {
+  if (!reviewMaps) {
+    return null;
+  }
+
+  const email = normalizeEmail(prospect?.email_address);
+  if (email && reviewMaps.byEmail?.has(email)) {
+    return reviewMaps.byEmail.get(email)?.reason || 'reply_review_pending';
+  }
+
+  if (prospect?.gmail_thread_id && reviewMaps.byThreadId?.has(String(prospect.gmail_thread_id))) {
+    return reviewMaps.byThreadId.get(String(prospect.gmail_thread_id))?.reason || 'reply_review_pending';
+  }
+
+  return null;
 }
 
 function buildSuppressedDomainMap(prospects, outcomes = []) {
@@ -549,7 +732,11 @@ function hydrateProspect(prospect, options = {}) {
   const draft = buildProspectDraft(prospect);
   const useStoredDraft = shouldUseStoredInitialDraft(prospect);
   const companySuppressed = companySuppressionReason(prospect, options.suppressedDomains);
-  const queueState = companySuppressed && !isProspectSuppressed(prospect) && !['replied', 'archived'].includes(String(prospect.status || ''))
+  const explicitSuppression = explicitSuppressionReason(prospect, options.suppressionMaps);
+  const reviewPending = pendingReviewReason(prospect, options.reviewMaps);
+  const queueState = reviewPending && !explicitSuppression && !companySuppressed && !isProspectSuppressed(prospect) && !['replied', 'archived'].includes(String(prospect.status || ''))
+    ? 'pending_review'
+    : (explicitSuppression || companySuppressed) && !isProspectSuppressed(prospect) && !['replied', 'archived'].includes(String(prospect.status || ''))
     ? 'suppressed'
     : deriveQueueState(prospect, followUps);
   return {
@@ -558,8 +745,10 @@ function hydrateProspect(prospect, options = {}) {
     draft_body: useStoredDraft ? prospect.draft_body || draft.body : draft.body,
     queue_state: queueState,
     next_follow_up: followUps.find((followUp) => followUp.status === 'pending') || null,
-    automation_block_reason: isProspectSuppressed(prospect) ? 'opted_out' : companySuppressed,
+    automation_block_reason: isProspectSuppressed(prospect) ? 'opted_out' : explicitSuppression || companySuppressed || reviewPending,
     company_domain: companyDomainForProspect(prospect),
+    company: companyPreview(prospect, prospect.company || options.companyMap?.[String(prospect.company_id)] || null),
+    campaign: campaignPreview(prospect, prospect.campaign || options.campaignMap?.[String(prospect.campaign_id)] || null),
   };
 }
 
@@ -576,6 +765,524 @@ async function listAllProspects(db) {
   return db.select('v2_prospects', {
     ordering: [order('created_at', 'asc')],
   });
+}
+
+async function listProspectCompanies(db) {
+  try {
+    return await db.select('v2_prospect_companies', {
+      ordering: [order('updated_at', 'desc')],
+      limit: 500,
+    });
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return [];
+  }
+}
+
+async function listProspectCampaigns(db) {
+  try {
+    return await db.select('v2_prospect_campaigns', {
+      ordering: [order('created_at', 'asc')],
+      limit: 100,
+    });
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return [];
+  }
+}
+
+async function listProspectSuppressions(db) {
+  try {
+    return await db.select('v2_prospect_suppressions', {
+      ordering: [order('created_at', 'desc')],
+      limit: 500,
+    });
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return [];
+  }
+}
+
+async function listOutreachReviewQueue(db) {
+  try {
+    return await db.select('v2_outreach_review_queue', {
+      ordering: [order('created_at', 'desc')],
+      limit: 100,
+    });
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return [];
+  }
+}
+
+async function ensureCampaignForCategory(db, category) {
+  try {
+    const existing = await db.select('v2_prospect_campaigns', {
+      filters: [eq('category', category), eq('status', 'active')],
+      ordering: [order('created_at', 'asc')],
+      limit: 1,
+    });
+    if (existing[0]) {
+      return existing[0];
+    }
+
+    const [created] = await db.insert('v2_prospect_campaigns', {
+      name: `${CATEGORY_LABELS[category] || category} Outreach`,
+      category,
+      status: 'active',
+      template_variant: 'default',
+      daily_cap: 10,
+      send_time_local: '11:00',
+      timezone: 'America/New_York',
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    });
+    return created || null;
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return null;
+  }
+}
+
+async function ensureCompanyRecord(db, prospect) {
+  const normalizedName = normalizeCompanyNameKey(companyNameForProspect(prospect));
+  const domain = companyDomainForProspect(prospect);
+  const website = normalizeWebsite(prospect.website);
+
+  if (!normalizedName && !domain) {
+    return null;
+  }
+
+  try {
+    const existing = domain
+      ? await db.select('v2_prospect_companies', {
+        filters: [eq('domain', domain)],
+        limit: 1,
+      })
+      : await db.select('v2_prospect_companies', {
+        filters: [eq('normalized_name', normalizedName)],
+        limit: 1,
+      });
+
+    if (existing[0]) {
+      const [updated] = await db.update('v2_prospect_companies', [eq('id', existing[0].id)], {
+        name: existing[0].name || companyNameForProspect(prospect),
+        normalized_name: normalizedName || existing[0].normalized_name,
+        domain: domain || existing[0].domain || null,
+        website: website || existing[0].website || null,
+        category: prospect.category || existing[0].category || null,
+        updated_at: nowIso(),
+      });
+      return updated || existing[0];
+    }
+
+    const [created] = await db.insert('v2_prospect_companies', {
+      normalized_name: normalizedName || domain || crypto.randomUUID(),
+      name: companyNameForProspect(prospect),
+      domain: domain || null,
+      website: website || null,
+      category: prospect.category || null,
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    });
+    return created || null;
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return null;
+  }
+}
+
+async function syncProspectCrmLinkage(db, prospect, options = {}) {
+  const company = await ensureCompanyRecord(db, prospect);
+  const campaign = options.campaignId
+    ? { id: options.campaignId }
+    : await ensureCampaignForCategory(db, prospect.category);
+
+  const patch = {
+    company_id: company?.id || prospect.company_id || null,
+    campaign_id: campaign?.id || prospect.campaign_id || null,
+    personalization_summary: firstDescriptionSnippet(prospect, 220),
+    updated_at: nowIso(),
+  };
+
+  const shouldPatch = Boolean(
+    patch.company_id !== prospect.company_id
+    || patch.campaign_id !== prospect.campaign_id
+    || patch.personalization_summary !== (prospect.personalization_summary || null),
+  );
+
+  if (!shouldPatch) {
+    return {
+      ...prospect,
+      company_id: patch.company_id,
+      campaign_id: patch.campaign_id,
+      personalization_summary: patch.personalization_summary,
+      company,
+      campaign,
+    };
+  }
+
+  try {
+    const [updated] = await db.update('v2_prospects', [eq('id', prospect.id)], patch);
+    return {
+      ...(updated || prospect),
+      company_id: patch.company_id,
+      campaign_id: patch.campaign_id,
+      personalization_summary: patch.personalization_summary,
+      company,
+      campaign,
+    };
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return {
+      ...prospect,
+      company_id: patch.company_id,
+      campaign_id: patch.campaign_id,
+      personalization_summary: patch.personalization_summary,
+      company,
+      campaign,
+    };
+  }
+}
+
+function derivedSuppressionRows(prospect, reason, source = 'system', actorId = null) {
+  const rows = [];
+  const email = normalizeEmail(prospect?.email_address);
+  const domain = normalizeSuppressionScopeValue(companyDomainForProspect(prospect));
+  const companyName = normalizeCompanyNameKey(prospect?.company_name);
+
+  if (email) {
+    rows.push({
+      scope_type: 'email',
+      scope_value: email,
+      company_id: prospect?.company_id || null,
+      prospect_id: prospect?.id || null,
+      reason,
+      source,
+      active: true,
+      created_by: actorId,
+      updated_at: nowIso(),
+    });
+  }
+  if (domain) {
+    rows.push({
+      scope_type: 'domain',
+      scope_value: domain,
+      company_id: prospect?.company_id || null,
+      prospect_id: prospect?.id || null,
+      reason,
+      source,
+      active: true,
+      created_by: actorId,
+      updated_at: nowIso(),
+    });
+  }
+  if (companyName) {
+    rows.push({
+      scope_type: 'company',
+      scope_value: companyName,
+      company_id: prospect?.company_id || null,
+      prospect_id: prospect?.id || null,
+      reason,
+      source,
+      active: true,
+      created_by: actorId,
+      updated_at: nowIso(),
+    });
+  }
+
+  return rows;
+}
+
+async function upsertSuppressionRow(db, row) {
+  try {
+    const existing = await db.select('v2_prospect_suppressions', {
+      filters: [eq('scope_type', row.scope_type), eq('scope_value', row.scope_value)],
+      limit: 1,
+    });
+
+    if (existing[0]) {
+      const [updated] = await db.update('v2_prospect_suppressions', [eq('id', existing[0].id)], {
+        ...row,
+        active: true,
+      });
+      return updated || existing[0];
+    }
+
+    const [created] = await db.insert('v2_prospect_suppressions', {
+      created_at: nowIso(),
+      ...row,
+    });
+    return created || null;
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return null;
+  }
+}
+
+async function syncDerivedSuppressions(db, prospect, reason, source = 'system', actorId = null) {
+  const rows = derivedSuppressionRows(prospect, reason, source, actorId);
+  const created = [];
+
+  for (const row of rows) {
+    const saved = await upsertSuppressionRow(db, row);
+    if (saved) {
+      created.push(saved);
+    }
+  }
+
+  if (prospect?.company_id) {
+    await db.update('v2_prospect_companies', [eq('id', prospect.company_id)], {
+      suppressed: true,
+      suppressed_reason: reason,
+      updated_at: nowIso(),
+    }).catch(() => []);
+  }
+
+  return created;
+}
+
+export async function createProspectSuppression(db, payload, actorId = null) {
+  const scopeType = ['email', 'domain', 'company'].includes(String(payload?.scope_type || '')) ? String(payload.scope_type) : null;
+  const scopeValue = normalizeSuppressionScopeValue(payload?.scope_value);
+  const reason = compactText(payload?.reason) || 'manual_suppression';
+
+  if (!scopeType || !scopeValue) {
+    throw new Error('Suppression requires a valid scope and value');
+  }
+
+  const saved = await upsertSuppressionRow(db, {
+    scope_type: scopeType,
+    scope_value: scopeValue,
+    company_id: payload?.company_id || null,
+    prospect_id: payload?.prospect_id || null,
+    reason,
+    source: 'operator',
+    active: true,
+    created_by: actorId,
+    updated_at: nowIso(),
+  });
+
+  if (saved?.company_id) {
+    await db.update('v2_prospect_companies', [eq('id', saved.company_id)], {
+      suppressed: true,
+      suppressed_reason: reason,
+      updated_at: nowIso(),
+    }).catch(() => []);
+  }
+
+  return saved;
+}
+
+export async function suppressProspectScope(db, prospectId, scopeType, actorId = null, reason = 'manual_suppression') {
+  const prospect = await db.single('v2_prospects', { filters: [eq('id', prospectId)] });
+  if (!prospect) {
+    throw new Error('Prospect not found');
+  }
+
+  const linked = await syncProspectCrmLinkage(db, prospect);
+  let scopeValue = null;
+
+  if (scopeType === 'email') {
+    scopeValue = normalizeEmail(linked.email_address);
+  } else if (scopeType === 'domain') {
+    scopeValue = normalizeSuppressionScopeValue(companyDomainForProspect(linked));
+  } else if (scopeType === 'company') {
+    scopeValue = normalizeCompanyNameKey(companyNameForProspect(linked));
+  }
+
+  if (!scopeValue) {
+    throw new Error('Could not derive a valid suppression scope for this contact');
+  }
+
+  const saved = await createProspectSuppression(db, {
+    scope_type: scopeType,
+    scope_value: scopeValue,
+    company_id: linked.company_id || null,
+    prospect_id: linked.id,
+    reason,
+  }, actorId);
+
+  await recordProspectEvent(db, prospectId, 'manual_suppressed', 'operator', actorId, {
+    scope_type: scopeType,
+    scope_value: scopeValue,
+    reason,
+  });
+
+  return saved;
+}
+
+export async function removeProspectSuppression(db, suppressionId, actorId = null) {
+  const [updated] = await db.update('v2_prospect_suppressions', [eq('id', suppressionId)], {
+    active: false,
+    updated_at: nowIso(),
+    created_by: actorId,
+  }).catch(() => []);
+
+  if (updated?.company_id) {
+    const companySuppressions = await db.select('v2_prospect_suppressions', {
+      filters: [eq('company_id', updated.company_id), eq('active', true)],
+      limit: 10,
+    }).catch((error) => {
+      if (!isMissingProspectCrmError(error)) {
+        throw error;
+      }
+      return [];
+    });
+    if (!companySuppressions.length) {
+      await db.update('v2_prospect_companies', [eq('id', updated.company_id)], {
+        suppressed: false,
+        suppressed_reason: null,
+        updated_at: nowIso(),
+      }).catch(() => []);
+    }
+  }
+  return updated || null;
+}
+
+async function enqueueReviewItem(db, payload) {
+  try {
+    const existing = await db.select('v2_outreach_review_queue', {
+      filters: [eq('gmail_message_id', payload.gmail_message_id)],
+      limit: 1,
+    });
+    if (existing[0]) {
+      return existing[0];
+    }
+    const row = {
+      review_kind: payload.review_kind || 'reply',
+      gmail_message_id: payload.gmail_message_id,
+      gmail_thread_id: payload.gmail_thread_id || null,
+      sender_email: payload.sender_email || null,
+      target_email: payload.target_email || null,
+      classification: payload.classification || null,
+      reason: payload.reason || null,
+      subject: payload.subject || null,
+      snippet: payload.snippet || null,
+      payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : null,
+      status: 'pending',
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    };
+    const [created] = await db.insert('v2_outreach_review_queue', {
+      ...row,
+    });
+    return created || null;
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return null;
+  }
+}
+
+export async function queueOutreachReviewItem(db, payload) {
+  return enqueueReviewItem(db, payload);
+}
+
+async function resolvePendingReviewItemsForProspect(db, prospect, action, actorId = null) {
+  if (!prospect) {
+    return [];
+  }
+
+  try {
+    const email = normalizeEmail(prospect.email_address);
+    const threadId = compactText(prospect.gmail_thread_id);
+    const rows = await db.select('v2_outreach_review_queue', {
+      ordering: [order('created_at', 'desc')],
+      limit: 100,
+    });
+
+    const matches = rows.filter((row) => (
+      row.status === 'pending'
+      && (
+        (email && normalizeEmail(row.target_email || row.sender_email) === email)
+        || (threadId && compactText(row.gmail_thread_id) === threadId)
+      )
+    ));
+
+    if (!matches.length) {
+      return [];
+    }
+
+    const resolved = [];
+    const resolvedAt = nowIso();
+    for (const row of matches) {
+      const [updated] = await db.update('v2_outreach_review_queue', [eq('id', row.id)], {
+        status: 'resolved',
+        resolved_action: action,
+        resolved_by: actorId,
+        resolved_at: resolvedAt,
+        updated_at: resolvedAt,
+      }).catch(() => []);
+      resolved.push(updated || row);
+    }
+    return resolved;
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    return [];
+  }
+}
+
+export async function resolveOutreachReviewItem(db, reviewId, payload = {}, actorId = null) {
+  const review = await db.single('v2_outreach_review_queue', { filters: [eq('id', reviewId)] }).catch(() => null);
+  if (!review) {
+    throw new Error('Review item not found');
+  }
+
+  const action = compactText(payload?.action) || 'ignore';
+  if (action === 'ignore') {
+    const [updated] = await db.update('v2_outreach_review_queue', [eq('id', reviewId)], {
+      status: 'ignored',
+      resolved_action: 'ignore',
+      resolved_by: actorId,
+      resolved_at: nowIso(),
+      updated_at: nowIso(),
+    });
+    return updated || review;
+  }
+
+  const prospectId = compactText(payload?.prospect_id);
+  if (!prospectId) {
+    throw new Error('Resolving this review item requires a prospect');
+  }
+
+  if (action === 'mark_opt_out') {
+    await optOutProspect(db, prospectId, actorId, 'operator', { source: 'review_queue', review_id: reviewId });
+  } else if (action === 'mark_bounced') {
+    await markProspectBounced(db, prospectId, actorId, 'operator', { source: 'review_queue', review_id: reviewId });
+  } else if (action === 'mark_positive_reply') {
+    await markProspectReply(db, prospectId, actorId, 'positive', 'operator', { source: 'review_queue', review_id: reviewId });
+  } else {
+    await markProspectReply(db, prospectId, actorId, 'neutral', 'operator', { source: 'review_queue', review_id: reviewId });
+  }
+
+  const [updated] = await db.update('v2_outreach_review_queue', [eq('id', reviewId)], {
+    status: 'resolved',
+    resolved_action: action,
+    resolved_by: actorId,
+    resolved_at: nowIso(),
+    updated_at: nowIso(),
+  });
+  return updated || review;
 }
 
 async function listAllProspectFollowUps(db) {
@@ -824,10 +1531,14 @@ async function getProspectWithFollowUps(db, prospectId) {
 }
 
 async function sendProspectMessage(env, db, prospectId, options = {}) {
-  const [{ prospect, followUps }, allProspects, outcomes] = await Promise.all([
+  const [{ prospect, followUps }, allProspects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     getProspectWithFollowUps(db, prospectId),
     listAllProspects(db),
     listRecentProspectOutcomes(db),
+    listProspectCompanies(db),
+    listProspectCampaigns(db),
+    listProspectSuppressions(db),
+    listOutreachReviewQueue(db),
   ]);
   if (!prospect) {
     throw new Error('Prospect not found');
@@ -835,7 +1546,21 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
 
   const kind = options.kind === 'follow_up' ? 'follow_up' : 'initial';
   const suppressedDomains = buildSuppressedDomainMap(allProspects, outcomes);
-  const hydrated = hydrateProspect(prospect, { followUps, suppressedDomains });
+  const suppressionMaps = buildSuppressionMaps(suppressions);
+  const reviewMaps = buildReviewMaps(reviewQueue);
+  const companyMap = buildCompanyMap(companies);
+  const campaignMap = buildCampaignMap(campaignsCatalog);
+  const linkedProspect = await syncProspectCrmLinkage(db, prospect, {
+    campaignId: options.campaignId || prospect.campaign_id || null,
+  });
+  const hydrated = hydrateProspect(linkedProspect, {
+    followUps,
+    suppressedDomains,
+    suppressionMaps,
+    reviewMaps,
+    companyMap,
+    campaignMap,
+  });
   const recipient = normalizeEmail(hydrated.email_address);
 
   if (!recipient) {
@@ -844,6 +1569,10 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
 
   if (isProspectSuppressed(hydrated)) {
     throw new Error('Prospect is suppressed and cannot receive automation');
+  }
+
+  if (pendingReviewReason(hydrated, reviewMaps)) {
+    throw new Error('Prospect has a pending inbound reply review and cannot be auto-sent');
   }
 
   const domainSuppression = companySuppressionReason(hydrated, suppressedDomains);
@@ -1034,7 +1763,7 @@ export async function getProspectAutomationOverview(db, config = null) {
   const resolvedConfig = config || await getAppConfig(db);
   const timeZone = resolvedConfig.prospect_timezone || 'America/New_York';
   const todayKey = formatLocalDateKey(new Date(), timeZone);
-  const [prospects, followUps, outcomes, events, recentImports] = await Promise.all([
+  const [prospects, followUps, outcomes, events, recentImports, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspects(db),
     listAllProspectFollowUps(db),
     listRecentProspectOutcomes(db),
@@ -1043,10 +1772,18 @@ export async function getProspectAutomationOverview(db, config = null) {
       ordering: [order('created_at', 'desc')],
       limit: 12,
     }).catch(() => []),
+    listProspectCompanies(db),
+    listProspectCampaigns(db),
+    listProspectSuppressions(db),
+    listOutreachReviewQueue(db),
   ]);
 
   const prospectMap = Object.fromEntries(prospects.map((prospect) => [prospect.id, prospect]));
   const suppressedDomains = buildSuppressedDomainMap(prospects, outcomes);
+  const suppressionMaps = buildSuppressionMaps(suppressions);
+  const reviewMaps = buildReviewMaps(reviewQueue);
+  const companyMap = buildCompanyMap(companies);
+  const campaignMap = buildCampaignMap(campaignsCatalog);
   const followUpsByProspect = Object.fromEntries(
     prospects.map((prospect) => [prospect.id, findProspectFollowUps(followUps, prospect.id)]),
   );
@@ -1076,6 +1813,39 @@ export async function getProspectAutomationOverview(db, config = null) {
       contacts_total: 0,
     }]),
   );
+  const campaignCatalogMetrics = new Map(
+    campaignsCatalog.map((campaign) => [String(campaign.id), {
+      id: campaign.id,
+      name: campaign.name,
+      category: campaign.category,
+      status: campaign.status,
+      daily_cap: Number(campaign.daily_cap || 10),
+      send_time_local: campaign.send_time_local || '11:00',
+      timezone: campaign.timezone || timeZone,
+      contacts_total: 0,
+      sent_total: 0,
+      delivered_total: 0,
+      replied_total: 0,
+      positive_replies_total: 0,
+      bounced_total: 0,
+      suppressed_total: 0,
+    }]),
+  );
+  const companyMetrics = new Map(
+    companies.map((company) => [String(company.id), {
+      id: company.id,
+      name: company.name,
+      domain: company.domain || null,
+      website: company.website || null,
+      category: company.category || null,
+      suppressed: Boolean(company.suppressed),
+      suppressed_reason: company.suppressed_reason || null,
+      contact_count: 0,
+      sent_total: 0,
+      replied_total: 0,
+      positive_replies_total: 0,
+    }]),
+  );
 
   let sentTotal = 0;
   let bouncedTotal = 0;
@@ -1093,8 +1863,16 @@ export async function getProspectAutomationOverview(db, config = null) {
     if (prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
       campaignMetrics.get(String(prospect.import_batch_id)).contacts_total += 1;
     }
+    if (prospect.campaign_id && campaignCatalogMetrics.has(String(prospect.campaign_id))) {
+      campaignCatalogMetrics.get(String(prospect.campaign_id)).contacts_total += 1;
+    }
+    if (prospect.company_id && companyMetrics.has(String(prospect.company_id))) {
+      companyMetrics.get(String(prospect.company_id)).contact_count += 1;
+    }
 
     const companySuppressed = companySuppressionReason(prospect, suppressedDomains);
+    const explicitSuppression = explicitSuppressionReason(prospect, suppressionMaps);
+    const pendingReview = pendingReviewReason(prospect, reviewMaps);
     if (prospect.status === 'opted_out' || prospect.do_not_contact || prospect.opted_out_at) {
       optOutsByCategory[prospect.category] += 1;
       categoryMetrics[prospect.category].opted_out_total += 1;
@@ -1104,9 +1882,15 @@ export async function getProspectAutomationOverview(db, config = null) {
       categoryMetrics[prospect.category].replied_total += 1;
       repliedTotal += 1;
     }
-    if (isProspectSuppressed(prospect) || companySuppressed) {
+    if (isProspectSuppressed(prospect) || explicitSuppression || companySuppressed) {
       categoryMetrics[prospect.category].suppressed_total += 1;
       suppressedTotal += 1;
+      if (prospect.campaign_id && campaignCatalogMetrics.has(String(prospect.campaign_id))) {
+        campaignCatalogMetrics.get(String(prospect.campaign_id)).suppressed_total += 1;
+      }
+    }
+    if (pendingReview) {
+      categoryMetrics[prospect.category].suppressed_total += 0;
     }
   }
 
@@ -1127,6 +1911,14 @@ export async function getProspectAutomationOverview(db, config = null) {
         campaign.sent_total += 1;
         campaign.delivered_total += 1;
       }
+      if (prospect.campaign_id && campaignCatalogMetrics.has(String(prospect.campaign_id))) {
+        const campaign = campaignCatalogMetrics.get(String(prospect.campaign_id));
+        campaign.sent_total += 1;
+        campaign.delivered_total += 1;
+      }
+      if (prospect.company_id && companyMetrics.has(String(prospect.company_id))) {
+        companyMetrics.get(String(prospect.company_id)).sent_total += 1;
+      }
     }
     if (outcomeType === 'bounced') {
       bouncedTotal += 1;
@@ -1138,10 +1930,21 @@ export async function getProspectAutomationOverview(db, config = null) {
         campaign.bounced_total += 1;
         campaign.delivered_total = Math.max(0, campaign.delivered_total - 1);
       }
+      if (prospect.campaign_id && campaignCatalogMetrics.has(String(prospect.campaign_id))) {
+        const campaign = campaignCatalogMetrics.get(String(prospect.campaign_id));
+        campaign.bounced_total += 1;
+        campaign.delivered_total = Math.max(0, campaign.delivered_total - 1);
+      }
     }
     if (outcomeType === 'replied') {
       if (prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
         campaignMetrics.get(String(prospect.import_batch_id)).replied_total += 1;
+      }
+      if (prospect.campaign_id && campaignCatalogMetrics.has(String(prospect.campaign_id))) {
+        campaignCatalogMetrics.get(String(prospect.campaign_id)).replied_total += 1;
+      }
+      if (prospect.company_id && companyMetrics.has(String(prospect.company_id))) {
+        companyMetrics.get(String(prospect.company_id)).replied_total += 1;
       }
     }
 
@@ -1170,6 +1973,12 @@ export async function getProspectAutomationOverview(db, config = null) {
       if (prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
         campaignMetrics.get(String(prospect.import_batch_id)).positive_replies_total += 1;
       }
+      if (prospect.campaign_id && campaignCatalogMetrics.has(String(prospect.campaign_id))) {
+        campaignCatalogMetrics.get(String(prospect.campaign_id)).positive_replies_total += 1;
+      }
+      if (prospect.company_id && companyMetrics.has(String(prospect.company_id))) {
+        companyMetrics.get(String(prospect.company_id)).positive_replies_total += 1;
+      }
     }
     if (event.event_type === 'opted_out' && prospect.import_batch_id && campaignMetrics.has(String(prospect.import_batch_id))) {
       campaignMetrics.get(String(prospect.import_batch_id)).opted_out_total += 1;
@@ -1179,10 +1988,33 @@ export async function getProspectAutomationOverview(db, config = null) {
   const initialQueue = [];
   const followUpQueue = [];
   const suppressedContacts = [];
+  const pendingReviewQueue = [];
+  const suppressionEntries = suppressions
+    .filter((row) => row.active !== false)
+    .slice(0, 25)
+    .map((row) => ({
+      id: row.id,
+      scope_type: row.scope_type,
+      scope_value: row.scope_value,
+      reason: row.reason || null,
+      source: row.source || null,
+      active: row.active !== false,
+      company_id: row.company_id || null,
+      prospect_id: row.prospect_id || null,
+      created_at: row.created_at,
+      updated_at: row.updated_at || row.created_at,
+    }));
 
   for (const prospect of prospects) {
     const prospectFollowUps = followUpsByProspect[prospect.id] || [];
-    const hydratedProspect = hydrateProspect(prospect, { followUps: prospectFollowUps, suppressedDomains });
+    const hydratedProspect = hydrateProspect(prospect, {
+      followUps: prospectFollowUps,
+      suppressedDomains,
+      suppressionMaps,
+      reviewMaps,
+      companyMap,
+      campaignMap,
+    });
 
     if (!prospect.first_sent_at && !hydratedProspect.automation_block_reason && ['new', 'drafted'].includes(prospect.status)) {
       initialQueueByCategory[prospect.category] += 1;
@@ -1207,6 +2039,21 @@ export async function getProspectAutomationOverview(db, config = null) {
         email_address: hydratedProspect.email_address,
         reason: hydratedProspect.automation_block_reason || hydratedProspect.queue_state,
         updated_at: hydratedProspect.updated_at,
+      });
+    }
+    if (hydratedProspect.queue_state === 'pending_review' && pendingReviewQueue.length < 20) {
+      const review = reviewMaps.byThreadId.get(String(hydratedProspect.gmail_thread_id || ''))
+        || reviewMaps.byEmail.get(normalizeEmail(hydratedProspect.email_address));
+      pendingReviewQueue.push({
+        id: review?.id || hydratedProspect.id,
+        prospect_id: hydratedProspect.id,
+        category: hydratedProspect.category,
+        company_name: hydratedProspect.company_name,
+        contact_name: hydratedProspect.contact_name,
+        email_address: hydratedProspect.email_address,
+        reason: review?.reason || hydratedProspect.automation_block_reason || 'reply_review_pending',
+        created_at: review?.created_at || hydratedProspect.updated_at,
+        gmail_thread_id: review?.gmail_thread_id || hydratedProspect.gmail_thread_id || null,
       });
     }
   }
@@ -1279,6 +2126,12 @@ export async function getProspectAutomationOverview(db, config = null) {
     campaigns: PROSPECT_CATEGORIES.map((category) => categoryMetrics[category]),
     campaign_batches: [...campaignMetrics.values()],
     suppressed_contacts: suppressedContacts,
+    suppression_entries: suppressionEntries,
+    review_queue: pendingReviewQueue,
+    companies: [...companyMetrics.values()]
+      .sort((left, right) => right.contact_count - left.contact_count || right.sent_total - left.sent_total)
+      .slice(0, 20),
+    campaign_catalog: [...campaignCatalogMetrics.values()],
   };
 }
 
@@ -1290,7 +2143,7 @@ export async function listProspects(db, options = {}) {
   const query = compactText(options.q)?.toLowerCase() || '';
 
   const config = await getAppConfig(db);
-  const [allRows, recentImports, followUps, automation] = await Promise.all([
+  const [allRows, recentImports, followUps, automation, companies, campaignsCatalog, suppressions, reviewQueue, outcomes] = await Promise.all([
     listAllProspects(db),
     db.select('v2_prospect_import_batches', {
       ordering: [order('created_at', 'desc')],
@@ -1298,6 +2151,11 @@ export async function listProspects(db, options = {}) {
     }),
     listAllProspectFollowUps(db),
     getProspectAutomationOverview(db, config),
+    listProspectCompanies(db),
+    listProspectCampaigns(db),
+    listProspectSuppressions(db),
+    listOutreachReviewQueue(db),
+    listRecentProspectOutcomes(db),
   ]);
 
   const counts = {
@@ -1310,7 +2168,11 @@ export async function listProspects(db, options = {}) {
     archived: 0,
   };
   const categories = categoryCounter(0);
-  const suppressedDomains = buildSuppressedDomainMap(allRows, []);
+  const suppressedDomains = buildSuppressedDomainMap(allRows, outcomes);
+  const suppressionMaps = buildSuppressionMaps(suppressions);
+  const reviewMaps = buildReviewMaps(reviewQueue);
+  const companyMap = buildCompanyMap(companies);
+  const campaignMap = buildCampaignMap(campaignsCatalog);
   const followUpsByProspect = Object.fromEntries(
     allRows.map((prospect) => [prospect.id, findProspectFollowUps(followUps, prospect.id)]),
   );
@@ -1356,6 +2218,10 @@ export async function listProspects(db, options = {}) {
     .map((prospect) => hydrateProspect(prospect, {
       followUps: followUpsByProspect[prospect.id] || [],
       suppressedDomains,
+      suppressionMaps,
+      reviewMaps,
+      companyMap,
+      campaignMap,
     }));
 
   return {
@@ -1372,7 +2238,7 @@ export async function listProspects(db, options = {}) {
 }
 
 export async function getProspectDetail(db, prospectId) {
-  const [prospect, timeline, followUps, allProspects, outcomes] = await Promise.all([
+  const [prospect, timeline, followUps, allProspects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     db.single('v2_prospects', { filters: [eq('id', prospectId)] }),
     db.select('v2_prospect_events', {
       filters: [eq('prospect_id', prospectId)],
@@ -1385,19 +2251,61 @@ export async function getProspectDetail(db, prospectId) {
     }).catch(() => []),
     listAllProspects(db),
     listRecentProspectOutcomes(db),
+    listProspectCompanies(db),
+    listProspectCampaigns(db),
+    listProspectSuppressions(db),
+    listOutreachReviewQueue(db),
   ]);
 
   if (!prospect) {
     return null;
   }
 
+  const suppressionMaps = buildSuppressionMaps(suppressions);
+  const reviewMaps = buildReviewMaps(reviewQueue);
+  const companyMap = buildCompanyMap(companies);
+  const campaignMap = buildCampaignMap(campaignsCatalog);
   const hydrated = hydrateProspect(prospect, {
     followUps,
     suppressedDomains: buildSuppressedDomainMap(allProspects, outcomes),
+    suppressionMaps,
+    reviewMaps,
+    companyMap,
+    campaignMap,
   });
   const importBatch = hydrated.import_batch_id
     ? await db.single('v2_prospect_import_batches', { filters: [eq('id', hydrated.import_batch_id)] })
     : null;
+  const suppressionRows = suppressions.filter((row) => {
+    if (row.active === false) {
+      return false;
+    }
+    const normalizedEmail = normalizeEmail(hydrated.email_address);
+    const normalizedDomain = normalizeSuppressionScopeValue(companyDomainForProspect(hydrated));
+    const normalizedCompany = normalizeCompanyNameKey(hydrated.company_name);
+
+    if (row.prospect_id && String(row.prospect_id) === String(hydrated.id)) {
+      return true;
+    }
+    if (row.scope_type === 'email' && normalizedEmail && normalizeSuppressionScopeValue(row.scope_value) === normalizedEmail) {
+      return true;
+    }
+    if (row.scope_type === 'domain' && normalizedDomain && normalizeSuppressionScopeValue(row.scope_value) === normalizedDomain) {
+      return true;
+    }
+    if (row.scope_type === 'company' && hydrated.company_id && String(row.company_id || '') === String(hydrated.company_id)) {
+      return true;
+    }
+    return row.scope_type === 'company' && normalizedCompany && normalizeCompanyNameKey(row.scope_value) === normalizedCompany;
+  });
+  const reviewItems = reviewQueue.filter((row) => (
+    row.status === 'pending'
+    && (
+      (row.target_email && normalizeEmail(row.target_email) === normalizeEmail(hydrated.email_address))
+      || (row.sender_email && normalizeEmail(row.sender_email) === normalizeEmail(hydrated.email_address))
+      || (row.gmail_thread_id && hydrated.gmail_thread_id && String(row.gmail_thread_id) === String(hydrated.gmail_thread_id))
+    )
+  ));
 
   return {
     prospect: hydrated,
@@ -1408,6 +2316,8 @@ export async function getProspectDetail(db, prospectId) {
     timeline,
     import_batch: importBatch,
     follow_ups: followUps.map((followUp) => hydrateFollowUpItem(followUp, hydrated)),
+    suppressions: suppressionRows,
+    review_items: reviewItems,
   };
 }
 
@@ -1424,12 +2334,27 @@ export async function importProspects(db, payload, actorId = null) {
     throw new Error('CSV file is empty');
   }
 
-  const batch = (await db.insert('v2_prospect_import_batches', {
-    filename,
-    category,
-    row_count: rows.length,
-    actor_id: actorId,
-  }))[0];
+  const campaign = await ensureCampaignForCategory(db, category).catch(() => null);
+  let batch;
+  try {
+    batch = (await db.insert('v2_prospect_import_batches', {
+      filename,
+      category,
+      row_count: rows.length,
+      actor_id: actorId,
+      ...(campaign?.id ? { campaign_id: campaign.id } : {}),
+    }))[0];
+  } catch (error) {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    batch = (await db.insert('v2_prospect_import_batches', {
+      filename,
+      category,
+      row_count: rows.length,
+      actor_id: actorId,
+    }))[0];
+  }
 
   const skippedByReason = {
     missing_valid_email: 0,
@@ -1460,6 +2385,17 @@ export async function importProspects(db, payload, actorId = null) {
     await db.update('v2_prospect_import_batches', [eq('id', batch.id)], {
       imported_count: 0,
       skipped_count: skipped,
+      ...(campaign?.id ? { campaign_id: campaign.id } : {}),
+      skipped_by_reason: skippedByReason,
+    }).catch(async (error) => {
+      if (!isMissingProspectCrmError(error)) {
+        throw error;
+      }
+      await db.update('v2_prospect_import_batches', [eq('id', batch.id)], {
+        imported_count: 0,
+        skipped_count: skipped,
+        ...(campaign?.id ? { campaign_id: campaign.id } : {}),
+      });
     });
     return {
       batch_id: batch.id,
@@ -1493,8 +2429,11 @@ export async function importProspects(db, payload, actorId = null) {
       state: mergeValue(row.state, current?.state),
       source: 'csv_import',
       import_batch_id: batch.id,
+      campaign_id: current?.campaign_id || campaign?.id || null,
+      company_id: current?.company_id || null,
       status: current?.status || 'new',
       notes: mergeValue(row.notes, current?.notes),
+      personalization_summary: mergeValue(firstDescriptionSnippet(row, 220), current?.personalization_summary),
       gmail_thread_id: current?.gmail_thread_id || null,
       sent_count: Number(current?.sent_count || 0),
       do_not_contact: Boolean(current?.do_not_contact || false),
@@ -1517,11 +2456,39 @@ export async function importProspects(db, payload, actorId = null) {
 
   const imported = [];
   for (const group of chunk(prepared, 50)) {
-    const rowsResult = await db.upsert('v2_prospects', group, 'email_normalized');
+    let rowsResult;
+    try {
+      rowsResult = await db.upsert('v2_prospects', group, 'email_normalized');
+    } catch (error) {
+      if (!isMissingProspectCrmError(error)) {
+        throw error;
+      }
+      rowsResult = await db.upsert('v2_prospects', group.map((row) => {
+        const {
+          company_id,
+          campaign_id,
+          personalization_summary,
+          ...legacyRow
+        } = row;
+        return legacyRow;
+      }), 'email_normalized');
+    }
     imported.push(...rowsResult);
   }
 
-  const events = imported.map((prospect) => ({
+  const linked = [];
+  for (const prospect of imported) {
+    linked.push(await syncProspectCrmLinkage(db, {
+      ...prospect,
+      notes: prospect.notes,
+      company_id: prospect.company_id || null,
+      campaign_id: prospect.campaign_id || campaign?.id || null,
+    }, {
+      campaignId: campaign?.id || null,
+    }));
+  }
+
+  const events = linked.map((prospect) => ({
     prospect_id: prospect.id,
     actor_type: 'operator',
     actor_id: actorId,
@@ -1536,15 +2503,26 @@ export async function importProspects(db, payload, actorId = null) {
 
   await insertMany(db, 'v2_prospect_events', events);
   await db.update('v2_prospect_import_batches', [eq('id', batch.id)], {
-    imported_count: imported.length,
+    imported_count: linked.length,
     skipped_count: skipped,
+    ...(campaign?.id ? { campaign_id: campaign.id } : {}),
+    skipped_by_reason: skippedByReason,
+  }).catch(async (error) => {
+    if (!isMissingProspectCrmError(error)) {
+      throw error;
+    }
+    await db.update('v2_prospect_import_batches', [eq('id', batch.id)], {
+      imported_count: linked.length,
+      skipped_count: skipped,
+      ...(campaign?.id ? { campaign_id: campaign.id } : {}),
+    });
   });
 
   return {
     batch_id: batch.id,
     filename,
     category,
-    imported: imported.length,
+    imported: linked.length,
     skipped,
     skipped_by_reason: skippedByReason,
   };
@@ -1585,7 +2563,9 @@ export async function saveProspectNotes(db, prospectId, notes, actorId = null) {
 
   await recordProspectEvent(db, prospectId, 'notes_updated', 'operator', actorId, null);
 
-  return hydrateProspect(updated, {
+  const linked = await syncProspectCrmLinkage(db, updated);
+
+  return hydrateProspect(linked, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
   });
 }
@@ -1614,6 +2594,8 @@ export async function updateProspectStatus(db, prospectId, status, actorId = nul
     await cancelProspectFollowUps(db, prospectId, status);
   }
 
+  const linked = await syncProspectCrmLinkage(db, updated || prospect);
+
   if (status === 'opted_out') {
     await recordProspectOutcome(db, {
       prospect_id: prospectId,
@@ -1621,6 +2603,11 @@ export async function updateProspectStatus(db, prospectId, status, actorId = nul
       outcome: 'archived',
       detail: { kind: 'opted_out' },
     });
+    await syncDerivedSuppressions(db, linked, 'opted_out', actorType === 'operator' ? 'operator' : 'system', actorId);
+  }
+
+  if (status === 'replied') {
+    await syncDerivedSuppressions(db, linked, 'replied', actorType === 'operator' ? 'operator' : 'system', actorId);
   }
 
   await recordProspectEvent(
@@ -1632,7 +2619,11 @@ export async function updateProspectStatus(db, prospectId, status, actorId = nul
     { status, ...(detail && typeof detail === 'object' ? detail : {}) },
   );
 
-  return hydrateProspect(updated, {
+  if (status === 'opted_out' || status === 'replied') {
+    await resolvePendingReviewItemsForProspect(db, linked, status, actorId);
+  }
+
+  return hydrateProspect(linked, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
   });
 }
@@ -1654,8 +2645,10 @@ export async function markProspectReply(db, prospectId, actorId = null, tone = '
     last_replied_at: now,
     updated_at: now,
   }))[0];
+  const linked = await syncProspectCrmLinkage(db, updated || prospect);
 
   await cancelProspectFollowUps(db, prospectId, 'replied');
+  await syncDerivedSuppressions(db, linked, tone === 'positive' ? 'positive_reply' : 'replied', actorType === 'operator' ? 'operator' : 'system', actorId);
   await recordProspectOutcome(db, {
     prospect_id: prospectId,
     email_address: prospect.email_address,
@@ -1671,7 +2664,9 @@ export async function markProspectReply(db, prospectId, actorId = null, tone = '
     { tone, ...(detail && typeof detail === 'object' ? detail : {}) },
   );
 
-  return hydrateProspect(updated, {
+  await resolvePendingReviewItemsForProspect(db, linked, tone === 'positive' ? 'mark_positive_reply' : 'mark_reply', actorId);
+
+  return hydrateProspect(linked, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
   });
 }
@@ -1688,8 +2683,10 @@ export async function markProspectBounced(db, prospectId, actorId = null, actorT
     do_not_contact: true,
     updated_at: now,
   }))[0];
+  const linked = await syncProspectCrmLinkage(db, updated || prospect);
 
   await cancelProspectFollowUps(db, prospectId, 'bounced');
+  await syncDerivedSuppressions(db, linked, 'bounced', actorType === 'operator' ? 'operator' : 'system', actorId);
   await recordProspectOutcome(db, {
     prospect_id: prospectId,
     email_address: prospect.email_address,
@@ -1698,7 +2695,9 @@ export async function markProspectBounced(db, prospectId, actorId = null, actorT
   });
   await recordProspectEvent(db, prospectId, 'bounced', actorType, actorId, detail);
 
-  return hydrateProspect(updated, {
+  await resolvePendingReviewItemsForProspect(db, linked, 'mark_bounced', actorId);
+
+  return hydrateProspect(linked, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
   });
 }
@@ -1762,14 +2761,22 @@ function sentTodayByCategory(outcomes, prospectMap, timeZone) {
 }
 
 export async function runProspectDailyBatch(env, db, config, slotKey) {
-  const [followUps, prospects, outcomes] = await Promise.all([
+  const [followUps, prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspectFollowUps(db),
     listAllProspects(db),
     listRecentProspectOutcomes(db),
+    listProspectCompanies(db),
+    listProspectCampaigns(db),
+    listProspectSuppressions(db),
+    listOutreachReviewQueue(db),
   ]);
 
   const prospectMap = Object.fromEntries(prospects.map((prospect) => [prospect.id, prospect]));
   const suppressedDomains = buildSuppressedDomainMap(prospects, outcomes);
+  const suppressionMaps = buildSuppressionMaps(suppressions);
+  const reviewMaps = buildReviewMaps(reviewQueue);
+  const companyMap = buildCompanyMap(companies);
+  const campaignMap = buildCampaignMap(campaignsCatalog);
   const attemptedByCategory = categoryCounter(0);
   const sentByCategory = categoryCounter(0);
   const skippedByCategory = categoryCounter(0);
@@ -1779,10 +2786,40 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
   const totalPerCategory = Number(config.prospect_daily_per_category || config.prospect_initial_daily_per_category || 10);
 
   const dueFollowUps = followUps
-    .filter((followUp) => followUp.status === 'pending' && new Date(followUp.scheduled_at).getTime() <= Date.now())
+    .filter((followUp) => {
+      if (followUp.status !== 'pending' || new Date(followUp.scheduled_at).getTime() > Date.now()) {
+        return false;
+      }
+      const prospect = prospectMap[followUp.prospect_id];
+      if (!prospect) {
+        return false;
+      }
+      const hydrated = hydrateProspect(prospect, {
+        followUps: [followUp],
+        suppressedDomains,
+        suppressionMaps,
+        reviewMaps,
+        companyMap,
+        campaignMap,
+      });
+      return !hydrated.automation_block_reason;
+    })
     .sort(byScheduledAtAsc);
   const queuedInitials = prospects
-    .filter((prospect) => canQueueInitialProspect(prospect) && !companySuppressionReason(prospect, suppressedDomains))
+    .filter((prospect) => {
+      if (!canQueueInitialProspect(prospect)) {
+        return false;
+      }
+      const hydrated = hydrateProspect(prospect, {
+        followUps: [],
+        suppressedDomains,
+        suppressionMaps,
+        reviewMaps,
+        companyMap,
+        campaignMap,
+      });
+      return !hydrated.automation_block_reason;
+    })
     .sort(byCreatedAtAsc);
 
   const selectedFollowUps = [];
@@ -1869,13 +2906,24 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
 }
 
 export async function runProspectInitialBatch(env, db, config, slotKey) {
-  const prospects = await listAllProspects(db);
+  const [prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
+    listAllProspects(db),
+    listRecentProspectOutcomes(db),
+    listProspectCompanies(db),
+    listProspectCampaigns(db),
+    listProspectSuppressions(db),
+    listOutreachReviewQueue(db),
+  ]);
   const attemptedByCategory = categoryCounter(0);
   const sentByCategory = categoryCounter(0);
   const skippedByCategory = categoryCounter(0);
   const todayKey = formatLocalDateKey(new Date(), config.prospect_timezone);
-  const outcomes = await listRecentProspectOutcomes(db);
   const sentTodayByCategory = categoryCounter(0);
+  const suppressedDomains = buildSuppressedDomainMap(prospects, outcomes);
+  const suppressionMaps = buildSuppressionMaps(suppressions);
+  const reviewMaps = buildReviewMaps(reviewQueue);
+  const companyMap = buildCompanyMap(companies);
+  const campaignMap = buildCampaignMap(campaignsCatalog);
 
   for (const outcome of outcomes) {
     if (outcome.outcome !== 'sent' || detailKind(outcome) === 'follow_up' || !matchesLocalDate(outcome.sent_at || outcome.created_at, todayKey, config.prospect_timezone)) {
@@ -1887,7 +2935,20 @@ export async function runProspectInitialBatch(env, db, config, slotKey) {
     }
   }
 
-  const queued = prospects.filter(canQueueInitialProspect).sort(byCreatedAtAsc);
+  const queued = prospects.filter((prospect) => {
+    if (!canQueueInitialProspect(prospect)) {
+      return false;
+    }
+    const hydrated = hydrateProspect(prospect, {
+      followUps: [],
+      suppressedDomains,
+      suppressionMaps,
+      reviewMaps,
+      companyMap,
+      campaignMap,
+    });
+    return !hydrated.automation_block_reason;
+  }).sort(byCreatedAtAsc);
   const selected = [];
   for (const category of PROSPECT_CATEGORIES) {
     const remaining = Math.max(Number(config.prospect_initial_daily_per_category || 10) - Number(sentTodayByCategory[category] || 0), 0);
@@ -1927,10 +2988,14 @@ export async function runProspectInitialBatch(env, db, config, slotKey) {
 }
 
 export async function runProspectFollowUpBatch(env, db, config, slotKey) {
-  const [followUps, prospects, outcomes] = await Promise.all([
+  const [followUps, prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspectFollowUps(db),
     listAllProspects(db),
     listRecentProspectOutcomes(db),
+    listProspectCompanies(db),
+    listProspectCampaigns(db),
+    listProspectSuppressions(db),
+    listOutreachReviewQueue(db),
   ]);
 
   const prospectMap = Object.fromEntries(prospects.map((prospect) => [prospect.id, prospect]));
@@ -1939,6 +3004,11 @@ export async function runProspectFollowUpBatch(env, db, config, slotKey) {
   const skippedByCategory = categoryCounter(0);
   const todayKey = formatLocalDateKey(new Date(), config.prospect_timezone);
   const sentTodayByCategory = categoryCounter(0);
+  const suppressedDomains = buildSuppressedDomainMap(prospects, outcomes);
+  const suppressionMaps = buildSuppressionMaps(suppressions);
+  const reviewMaps = buildReviewMaps(reviewQueue);
+  const companyMap = buildCompanyMap(companies);
+  const campaignMap = buildCampaignMap(campaignsCatalog);
 
   for (const outcome of outcomes) {
     if (outcome.outcome !== 'sent' || detailKind(outcome) !== 'follow_up' || !matchesLocalDate(outcome.sent_at || outcome.created_at, todayKey, config.prospect_timezone)) {
@@ -1951,7 +3021,24 @@ export async function runProspectFollowUpBatch(env, db, config, slotKey) {
   }
 
   const due = followUps
-    .filter((followUp) => followUp.status === 'pending' && new Date(followUp.scheduled_at).getTime() <= Date.now())
+    .filter((followUp) => {
+      if (followUp.status !== 'pending' || new Date(followUp.scheduled_at).getTime() > Date.now()) {
+        return false;
+      }
+      const prospect = prospectMap[followUp.prospect_id];
+      if (!prospect) {
+        return false;
+      }
+      const hydrated = hydrateProspect(prospect, {
+        followUps: [followUp],
+        suppressedDomains,
+        suppressionMaps,
+        reviewMaps,
+        companyMap,
+        campaignMap,
+      });
+      return !hydrated.automation_block_reason;
+    })
     .sort(byScheduledAtAsc);
 
   const selected = [];

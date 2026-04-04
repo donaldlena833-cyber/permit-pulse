@@ -23,6 +23,8 @@ import {
   optOutProspect as optOutProspectRequest,
   refreshDraft,
   repairLeadFollowUps,
+  removeProspectSuppressionRequest,
+  resolveOutreachReviewRequest,
   selectLeadEmail,
   sendAllReady,
   sendDueLeadFollowUps,
@@ -32,6 +34,7 @@ import {
   skipFollowUp,
   syncOutreachRepliesNow,
   switchToFallback,
+  suppressProspect,
   triggerScan,
   updateConfig,
   updateDraft,
@@ -55,6 +58,12 @@ import type {
   SystemPayload,
   TodayPayload,
 } from "@/features/metroglass-leads/types/api"
+
+function scopeTypeLabel(scopeType: "email" | "domain" | "company") {
+  if (scopeType === "email") return "Email"
+  if (scopeType === "domain") return "Domain"
+  return "Company"
+}
 
 export function useMetroglassLeads() {
   const [tab, setTab] = useState<AppTab>("today")
@@ -570,6 +579,15 @@ export function useMetroglassLeads() {
     optOutProspect: (prospectId: string) => runProspectAction(prospectId, async () => {
       await optOutProspectRequest(prospectId)
     }, "Prospect opted out"),
+    suppressProspect: (prospectId: string, scopeType: "email" | "domain" | "company", reason?: string) => runProspectAction(prospectId, async () => {
+      await suppressProspect(prospectId, { scope_type: scopeType, reason })
+    }, `${scopeTypeLabel(scopeType)} suppressed`),
+    removeProspectSuppression: (suppressionId: string, prospectId: string | null = null) => runProspectAction(prospectId, async () => {
+      await removeProspectSuppressionRequest(suppressionId)
+    }, "Suppression removed"),
+    resolveProspectReview: (reviewId: string, prospectId: string, action: string) => runProspectAction(prospectId, async () => {
+      await resolveOutreachReviewRequest(reviewId, { action, prospect_id: prospectId })
+    }, "Review resolved"),
     saveConfig: async (patch: Partial<ConfigPayload>) => {
       try {
         const nextConfig = await updateConfig(patch)

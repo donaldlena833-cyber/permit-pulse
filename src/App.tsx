@@ -250,9 +250,12 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onMarkPositiveReply={(prospectId) => void actions.markProspectReply(prospectId, "positive")}
         onMarkReplied={(prospectId) => void actions.markProspectReplied(prospectId)}
         onOptOut={(prospectId) => void actions.optOutProspect(prospectId)}
+        onRemoveSuppression={(suppressionId, prospectId) => void actions.removeProspectSuppression(suppressionId, prospectId)}
+        onResolveReview={(reviewId, prospectId, action) => void actions.resolveProspectReview(reviewId, prospectId, action)}
         onSaveDraft={(prospectId, draft) => void actions.saveProspectDraft(prospectId, draft)}
         onSaveNotes={(prospectId, notes) => void actions.saveProspectNotes(prospectId, notes)}
         onSend={(prospectId) => void actions.sendProspect(prospectId)}
+        onSuppress={(prospectId, scopeType, reason) => void actions.suppressProspect(prospectId, scopeType, reason)}
         open={Boolean(selectedProspectId)}
       />
 

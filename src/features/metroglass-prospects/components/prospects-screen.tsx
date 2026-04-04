@@ -175,6 +175,9 @@ export function ProspectsScreen({
   const metrics = prospects?.automation.metrics
   const categoryPrograms = prospects?.automation.campaigns ?? []
   const campaignBatches = prospects?.automation.campaign_batches ?? []
+  const campaignCatalog = prospects?.automation.campaign_catalog ?? []
+  const reviewQueue = prospects?.automation.review_queue ?? []
+  const companyLedger = prospects?.automation.companies ?? []
   const suppressedContacts = prospects?.automation.suppressed_contacts ?? []
   const replySync = prospects?.automation.reply_sync
 
@@ -362,11 +365,13 @@ export function ProspectsScreen({
                 {replySync?.checked_at ? formatRelativeTime(replySync.checked_at) : "Never run"}
               </div>
             </div>
-            <div className="mt-3 grid gap-2 text-sm text-steel-700 sm:grid-cols-4">
+            <div className="mt-3 grid gap-2 text-sm text-steel-700 sm:grid-cols-6">
               <div>Scanned: <span className="font-semibold text-steel-950">{replySync?.scanned_messages ?? 0}</span></div>
               <div>Processed: <span className="font-semibold text-steel-950">{replySync?.processed_messages ?? 0}</span></div>
               <div>Opt-outs: <span className="font-semibold text-steel-950">{replySync?.opt_outs ?? 0}</span></div>
               <div>Positive: <span className="font-semibold text-steel-950">{replySync?.positive_replies ?? 0}</span></div>
+              <div>Bounces: <span className="font-semibold text-steel-950">{replySync?.bounces ?? 0}</span></div>
+              <div>Review: <span className="font-semibold text-steel-950">{replySync?.review_items ?? 0}</span></div>
             </div>
           </div>
 
@@ -468,6 +473,36 @@ export function ProspectsScreen({
               </div>
             </div>
 
+            <div className="rounded-[18px] border border-sky-200 bg-sky-50/60 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-semibold text-steel-950">Reply review queue</div>
+                <div className="rounded-full border border-sky-200 bg-white px-3 py-1 font-mono text-[11px] text-sky-700">
+                  {reviewQueue.length}
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {reviewQueue.slice(0, 5).map((item) => (
+                  <button
+                    className="rounded-[14px] border border-sky-200 bg-white px-4 py-3 text-left transition hover:border-brand-300"
+                    key={item.id}
+                    onClick={() => {
+                      const match = (prospects?.prospects ?? []).find((prospect) => prospect.id === item.prospect_id)
+                      if (match) onOpenProspect(match)
+                    }}
+                    type="button"
+                  >
+                    <div className="font-medium text-steel-900">{item.contact_name || item.company_name || item.email_address || "Review item"}</div>
+                    <div className="mt-1 text-sm text-sky-800">{item.reason?.replace(/_/g, " ") || "reply review pending"}</div>
+                  </button>
+                ))}
+                {!reviewQueue.length ? (
+                  <div className="rounded-[14px] border border-sky-200 bg-white px-4 py-3 text-sm text-sky-800">
+                    No pending inbound review items right now.
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
             <div className="rounded-[18px] border border-amber-200 bg-amber-50/60 p-4">
               <div className="inline-flex items-center gap-2 font-semibold text-amber-900">
                 <ShieldBan className="h-4 w-4" />
@@ -505,6 +540,32 @@ export function ProspectsScreen({
           </div>
 
           <div className="mt-4 grid gap-3">
+            {campaignCatalog.slice(0, 5).map((campaign) => (
+              <div className="grid grid-cols-[1.2fr_repeat(4,minmax(0,1fr))] gap-3 rounded-[16px] border border-brand-200 bg-brand-50/40 px-4 py-4" key={campaign.id}>
+                <div>
+                  <div className="font-medium text-steel-950">{campaign.name}</div>
+                  <div className="mt-1 text-sm text-steel-600">
+                    {formatProspectCategory(campaign.category)} · {campaign.send_time_local} {campaign.timezone}
+                  </div>
+                </div>
+                <div className="text-sm text-steel-700">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Contacts</div>
+                  <div className="mt-1 font-medium text-steel-950">{campaign.contacts_total}</div>
+                </div>
+                <div className="text-sm text-steel-700">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Sent</div>
+                  <div className="mt-1 font-medium text-steel-950">{campaign.sent_total}</div>
+                </div>
+                <div className="text-sm text-steel-700">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Positive</div>
+                  <div className="mt-1 font-medium text-steel-950">{campaign.positive_replies_total}</div>
+                </div>
+                <div className="text-sm text-steel-700">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Suppressed</div>
+                  <div className="mt-1 font-medium text-steel-950">{campaign.suppressed_total}</div>
+                </div>
+              </div>
+            ))}
             {campaignBatches.slice(0, 8).map((batch) => (
               <div className="grid grid-cols-[1.2fr_repeat(4,minmax(0,1fr))] gap-3 rounded-[16px] border border-steel-200 bg-steel-50/60 px-4 py-4" key={batch.id}>
                 <div>
@@ -536,6 +597,37 @@ export function ProspectsScreen({
                 Campaign metrics will populate as soon as imports and sends accumulate.
               </div>
             ) : null}
+          </div>
+
+          <div className="mt-5 rounded-[18px] border border-steel-200 bg-steel-50/60 p-4">
+            <div className="font-semibold text-steel-950">Company ledger</div>
+            <div className="mt-3 grid gap-2">
+              {companyLedger.slice(0, 6).map((company) => (
+                <div className="grid grid-cols-[1.2fr_repeat(3,minmax(0,1fr))] gap-3 rounded-[14px] border border-steel-200 bg-white px-4 py-3" key={company.id}>
+                  <div>
+                    <div className="font-medium text-steel-900">{company.name}</div>
+                    <div className="mt-1 text-sm text-steel-600">{company.domain || company.website || "No domain saved"}</div>
+                  </div>
+                  <div className="text-sm text-steel-700">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Contacts</div>
+                    <div className="mt-1 font-medium text-steel-950">{company.contact_count}</div>
+                  </div>
+                  <div className="text-sm text-steel-700">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Sent</div>
+                    <div className="mt-1 font-medium text-steel-950">{company.sent_total}</div>
+                  </div>
+                  <div className="text-sm text-steel-700">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-steel-500">Replies</div>
+                    <div className="mt-1 font-medium text-steel-950">{company.replied_total}</div>
+                  </div>
+                </div>
+              ))}
+              {!companyLedger.length ? (
+                <div className="rounded-[14px] border border-steel-200 bg-white px-4 py-3 text-sm text-steel-500">
+                  Company-level CRM metrics will fill in as contacts are linked.
+                </div>
+              ) : null}
+            </div>
           </div>
 
           <div className="mt-5 flex flex-wrap gap-2">

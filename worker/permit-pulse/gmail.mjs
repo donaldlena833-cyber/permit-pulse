@@ -227,6 +227,43 @@ function parseEmailAddress(value) {
   return match ? match[0].toLowerCase() : null;
 }
 
+function decodeBase64Url(value) {
+  const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+  const base64 = `${normalized}${padding}`;
+
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(base64, 'base64').toString('utf8');
+  }
+
+  return decodeURIComponent(escape(atob(base64)));
+}
+
+function extractMessageText(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+
+  if (payload.mimeType === 'text/plain' && payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+
+  if (Array.isArray(payload.parts)) {
+    for (const part of payload.parts) {
+      const next = extractMessageText(part);
+      if (next) {
+        return next;
+      }
+    }
+  }
+
+  if (payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+
+  return '';
+}
+
 async function gmailRequest(env, path, init = {}) {
   const accessToken = await fetchAccessToken(env);
   const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`, {
@@ -277,7 +314,25 @@ async function getMessageMetadata(env, messageId) {
   };
 }
 
-export async function listRecentInboxReplies(env, options = {}) {
+async function getMessageContent(env, messageId) {
+  const payload = await gmailRequest(env, `messages/${encodeURIComponent(messageId)}?format=full`);
+  const headers = payload?.payload?.headers || [];
+
+  return {
+    id: payload?.id || messageId,
+    threadId: payload?.threadId || null,
+    snippet: payload?.snippet || '',
+    internalDate: payload?.internalDate ? new Date(Number(payload.internalDate)).toISOString() : null,
+    from: parseHeader(headers, 'From'),
+    fromEmail: parseEmailAddress(parseHeader(headers, 'From')),
+    to: parseHeader(headers, 'To'),
+    subject: parseHeader(headers, 'Subject'),
+    date: parseHeader(headers, 'Date'),
+    bodyText: extractMessageText(payload?.payload),
+  };
+}
+
+export async function listRecentInboxMessages(env, options = {}) {
   const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
   const newerThanDays = Math.max(1, Number(options.newerThanDays || 30));
   const maxResults = Math.min(Math.max(Number(options.maxResults || 0), 1), 100);
@@ -286,7 +341,9 @@ export async function listRecentInboxReplies(env, options = {}) {
   const messages = [];
 
   for (const message of messageRefs) {
-    const metadata = await getMessageMetadata(env, message.id);
+    const metadata = options.includeBody
+      ? await getMessageContent(env, message.id)
+      : await getMessageMetadata(env, message.id);
     if (!metadata.fromEmail) {
       continue;
     }
@@ -294,4 +351,8 @@ export async function listRecentInboxReplies(env, options = {}) {
   }
 
   return messages;
+}
+
+export async function listRecentInboxReplies(env, options = {}) {
+  return listRecentInboxMessages(env, options);
 }

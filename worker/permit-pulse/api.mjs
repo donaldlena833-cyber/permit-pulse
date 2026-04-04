@@ -8,9 +8,12 @@ import {
   markProspectBounced,
   markProspectReply,
   optOutProspect,
+  removeProspectSuppression,
+  resolveOutreachReviewItem,
   saveProspectDraft,
   saveProspectNotes,
   sendProspect,
+  suppressProspectScope,
   updateProspectStatus,
   runScheduledProspectPilot,
 } from './lib/prospects.mjs';
@@ -662,6 +665,17 @@ export async function handlePermitPulseRequest(request, env, ctx) {
       }));
     }
 
+    const reviewResolveMatch = url.pathname.match(/^\/api\/outreach\/review\/([^/]+)\/resolve$/);
+    if (reviewResolveMatch && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await resolveOutreachReviewItem(db, decodeURIComponent(reviewResolveMatch[1]), body, user.email || null));
+    }
+
+    const suppressionRemoveMatch = url.pathname.match(/^\/api\/outreach\/suppressions\/([^/]+)\/remove$/);
+    if (suppressionRemoveMatch && request.method === 'POST') {
+      return json(await removeProspectSuppression(db, decodeURIComponent(suppressionRemoveMatch[1]), user.email || null));
+    }
+
     if (url.pathname === '/api/leads/follow-ups/send-due' && request.method === 'POST') {
       const body = await parseBody(request);
       return json(await processDueFollowUps(env, db, {
@@ -709,6 +723,18 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const prospectOptOutMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/opt-out$/);
     if (prospectOptOutMatch && request.method === 'POST') {
       return json(await optOutProspect(db, decodeURIComponent(prospectOptOutMatch[1]), user.email || null));
+    }
+
+    const prospectSuppressMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/suppress$/);
+    if (prospectSuppressMatch && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await suppressProspectScope(
+        db,
+        decodeURIComponent(prospectSuppressMatch[1]),
+        body?.scope_type || 'email',
+        user.email || null,
+        body?.reason || 'manual_suppression',
+      ));
     }
 
     const prospectDraftMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/draft$/);

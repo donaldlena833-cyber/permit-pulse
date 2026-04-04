@@ -3,7 +3,7 @@ export type QualityTier = "hot" | "warm" | "cold"
 export type AppTab = "today" | "leads" | "prospects" | "settings"
 export type ProspectCategory = "interior_designer" | "gc" | "property_manager" | "project_manager" | "architect"
 export type ProspectStatus = "new" | "drafted" | "sent" | "replied" | "opted_out" | "archived"
-export type ProspectQueueState = "queued_initial" | "sent" | "queued_follow_up" | "follow_up_sent" | "replied" | "opted_out" | "archived" | "suppressed"
+export type ProspectQueueState = "queued_initial" | "sent" | "queued_follow_up" | "follow_up_sent" | "replied" | "opted_out" | "archived" | "suppressed" | "pending_review"
 
 export interface LeadRow {
   id: string
@@ -105,6 +105,8 @@ export interface ProspectRow {
   state: string | null
   source: string
   import_batch_id: string | null
+  company_id?: string | null
+  campaign_id?: string | null
   status: ProspectStatus
   draft_subject: string | null
   draft_body: string | null
@@ -117,11 +119,35 @@ export interface ProspectRow {
   last_sent_at: string | null
   last_follow_up_at?: string | null
   last_replied_at: string | null
+  personalization_summary?: string | null
   queue_state?: ProspectQueueState
   automation_block_reason?: string | null
   next_follow_up?: ProspectFollowUp | null
+  company?: ProspectCompany | null
+  campaign?: ProspectCampaign | null
   created_at: string
   updated_at: string
+}
+
+export interface ProspectCompany {
+  id: string | null
+  name: string
+  domain: string | null
+  website: string | null
+  category: ProspectCategory | null
+  suppressed?: boolean
+  suppressed_reason?: string | null
+}
+
+export interface ProspectCampaign {
+  id: string | null
+  name: string
+  category: ProspectCategory | null
+  status: string
+  template_variant: string
+  daily_cap: number
+  timezone: string
+  send_time_local: string
 }
 
 export interface ProspectEvent {
@@ -169,6 +195,33 @@ export interface ReplySyncSummary {
   opt_outs: number
   positive_replies: number
   unmatched_messages: number
+  bounces?: number
+  review_items?: number
+}
+
+export interface ProspectSuppression {
+  id: string
+  scope_type: "email" | "domain" | "company"
+  scope_value: string
+  reason: string | null
+  source?: string | null
+  active: boolean
+  company_id?: string | null
+  prospect_id?: string | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface OutreachReviewItem {
+  id: string
+  prospect_id?: string | null
+  category?: ProspectCategory | null
+  company_name?: string | null
+  contact_name?: string | null
+  email_address?: string | null
+  reason: string | null
+  created_at: string
+  gmail_thread_id?: string | null
 }
 
 export interface FollowUp {
@@ -229,6 +282,16 @@ export interface ProspectDetailResponse {
   timeline: ProspectEvent[]
   import_batch: ProspectImportBatch | null
   follow_ups: ProspectFollowUp[]
+  suppressions?: ProspectSuppression[]
+  review_items?: Array<{
+    id: string
+    reason?: string | null
+    subject?: string | null
+    sender_email?: string | null
+    target_email?: string | null
+    gmail_thread_id?: string | null
+    created_at?: string
+  }>
 }
 
 export interface RunCounters {
@@ -345,6 +408,37 @@ export interface ProspectAutomationSummary {
     email_address: string
     reason: string | null
     updated_at: string
+  }>
+  suppression_entries?: ProspectSuppression[]
+  review_queue?: OutreachReviewItem[]
+  companies?: Array<{
+    id: string
+    name: string
+    domain: string | null
+    website: string | null
+    category: ProspectCategory | null
+    suppressed: boolean
+    suppressed_reason: string | null
+    contact_count: number
+    sent_total: number
+    replied_total: number
+    positive_replies_total: number
+  }>
+  campaign_catalog?: Array<{
+    id: string
+    name: string
+    category: ProspectCategory
+    status: string
+    daily_cap: number
+    send_time_local: string
+    timezone: string
+    contacts_total: number
+    sent_total: number
+    delivered_total: number
+    replied_total: number
+    positive_replies_total: number
+    bounced_total: number
+    suppressed_total: number
   }>
   reply_sync?: ReplySyncSummary | null
   recent_sends: Array<{
