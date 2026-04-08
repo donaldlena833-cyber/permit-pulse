@@ -7,12 +7,12 @@ import { Button } from "@/components/ui/button"
 import { InviteAcceptScreen } from "@/features/auth/components/invite-accept-screen"
 import { LoginScreen } from "@/features/auth/components/login-screen"
 import { SignupScreen } from "@/features/auth/components/signup-screen"
-import { useMetroglassAuth } from "@/features/auth/hooks/use-metroglass-auth"
-import { LeadDetailView } from "@/features/metroglass-leads/components/lead-detail-view"
-import { LeadsScreen } from "@/features/metroglass-leads/components/leads-screen"
-import { SettingsScreen } from "@/features/metroglass-leads/components/settings-screen"
-import { TodayScreen } from "@/features/metroglass-leads/components/today-screen"
-import { useMetroglassLeads } from "@/features/metroglass-leads/hooks/use-metroglass-leads"
+import { useWorkspaceAuth } from "@/features/auth/hooks/use-workspace-auth"
+import { LeadDetailView } from "@/features/operator-console/components/lead-detail-view"
+import { LeadsScreen } from "@/features/operator-console/components/leads-screen"
+import { SettingsScreen } from "@/features/operator-console/components/settings-screen"
+import { TodayScreen } from "@/features/operator-console/components/today-screen"
+import { useOperatorConsole } from "@/features/operator-console/hooks/use-operator-console"
 import {
   acceptInvite,
   beginWorkspaceGmailConnect,
@@ -21,10 +21,10 @@ import {
   fetchOnboardingState,
   updateOnboardingProfile,
   uploadWorkspaceAttachment as uploadWorkspaceAttachmentRequest,
-} from "@/features/metroglass-leads/lib/remote"
-import type { InvitePreviewPayload, OnboardingPayload } from "@/features/metroglass-leads/types/api"
-import { ProspectDetailView } from "@/features/metroglass-prospects/components/prospect-detail-view"
-import { ProspectsScreen } from "@/features/metroglass-prospects/components/prospects-screen"
+} from "@/features/operator-console/lib/remote"
+import type { InvitePreviewPayload, OnboardingPayload } from "@/features/operator-console/types/api"
+import { ProspectDetailView } from "@/features/prospect-workspace/components/prospect-detail-view"
+import { ProspectsScreen } from "@/features/prospect-workspace/components/prospects-screen"
 import { OnboardingScreen } from "@/features/onboarding/components/onboarding-screen"
 
 function AppTabs({
@@ -68,7 +68,7 @@ function AppTabs({
   )
 }
 
-function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
+function OperatorConsoleApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const {
     tab,
     setTab,
@@ -98,12 +98,12 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
     setProspectCategoryFilter,
     prospectQuery,
     setProspectQuery,
-  } = useMetroglassLeads()
+  } = useOperatorConsole()
 
   const workspaceName = system?.account?.name || "PermitPulse"
   const workspaceBusiness = system?.account?.business_name || workspaceName
-  const title = tab === "prospects" ? "Outreach CRM" : "Leads"
-  const subtitle = tab === "prospects" ? "Automated outbound email operations" : "Permit automation"
+  const title = tab === "prospects" ? "Outreach Ops" : "Lead Console"
+  const subtitle = tab === "prospects" ? "Outbound workflow and follow-up" : "Permit and lead intelligence"
 
   return (
     <div className="min-h-screen text-foreground">
@@ -249,6 +249,7 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         onAddManualEmail={(leadId, payload) => void actions.addManualEmail(leadId, payload)}
         onLogPhoneFollowUp={(leadId, step, notes) => void actions.logPhoneFollowUp(leadId, step, notes)}
         onLost={(leadId) => void actions.markLost(leadId)}
+        onOptOut={(leadId) => void actions.markOptedOut(leadId)}
         onRefreshDraft={(leadId) => void actions.refreshDraft(leadId)}
         onReplied={(leadId) => void actions.markReplied(leadId)}
         onSaveDraft={(leadId, draft) => void actions.saveDraft(leadId, draft)}
@@ -307,7 +308,17 @@ function resolveAuthenticatedPath(state: OnboardingPayload | null): string {
     return "/onboarding"
   }
 
-  if (state.onboarding?.status !== "completed") {
+  const onboarding = state.onboarding
+  const mailboxSelfServeEnabled = Boolean(state.capabilities?.mailbox_self_serve_connect)
+  const internalReadyWithoutMailbox = Boolean(
+    onboarding?.business_info_completed
+    && onboarding?.sender_identity_completed
+    && onboarding?.attachment_completed
+    && onboarding?.first_campaign_ready
+    && !mailboxSelfServeEnabled,
+  )
+
+  if (onboarding?.status !== "completed" && !internalReadyWithoutMailbox) {
     return "/onboarding"
   }
 
@@ -323,7 +334,7 @@ function FullScreenLoader() {
 }
 
 function RoutedApp() {
-  const auth = useMetroglassAuth()
+  const auth = useWorkspaceAuth()
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -536,7 +547,7 @@ function RoutedApp() {
             ? <Navigate replace to="/login" />
             : resolveAuthenticatedPath(workspaceState) !== "/app"
               ? <Navigate replace to={resolveAuthenticatedPath(workspaceState)} />
-              : <MetroglassLeadsApp onLogout={auth.logout} />}
+              : <OperatorConsoleApp onLogout={auth.logout} />}
         />
       </Routes>
       <Toaster position="top-center" richColors />

@@ -3,7 +3,7 @@ import { CheckCircle2, LoaderCircle, Mailbox, Upload } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { OnboardingPayload } from "@/features/metroglass-leads/types/api"
+import type { OnboardingPayload } from "@/features/operator-console/types/api"
 
 interface OnboardingScreenProps {
   state: OnboardingPayload | null
@@ -56,6 +56,7 @@ export function OnboardingScreen({
 
   const ready = state?.onboarding
   const needsBootstrap = Boolean(state?.requires_bootstrap)
+  const mailboxSetupIsManual = !(state?.capabilities?.mailbox_self_serve_connect ?? false)
 
   const runBusy = async (key: string, work: () => Promise<void>) => {
     setBusyKey(key)
@@ -77,7 +78,7 @@ export function OnboardingScreen({
               {needsBootstrap ? "Start the workspace" : `Finish setup for ${state?.account?.business_name || "your workspace"}`}
             </h1>
             <p className="mt-3 max-w-xl text-sm leading-6 text-navy-600">
-              This flow creates the workspace, locks access to invited members only, and makes sure the sender identity, mailbox, and default PDF all belong to the same tenant.
+              This flow creates the workspace, locks access to invited members only, and gets MetroGlass ready to run permit and lead outreach from one stable operator console.
             </p>
 
             <div className="mt-6 space-y-3">
@@ -85,7 +86,7 @@ export function OnboardingScreen({
                 { done: ready?.business_info_completed, label: "Business info" },
                 { done: ready?.sender_identity_completed, label: "Sender identity" },
                 { done: ready?.attachment_completed, label: "Default PDF uploaded" },
-                { done: ready?.mailbox_completed, label: "Workspace Gmail connected" },
+                { done: ready?.mailbox_completed, label: mailboxSetupIsManual ? "Workspace inbox verified" : "Workspace inbox connected" },
                 { done: ready?.first_campaign_ready, label: "First campaign marked ready" },
               ].map((item) => (
                 <div key={item.label} className="flex items-center gap-3 rounded-[18px] border border-navy-200 bg-cream-50/90 px-4 py-3 text-sm text-navy-700">
@@ -183,12 +184,20 @@ export function OnboardingScreen({
                 <div className="rounded-[22px] border border-navy-200 bg-cream-50/90 px-4 py-4">
                   <div className="flex items-center gap-2 text-sm font-semibold text-navy-900">
                     <Mailbox className="h-4 w-4 text-orange-600" />
-                    Connect the workspace inbox
+                    Workspace inbox
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-navy-600">This mailbox becomes the sender identity and the reply-sync source for the tenant.</p>
-                  <Button className="mt-3 h-11 rounded-2xl px-5" disabled={busyKey === "mailbox"} onClick={() => void runBusy("mailbox", onConnectMailbox)}>
-                    Connect Gmail
-                  </Button>
+                  {mailboxSetupIsManual ? (
+                    <p className="mt-2 text-sm leading-6 text-navy-600">
+                      Mailbox connection is handled manually for now so sending stays stable while the product is still internal-first. Finish business info, upload the default PDF, and we can wire the inbox on the ops side.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="mt-2 text-sm leading-6 text-navy-600">This mailbox becomes the sender identity and the reply-sync source for the workspace.</p>
+                      <Button className="mt-3 h-11 rounded-2xl px-5" disabled={busyKey === "mailbox"} onClick={() => void runBusy("mailbox", onConnectMailbox)}>
+                        Connect Gmail
+                      </Button>
+                    </>
+                  )}
                 </div>
                 <Button
                   className="h-12 rounded-2xl bg-orange-500 px-6 text-white hover:bg-orange-600"

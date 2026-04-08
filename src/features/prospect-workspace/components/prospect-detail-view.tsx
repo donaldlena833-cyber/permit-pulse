@@ -20,8 +20,8 @@ import {
   formatProspectQueueState,
   formatProspectStatus,
   formatRelativeTime,
-} from "@/features/metroglass-leads/lib/format"
-import type { ProspectDetailResponse } from "@/features/metroglass-leads/types/api"
+} from "@/features/operator-console/lib/format"
+import type { ProspectDetailResponse } from "@/features/operator-console/types/api"
 
 interface ProspectDetailViewProps {
   detail: ProspectDetailResponse | null

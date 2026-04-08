@@ -17,7 +17,7 @@ export const API_ENDPOINTS = {
   zerobounceValidate: 'https://api.zerobounce.net/v2/validate',
 };
 
-export const METROGLASS_PROFILE = {
+export const DEFAULT_LEAD_PROFILE = {
   primaryBoroughs: ['MANHATTAN'],
   secondaryBoroughs: ['BROOKLYN', 'QUEENS'],
   workTypes: ['General Construction'],
@@ -100,7 +100,7 @@ export const METROGLASS_PROFILE = {
   ],
 };
 
-export const PLUGIN_LINES = [
+export const DEFAULT_OUTREACH_PLUGIN_LINES = [
   'We keep field coordination simple, which helps jobs move without extra back and forth.',
   'Our team can quote quickly if the glass package is still being lined up.',
   'We handle shower glass, mirrors, storefronts, and partitions in house across the city.',
@@ -115,7 +115,7 @@ export const PLUGIN_LINES = [
 
 export const MIN_RELEVANCE_THRESHOLD = 0.15;
 
-export const PERMIT_RELEVANCE_RULES = [
+export const DEFAULT_PERMIT_RELEVANCE_RULES = [
   { keyword: 'bathroom renovation', score: 1.0, angle: 'shower enclosures and mirrors' },
   { keyword: 'bathroom alteration', score: 1.0, angle: 'shower enclosures and mirrors' },
   { keyword: 'shower', score: 1.0, angle: 'shower enclosures' },
@@ -198,3 +198,7 @@ export function getAutoSendLimits(now = new Date()) {
 export const DEFAULT_SCAN_WINDOW_DAYS = 14;
 export const DEFAULT_SCAN_LIMIT = 150;
 export const HIGH_VALUE_SCORE = 60;
+
+export const METROGLASS_PROFILE = DEFAULT_LEAD_PROFILE;
+export const PLUGIN_LINES = DEFAULT_OUTREACH_PLUGIN_LINES;
+export const PERMIT_RELEVANCE_RULES = DEFAULT_PERMIT_RELEVANCE_RULES;

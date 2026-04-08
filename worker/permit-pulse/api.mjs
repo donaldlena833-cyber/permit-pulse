@@ -202,7 +202,15 @@ function resolveRedirectBase(env, requestUrl) {
   }
 }
 
+function resolveWorkspaceCapabilities(env) {
+  return {
+    mailbox_self_serve_connect: String(env?.MAILBOX_SELF_SERVE_CONNECT || '').toLowerCase() === 'true',
+    billing_self_serve_enabled: String(env?.BILLING_SELF_SERVE_ENABLED || '').toLowerCase() === 'true',
+  };
+}
+
 async function buildSystemPayload(env, db, tenantContext) {
+  const capabilities = resolveWorkspaceCapabilities(env);
   const [attachment, recentFailureRows, totalLeads, totalProspects, domainHealth, runs, replySync, config, metrics] = await Promise.all([
     getAttachmentStatus(env, {
       attachmentKey: tenantContext.tenant?.default_attachment?.storage_key || undefined,
@@ -256,6 +264,7 @@ async function buildSystemPayload(env, db, tenantContext) {
     account: tenantContext.presentedTenant,
     current_member: tenantContext.presentedMember,
     members: tenantContext.members,
+    capabilities,
     onboarding: tenantContext.onboarding,
     attachments: tenantContext.attachments,
     default_attachment: tenantContext.tenant?.default_attachment || null,
@@ -777,13 +786,17 @@ export async function handlePermitPulseRequest(request, env, ctx) {
   }
 
   if (url.pathname === '/api/onboarding' && request.method === 'GET') {
-    return json(await getOnboardingState(rawDb, user));
+    return json({
+      ...(await getOnboardingState(rawDb, user)),
+      capabilities: resolveWorkspaceCapabilities(env),
+    });
   }
 
   if (url.pathname === '/api/onboarding/bootstrap' && request.method === 'POST') {
     const body = await parseBody(request);
     const tenantContext = await bootstrapWorkspaceOwner(rawDb, user, body);
     return json({
+      capabilities: resolveWorkspaceCapabilities(env),
       account: tenantContext.presentedTenant,
       current_member: tenantContext.presentedMember,
       onboarding: tenantContext.onboarding,
@@ -1260,6 +1273,10 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/api/account/mailboxes/gmail/connect' && request.method === 'POST') {
+      const capabilities = resolveWorkspaceCapabilities(env);
+      if (!capabilities.mailbox_self_serve_connect) {
+        return json({ error: 'Mailbox connection is handled manually for now. Finish onboarding and connect the workspace inbox through operations when ready.' }, 403);
+      }
       const body = await parseBody(request);
       return json(await beginGmailMailboxConnect(env, tenantContext, {
         redirect_path: body.redirect_path,
@@ -1298,10 +1315,16 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/api/billing/checkout' && request.method === 'POST') {
+      if (!resolveWorkspaceCapabilities(env).billing_self_serve_enabled) {
+        return json({ error: 'Self-serve billing is disabled while PermitPulse remains an internal operator system.' }, 403);
+      }
       return json(await createBillingCheckoutSession(env, rawDb, tenantContext));
     }
 
     if (url.pathname === '/api/billing/portal' && request.method === 'POST') {
+      if (!resolveWorkspaceCapabilities(env).billing_self_serve_enabled) {
+        return json({ error: 'Self-serve billing is disabled while PermitPulse remains an internal operator system.' }, 403);
+      }
       return json(await createBillingPortalSession(env, rawDb, tenantContext));
     }
 

@@ -1,98 +1,148 @@
-# ⚡ PermitPulse
+# PermitPulse
 
-**NYC construction lead intelligence and outbound automation for MetroGlass Pro**
+Internal lead intelligence and outreach operating system for MetroGlass Pro.
 
-PermitPulse now runs as a permit scanner, enrichment engine, contact resolver, channel selector, and Gmail sender for MetroGlass Pro's permit-driven outbound workflow.
+PermitPulse is optimized for one real operator workflow today:
 
-## Architecture
+1. pull permit data and other lead signals
+2. enrich and resolve the right company
+3. discover and score contact routes
+4. generate drafts
+5. send carefully
+6. track replies, follow-ups, and outcomes
+7. keep enough CRM memory to run the business
 
-- **Frontend** (`src/`) — React + TypeScript + Tailwind + shadcn/ui, deployed to Cloudflare Pages
-- **Automation Worker** (`permit-scanner.mjs`) — Cloudflare Worker with cron triggers and `/api/v2/*` automation routes
-- **Primary database** (`supabase/migrations/001_permit_pulse_automation.sql`) — Supabase/Postgres schema for leads, enrichment, contacts, outreach, and activity logs
-- **Public data + enrichment** — NYC Open Data, Google Maps, Brave Search, Firecrawl, ZeroBounce, Gmail OAuth
+The codebase is workspace-ready in architecture, but it is not pretending to be a polished public SaaS yet.
 
-## Automation Flow
+## Canonical Architecture
 
-1. Scan DOB permits from `rbx6-tga4`
-2. Normalize address, borough, cost, work type, and description
-3. Enrich property context from PLUTO, HPD, ACRIS links, and Google Maps
-4. Resolve owner or applicant company with Brave Search
-5. Scrape high-value websites with Firecrawl
-6. Collect public emails and phones, then generate guessed email patterns
-7. Verify high-value emails with ZeroBounce before send
-8. Score lead fit, contactability, outreach readiness, and best channel
-9. Generate rotating email drafts with the project address inserted automatically
-10. Auto-send via Gmail when confidence, throttling, duplicate, and business-hour rules all pass
+### Frontend
 
-## Scoring Engine
+- `src/App.tsx`
+- `src/features/operator-console`
+- `src/features/prospect-workspace`
+- `src/features/auth`
+- `src/features/onboarding`
 
-Each permit is scored on 7 dimensions (max 100):
-| Signal | Max Pts | Description |
-|--------|---------|-------------|
-| Direct Keyword | 40 | Permit description explicitly mentions trade terms |
-| Inferred Need | 20 | Renovation type that typically requires this trade |
-| Budget Fit | 15 | Job cost falls in the trade's sweet spot range |
-| Commercial | 10 | Business type that commonly needs this trade |
-| Building Type | 8 | Building characteristics matching target clients |
-| Recency | 10 | Permits issued in last 3 days score highest |
-| Location | 7 | Priority borough + neighborhood match |
+### Worker
 
-**Lead Tiers:** Hot (≥45), Warm (≥25), Cold (<25)
+- `worker/permit-pulse/index.mjs`
+- `worker/permit-pulse/api.mjs`
+- `worker/permit-pulse/pipeline/*`
+- `worker/permit-pulse/lib/*`
 
-## Deployment
+### Database
 
-### Frontend (Cloudflare Pages)
+Use the `v2_*` schema and current migrations in `supabase/migrations`.
+
+Most important migrations:
+
+- `006_permit_pulse_v2.sql`
+- `012_outbound_crm_hardening.sql`
+- `013_workspace_accounts.sql`
+- `015_tenantize_crm_data.sql`
+- `016_growth_ready_productization.sql`
+
+## Product Spine
+
+The canonical lifecycle is:
+
+1. ingest
+2. normalize
+3. resolve company
+4. discover contacts
+5. trust score
+6. route
+7. draft
+8. send
+9. follow up
+10. outcome
+11. audit and memory
+
+Permit leads and imported prospect outreach both run on top of this same spine.
+
+## Current Product Mode
+
+What is true right now:
+
+- internal MetroGlass operator system first
+- workspace/account boundaries exist in architecture
+- invite-only access exists
+- workspace files, config, audit, and mailbox state exist
+- self-serve Gmail connect is disabled by default
+- self-serve billing is intentionally not an active product surface
+
+What is intentionally not true yet:
+
+- polished public onboarding
+- mature commercial billing workflow
+- generalized CRM product for everyone
+- fully abstract multi-tenant platform work
+
+## Legacy Code
+
+Historical code lives under:
+
+- `legacy/monolith`
+- `legacy/worker-monolith`
+- `legacy/frontend-prototype`
+
+Do not treat those folders as the live product path.
+
+## Running the App
+
+### Frontend
+
 ```bash
 pnpm install
 pnpm build
-bash deploy.sh
 ```
 
-### Worker + Automation APIs (Cloudflare Worker)
+### Worker
+
 ```bash
 npx wrangler deploy
 ```
 
-Cron triggers: 7am ET and 6pm ET.
+### Optional compatibility scan trigger
 
-## Required Env Vars
+`npm run scan` now uses the root `permit-scanner.mjs` compatibility shim.
 
-Worker secrets or vars:
+If you want it to hit the live worker directly, provide:
 
+- `PERMIT_PULSE_SCAN_URL`
+- `PERMIT_PULSE_ACCESS_TOKEN`
+
+Otherwise, use the operator console or call `POST /api/scan` manually.
+
+## Environment Notes
+
+Core worker secrets and vars typically include:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_ANON_KEY`
 - `BRAVE_API_KEY`
 - `GOOGLE_MAPS_API_KEY`
-- `ZEROBOUNCE_API_KEY`
 - `FIRECRAWL_API_KEY`
 - `GMAIL_CLIENT_ID`
 - `GMAIL_CLIENT_SECRET`
-- `GMAIL_REFRESH_TOKEN`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY` preferred
-- `SUPABASE_ANON_KEY` temporary fallback only
+- `WORKSPACE_TOKEN_ENCRYPTION_KEY`
 
-Optional frontend build var:
+Optional product-mode flags:
 
-- `PERMIT_PULSE_WORKER_URL`
+- `MAILBOX_SELF_SERVE_CONNECT`
+- `BILLING_SELF_SERVE_ENABLED`
 
-## Supabase Schema
+Both product-mode flags are expected to remain disabled for internal-first operation unless you intentionally open those flows.
 
-Apply the migration in:
+## Recommended Docs
 
-- `supabase/migrations/001_permit_pulse_automation.sql`
-- `supabase/migrations/002_security_hardening.sql`
-- `supabase/migrations/003_resolution_candidates.sql`
-
-Core tables:
-
-- `leads`
-- `property_profiles`
-- `company_profiles`
-- `resolution_candidates`
-- `contacts`
-- `enrichment_facts`
-- `outreach`
-- `activity_log`
+- `docs/current-state-audit.md`
+- `docs/target-architecture.md`
+- `docs/refactor-plan.md`
+- `docs/operator-workflow.md`
 
 ## License
 
-Private — MetroGlassPro LLC
+Private repository for MetroGlass Pro.

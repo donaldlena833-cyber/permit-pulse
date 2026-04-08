@@ -3,7 +3,7 @@ import { LoaderCircle, Mail, UserPlus } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { InvitePreviewPayload } from "@/features/metroglass-leads/types/api"
+import type { InvitePreviewPayload } from "@/features/operator-console/types/api"
 
 interface InviteAcceptScreenProps {
   invite: InvitePreviewPayload | null

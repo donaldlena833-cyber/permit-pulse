@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button"
-import { Panel } from "@/features/metroglass-leads/components/panel"
-import { formatLeadStatus, formatScore } from "@/features/metroglass-leads/lib/format"
-import type { LeadRow } from "@/features/metroglass-leads/types/api"
+import { Panel } from "@/features/operator-console/components/panel"
+import { describeLeadDecision } from "@/features/operator-console/lib/explain"
+import { formatLeadStatus, formatScore } from "@/features/operator-console/lib/format"
+import type { LeadRow } from "@/features/operator-console/types/api"
 
 interface LeadsScreenProps {
   leads: LeadRow[]
@@ -54,6 +55,9 @@ export function LeadsScreen({ leads, filter, onFilterChange, onOpenLead, onEnric
 
               <div className="mt-4 text-sm text-steel-600">
                 Relevance: {formatScore(lead.relevance_score)}{lead.relevance_keyword ? ` (${lead.relevance_keyword})` : ""}
+              </div>
+              <div className="mt-2 text-sm text-steel-500">
+                {describeLeadDecision(lead)}
               </div>
               <div className="mt-4 grid gap-3 text-sm text-steel-600 sm:grid-cols-2">
                 <div className="rounded-[16px] border border-steel-200 bg-steel-50/60 px-3 py-3">

@@ -11,7 +11,7 @@ import {
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated"
 
-export function useMetroglassAuth() {
+export function useWorkspaceAuth() {
   const [status, setStatus] = useState<AuthStatus>("loading")
   const [session, setSession] = useState<AuthSession | null>(null)
   const [error, setError] = useState<string | null>(null)

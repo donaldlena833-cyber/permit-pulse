@@ -1,5 +1,11 @@
 # Outreach CRM Rebuild
 
+Historical planning note. Superseded by:
+
+- `docs/current-state-audit.md`
+- `docs/target-architecture.md`
+- `docs/operator-workflow.md`
+
 ## Goal
 
 Turn the current `Prospects` area into a true outbound CRM inside `leads.metroglasspro.com` focused on opening conversations through automated email outreach with low manual overhead.

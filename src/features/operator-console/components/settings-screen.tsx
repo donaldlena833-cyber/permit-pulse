@@ -4,12 +4,10 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { Panel } from "@/features/metroglass-leads/components/panel"
+import { Panel } from "@/features/operator-console/components/panel"
 import {
   archiveWorkspaceAttachmentRequest,
   beginWorkspaceGmailConnect,
-  createBillingCheckout,
-  createBillingPortal,
   createWorkspaceInviteRequest,
   disableWorkspaceMemberRequest,
   fetchAuditLog,
@@ -17,13 +15,13 @@ import {
   setWorkspaceAttachmentDefault,
   transferWorkspaceOwnershipRequest,
   updateWorkspaceMemberRoleRequest,
-} from "@/features/metroglass-leads/lib/remote"
+} from "@/features/operator-console/lib/remote"
 import type {
   AuditEvent,
   ConfigPayload,
   HealthPayload,
   SystemPayload,
-} from "@/features/metroglass-leads/types/api"
+} from "@/features/operator-console/types/api"
 
 interface SettingsScreenProps {
   health: HealthPayload | null
@@ -51,13 +49,6 @@ interface SettingsScreenProps {
     archive_previous_default?: boolean
   }) => Promise<void>
   onRefreshWorkspace: () => Promise<void>
-}
-
-function formatMonthlyPrice(cents: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-  }).format(cents / 100)
 }
 
 function formatDateTime(value?: string | null): string {
@@ -221,15 +212,9 @@ export function SettingsScreen({
     }, "Invite created")
   }
 
-  const handleBilling = async (kind: "checkout" | "portal") => {
-    await withBusy(kind, async () => {
-      const result = kind === "checkout" ? await createBillingCheckout() : await createBillingPortal()
-      window.location.assign(result.url)
-    })
-  }
-
   const metrics = system.metrics
   const onboarding = system.onboarding
+  const mailboxSelfServeEnabled = Boolean(system.capabilities?.mailbox_self_serve_connect)
 
   return (
     <div className="space-y-5 pb-28">
@@ -237,7 +222,7 @@ export function SettingsScreen({
         <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Workspace Settings</div>
         <h1 className="mt-3 text-4xl font-extrabold tracking-[-0.05em] text-steel-900">Growth-ready controls</h1>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-steel-600">
-          Manage onboarding, attachment files, connected mailbox identity, invite-only access, billing, audit history, and the send policy for this workspace.
+          Manage onboarding, attachment files, workspace access, audit history, and the send policy for this internal operator workspace.
         </p>
       </Panel>
 
@@ -246,8 +231,8 @@ export function SettingsScreen({
           <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Workspace Snapshot</div>
           <div className="mt-4 grid gap-3">
             <div className="rounded-[18px] border border-steel-200 bg-white px-4 py-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Plan</div>
-              <div className="mt-2 text-sm text-steel-900">{formatMonthlyPrice(system.account.plan_price_cents)}/mo · {system.account.subscription_status}</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Workspace mode</div>
+              <div className="mt-2 text-sm text-steel-900">Internal operator workspace with future-ready workspace boundaries</div>
             </div>
             <div className="rounded-[18px] border border-steel-200 bg-white px-4 py-4">
               <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Onboarding</div>
@@ -436,39 +421,38 @@ export function SettingsScreen({
         </Panel>
 
         <Panel>
-          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Mailbox and Billing</div>
+          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Mailbox Setup</div>
           <div className="mt-4 grid gap-4">
             <div className="rounded-[18px] border border-steel-200 bg-white px-4 py-4">
               <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Default mailbox</div>
               <div className="mt-2 text-sm text-steel-900">{system.default_mailbox?.email || "No mailbox connected yet"}</div>
               <div className="mt-1 text-sm text-steel-600">Last sync: {formatDateTime(system.default_mailbox?.last_synced_at)}</div>
             </div>
-            <Button
-              className="h-11 rounded-full px-5"
-              disabled={!canManageWorkspace || busyKey === "gmail-connect"}
-              onClick={() => void withBusy("gmail-connect", async () => {
-                const result = await beginWorkspaceGmailConnect("/app/settings")
-                window.location.assign(result.authorization_url)
-              })}
-            >
-              Connect workspace Gmail
-            </Button>
             <div className="rounded-[18px] border border-steel-200 bg-white px-4 py-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Billing</div>
-              <div className="mt-2 text-sm text-steel-900">{system.billing?.status || system.account.subscription_status}</div>
-              <div className="mt-1 text-sm text-steel-600">Owners are the only members allowed to open checkout and the billing portal.</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Connection mode</div>
+              <div className="mt-2 text-sm text-steel-900">{mailboxSelfServeEnabled ? "Self-serve connect enabled" : "Manual setup only"}</div>
+              <div className="mt-1 text-sm text-steel-600">
+                {mailboxSelfServeEnabled
+                  ? "Use the workspace Gmail flow to authorize the sending inbox."
+                  : "New workspaces do not self-connect Gmail yet. Keep sender identity current above, then wire the mailbox through the worker when the workspace is ready to go live."}
+              </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Button className="h-11 rounded-full px-5" disabled={!isOwner || busyKey === "checkout"} onClick={() => void handleBilling("checkout")}>
-                Start subscription
+            {mailboxSelfServeEnabled ? (
+              <Button
+                className="h-11 rounded-full px-5"
+                disabled={!canManageWorkspace || busyKey === "gmail-connect"}
+                onClick={() => void withBusy("gmail-connect", async () => {
+                  const result = await beginWorkspaceGmailConnect("/app/settings")
+                  window.location.assign(result.authorization_url)
+                })}
+              >
+                Connect workspace Gmail
               </Button>
-              <Button className="h-11 rounded-full px-5" disabled={!isOwner || busyKey === "portal"} onClick={() => void handleBilling("portal")} variant="outline">
-                Open billing portal
-              </Button>
-            </div>
-            {!isOwner ? (
-              <p className="text-sm text-steel-500">Billing is owner-only. Admins can manage settings, invites, files, and send policy, but not checkout or subscription changes.</p>
-            ) : null}
+            ) : (
+              <div className="rounded-[18px] border border-dashed border-steel-200 bg-white px-4 py-4 text-sm text-steel-600">
+                Billing and self-serve mailbox setup are intentionally hidden while PermitPulse remains an internal MetroGlass operator system.
+              </div>
+            )}
           </div>
         </Panel>
       </div>
@@ -486,7 +470,6 @@ export function SettingsScreen({
                       <div className="font-medium text-steel-900">{member.full_name || member.email}</div>
                       <div className="mt-1 text-sm text-steel-600">
                         {member.email} · {member.role} · {member.status}
-                        {member.can_manage_billing ? " · billing" : ""}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">

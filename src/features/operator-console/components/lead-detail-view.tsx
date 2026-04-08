@@ -17,8 +17,9 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { formatDate, formatLeadStatus, formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
-import type { EmailCandidate, LeadDetailResponse } from "@/features/metroglass-leads/types/api"
+import { describeLeadDecision, summarizeLeadEvent } from "@/features/operator-console/lib/explain"
+import { formatDate, formatLeadStatus, formatRelativeTime, formatScore } from "@/features/operator-console/lib/format"
+import type { EmailCandidate, LeadDetailResponse } from "@/features/operator-console/types/api"
 
 interface LeadDetailViewProps {
   detail: LeadDetailResponse | null
@@ -32,6 +33,7 @@ interface LeadDetailViewProps {
   onVouch: (leadId: string) => void
   onBounced: (leadId: string) => void
   onReplied: (leadId: string) => void
+  onOptOut: (leadId: string) => void
   onWon: (leadId: string) => void
   onLost: (leadId: string) => void
   onSwitchFallback: (leadId: string) => void
@@ -197,6 +199,7 @@ export function LeadDetailView({
   onVouch,
   onBounced,
   onReplied,
+  onOptOut,
   onWon,
   onLost,
   onSwitchFallback,
@@ -306,6 +309,9 @@ export function LeadDetailView({
                 <div className="text-[11px] uppercase tracking-[0.18em] text-[#8B7D6B]">Decision state</div>
                 <div className="mt-2 text-sm font-semibold text-[#161616]">
                   {approvedPrimary ? "System approved route" : isEmailRequired ? "Waiting on manual email research" : selectedRoute ? "Operator review needed" : "No route yet"}
+                </div>
+                <div className="mt-2 text-xs leading-5 text-[#6B6258]">
+                  {describeLeadDecision(detail.lead)}
                 </div>
               </div>
             </div>
@@ -662,6 +668,9 @@ export function LeadDetailView({
               {detail.timeline.map((event) => (
                 <div key={event.id} className="rounded-[14px] border border-[#EEE4D7] px-3 py-3">
                   <div className="font-medium capitalize text-[#1A1A1A]">{event.event_type.replace(/_/g, " ")}</div>
+                  {summarizeLeadEvent(event) ? (
+                    <div className="mt-1 text-sm text-[#5F564C]">{summarizeLeadEvent(event)}</div>
+                  ) : null}
                   <div className="mt-1 text-xs text-[#8B7D6B]">{formatRelativeTime(event.created_at)}</div>
                 </div>
               ))}
@@ -753,6 +762,9 @@ export function LeadDetailView({
                   </Button>
                   <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onReplied(detail.lead.id)} variant="outline">
                     Replied
+                  </Button>
+                  <Button className="h-10 rounded-full border border-[#D6C6B6] bg-white px-4 text-[#5F564C] hover:bg-[#F7F0E8]" onClick={() => onOptOut(detail.lead.id)} variant="outline">
+                    Opt out
                   </Button>
                 </>
               ) : null}

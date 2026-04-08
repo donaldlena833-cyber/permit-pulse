@@ -31,13 +31,13 @@ export function LoginScreen({ loading, error, onSubmit, onSwitchToSignup }: Logi
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500 text-white">
                   PP
                 </div>
-                PermitPulse CRM
+                PermitPulse Ops
               </div>
               <h1 className="mt-6 max-w-2xl text-[2rem] font-semibold tracking-[-0.05em] text-navy-900 sm:text-5xl dark:text-dark-text">
-                Private lead ops for real outbound CRM work.
+                Private lead ops for real contractor outreach work.
               </h1>
               <p className="mt-3 max-w-xl text-sm leading-6 text-navy-600 sm:text-base sm:leading-7 dark:text-dark-muted">
-                Run permit scanning, enrichment, and Gmail outreach from one private workspace you can turn into a real client account.
+                Run permit scanning, enrichment, lead research, and outbound follow-up from one private operator workspace.
               </p>
             </div>
 
@@ -66,7 +66,7 @@ export function LoginScreen({ loading, error, onSubmit, onSwitchToSignup }: Logi
                 PP
               </div>
               <div className="min-w-0">
-                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">PermitPulse CRM</div>
+                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">PermitPulse Ops</div>
                 <div className="text-[11px] uppercase tracking-[0.18em] text-orange-700 dark:text-orange-200">
                   Workspace access
                 </div>
@@ -79,7 +79,7 @@ export function LoginScreen({ loading, error, onSubmit, onSwitchToSignup }: Logi
               Sign in to your workspace
             </h2>
             <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">
-              Sign in to run scanning, enrichment, outreach, and workspace administration inside your tenant.
+              Sign in to run scanning, enrichment, outreach, and workspace administration inside your operator workspace.
             </p>
 
             <form className="mt-6 space-y-4" onSubmit={handleSubmit}>

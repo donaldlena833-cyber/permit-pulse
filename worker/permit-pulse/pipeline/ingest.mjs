@@ -1,5 +1,5 @@
 import nycDob from '../sources/nyc-dob.mjs';
-import { METROGLASS_PROFILE, PERMIT_RELEVANCE_RULES } from '../config.mjs';
+import { DEFAULT_LEAD_PROFILE, DEFAULT_PERMIT_RELEVANCE_RULES } from '../lib/lead-profile.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
 import { eq } from '../lib/supabase.mjs';
 import {
@@ -66,9 +66,9 @@ export const GLASS_RELEVANCE = {
   crane: 0.0,
 };
 
-const DIRECT_KEYWORDS = METROGLASS_PROFILE.directKeywords.map((keyword) => normalizeText(keyword));
-const INFERRED_KEYWORDS = METROGLASS_PROFILE.inferredKeywords.map((keyword) => normalizeText(keyword));
-const NEGATIVE_KEYWORDS = METROGLASS_PROFILE.negativeKeywords.map((keyword) => normalizeText(keyword));
+const DIRECT_KEYWORDS = DEFAULT_LEAD_PROFILE.directKeywords.map((keyword) => normalizeText(keyword));
+const INFERRED_KEYWORDS = DEFAULT_LEAD_PROFILE.inferredKeywords.map((keyword) => normalizeText(keyword));
+const NEGATIVE_KEYWORDS = DEFAULT_LEAD_PROFILE.negativeKeywords.map((keyword) => normalizeText(keyword));
 const ARCHITECT_SIGNAL_TERMS = ['architect', 'architects', 'architecture', 'design', 'designer', 'interior', 'interiors', 'studio', 'atelier'];
 const RESIDENTIAL_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|interior|apartment|condo|co-op|shower|partition|mirror|cabinet|plumbing/i;
 const WIDER_INTERIOR_SCOPE_PATTERN = /bathroom|kitchen|renovation|remodel|alteration|interior|apartment|condo|co-op|partition|door|mirror|cabinet|finish|fixture|tile|millwork|residential|dwelling|plumbing/i;
@@ -118,7 +118,7 @@ export function scorePermitRelevance(input) {
   const directHits = countKeywordHits(lower, DIRECT_KEYWORDS);
   const inferredHits = countKeywordHits(lower, INFERRED_KEYWORDS);
   const negativeHits = countKeywordHits(lower, NEGATIVE_KEYWORDS);
-  const matchedRule = PERMIT_RELEVANCE_RULES
+  const matchedRule = DEFAULT_PERMIT_RELEVANCE_RULES
     .filter((rule) => lower.includes(normalizeText(rule.keyword)))
     .sort((left, right) => right.score - left.score)[0] || null;
 

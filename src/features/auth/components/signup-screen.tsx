@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react"
-import { LoaderCircle, Sparkles, Users, Wallet } from "lucide-react"
+import { LoaderCircle, ShieldCheck, Sparkles, Users } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -50,9 +50,9 @@ export function SignupScreen({ loading, error, onSubmit, onSwitchToLogin }: Sign
                 <p className="mt-1 text-sm leading-6 text-navy-500">Business info, sender identity, workspace PDF, and first campaign in one flow.</p>
               </div>
               <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/90 p-4">
-                <Wallet className="h-5 w-5 text-orange-600" />
-                <div className="mt-3 text-sm font-semibold text-navy-900">Owner billing</div>
-                <p className="mt-1 text-sm leading-6 text-navy-500">Checkout and billing portal are locked to the owner role.</p>
+                <ShieldCheck className="h-5 w-5 text-orange-600" />
+                <div className="mt-3 text-sm font-semibold text-navy-900">Internal-first</div>
+                <p className="mt-1 text-sm leading-6 text-navy-500">Mailbox setup stays manual for now so MetroGlass can keep using the system safely every day.</p>
               </div>
             </div>
           </div>

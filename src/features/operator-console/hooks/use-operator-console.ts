@@ -4,7 +4,6 @@ import { toast } from "sonner"
 import {
   addManualLeadEmail,
   archiveLead,
-  createWorkspaceUser,
   enrichLeadNow,
   fetchConfig,
   fetchHealth,
@@ -46,7 +45,7 @@ import {
   uploadWorkspaceAttachment,
   vouchLead,
   runProspectDailySendNow,
-} from "@/features/metroglass-leads/lib/remote"
+} from "@/features/operator-console/lib/remote"
 import type {
   AppTab,
   ConfigPayload,
@@ -60,7 +59,7 @@ import type {
   ProspectStatus,
   SystemPayload,
   TodayPayload,
-} from "@/features/metroglass-leads/types/api"
+} from "@/features/operator-console/types/api"
 
 function scopeTypeLabel(scopeType: "email" | "domain" | "company") {
   if (scopeType === "email") return "Email"
@@ -72,7 +71,7 @@ function sumCounts(values?: Record<string, number>) {
   return Object.values(values ?? {}).reduce((total, value) => total + Number(value || 0), 0)
 }
 
-export function useMetroglassLeads() {
+export function useOperatorConsole() {
   const [tab, setTab] = useState<AppTab>("today")
   const [health, setHealth] = useState<HealthPayload | null>(null)
   const [today, setToday] = useState<TodayPayload | null>(null)
@@ -546,6 +545,9 @@ export function useMetroglassLeads() {
     markReplied: (leadId: string) => runAction(leadId, async () => {
       await markOutcome(leadId, { outcome: "replied" })
     }, "Reply recorded"),
+    markOptedOut: (leadId: string) => runAction(leadId, async () => {
+      await markOutcome(leadId, { outcome: "opted_out" })
+    }, "Opt-out recorded"),
     markWon: (leadId: string) => runAction(leadId, async () => {
       await markOutcome(leadId, { outcome: "won" })
     }, "Lead marked won"),
@@ -673,21 +675,6 @@ export function useMetroglassLeads() {
         toast.success("Workspace attachment updated")
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Attachment upload failed")
-        throw error
-      }
-    },
-    createWorkspaceUser: async (payload: {
-      email: string
-      password: string
-      full_name?: string
-      role?: "owner" | "admin" | "member"
-    }) => {
-      try {
-        await createWorkspaceUser(payload)
-        await refreshSystem()
-        toast.success("Workspace user created")
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "User creation failed")
         throw error
       }
     },

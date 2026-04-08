@@ -14,20 +14,20 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Panel } from "@/features/metroglass-leads/components/panel"
+import { Panel } from "@/features/operator-console/components/panel"
 import {
   formatDate,
   formatProspectCategory,
   formatProspectQueueState,
   formatRelativeTime,
-} from "@/features/metroglass-leads/lib/format"
+} from "@/features/operator-console/lib/format"
 import type {
   ProspectCategory,
   ProspectRow,
   ProspectsPayload,
   ProspectStatus,
-} from "@/features/metroglass-leads/types/api"
-import { analyzeCsvText, parseCsvText } from "@/features/metroglass-prospects/lib/csv"
+} from "@/features/operator-console/types/api"
+import { analyzeCsvText, parseCsvText } from "@/features/prospect-workspace/lib/csv"
 
 const CATEGORY_VALUES: ProspectCategory[] = [
   "architect",

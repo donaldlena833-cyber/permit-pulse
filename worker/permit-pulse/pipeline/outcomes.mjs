@@ -170,7 +170,7 @@ export async function markLeadOutcome(db, leadId, payload, actorId = null) {
   const domain = activeEmail?.split('@')[1] || '';
   const outcome = payload.outcome;
 
-  if (['bounced', 'replied', 'delivered'].includes(outcome) && activeEmail) {
+  if (['bounced', 'replied', 'delivered', 'opted_out'].includes(outcome) && activeEmail) {
     await recordEmailOutcome(db, leadId, activeEmail, outcome, payload.bounce_type || null, payload.bounce_reason || null);
   }
 
@@ -226,6 +226,15 @@ export async function markLeadOutcome(db, leadId, payload, actorId = null) {
         updated_at: new Date().toISOString(),
       });
     }
+  }
+
+  if (outcome === 'opted_out') {
+    await cancelFollowUps(db, leadId, 'opted_out');
+    await db.update('v2_leads', [`id=eq.${leadId}`], {
+      status: 'archived',
+      operator_notes: payload.notes || lead.operator_notes || '',
+      updated_at: new Date().toISOString(),
+    });
   }
 
   if (outcome === 'won' || outcome === 'lost') {

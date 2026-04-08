@@ -8,6 +8,11 @@ export type ProspectQueueState = "queued_initial" | "sent" | "queued_follow_up" 
 export type WorkspaceRole = "owner" | "admin" | "member"
 export type WorkspaceStatus = "active" | "invited" | "disabled"
 
+export interface WorkspaceCapabilities {
+  mailbox_self_serve_connect: boolean
+  billing_self_serve_enabled: boolean
+}
+
 export interface LeadRow {
   id: string
   permit_number: string
@@ -659,6 +664,7 @@ export interface OnboardingPayload {
   requires_bootstrap: boolean
   email?: string
   suggested_slug?: string
+  capabilities?: WorkspaceCapabilities
   account?: WorkspaceAccount
   current_member?: WorkspaceMember
   onboarding?: OnboardingState | null
@@ -722,6 +728,7 @@ export interface SystemPayload {
   account: WorkspaceAccount
   current_member: WorkspaceMember
   members: WorkspaceMember[]
+  capabilities?: WorkspaceCapabilities
   onboarding?: OnboardingState | null
   attachments?: WorkspaceAttachment[]
   default_attachment?: WorkspaceAttachment | null

@@ -2,9 +2,9 @@ import { AlertTriangle, LoaderCircle, Mail, PhoneCall, RefreshCw, ShieldCheck, U
 
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
-import { Panel } from "@/features/metroglass-leads/components/panel"
-import { formatProspectCategory, formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
-import type { LeadRow, ProspectCategory, TodayPayload } from "@/features/metroglass-leads/types/api"
+import { Panel } from "@/features/operator-console/components/panel"
+import { formatProspectCategory, formatRelativeTime, formatScore } from "@/features/operator-console/lib/format"
+import type { LeadRow, ProspectCategory, TodayPayload } from "@/features/operator-console/types/api"
 
 interface TodayScreenProps {
   today: TodayPayload | null

@@ -15,7 +15,7 @@ import type {
   WorkspaceMailbox,
   WorkspaceMember,
   WorkspaceMetricSeries,
-} from "@/features/metroglass-leads/types/api"
+} from "@/features/operator-console/types/api"
 
 function apiBase(): string {
   return __PERMIT_PULSE_WORKER_URL__.replace(/\/$/, "")
@@ -411,24 +411,6 @@ export function uploadWorkspaceAttachment(payload: {
   })
 }
 
-export function createWorkspaceUser(payload: {
-  email: string
-  full_name?: string
-  role?: "owner" | "admin" | "member"
-}) {
-  return requestJson<{
-    member: WorkspaceMember
-    invite_url?: string | null
-    auth_invite_url?: string | null
-  }>("/api/account/users", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  })
-}
-
 export function syncOutreachRepliesNow() {
   return requestJson<{
     checked_at: string
@@ -586,18 +568,6 @@ export function transferWorkspaceOwnershipRequest(memberId: string) {
     `/api/account/members/${encodeURIComponent(memberId)}/transfer-ownership`,
     { method: "POST" },
   )
-}
-
-export function createBillingCheckout() {
-  return requestJson<{ url: string; session_id: string }>("/api/billing/checkout", {
-    method: "POST",
-  })
-}
-
-export function createBillingPortal() {
-  return requestJson<{ url: string }>("/api/billing/portal", {
-    method: "POST",
-  })
 }
 
 export function fetchAuditLog(page = 1, limit = 20) {
