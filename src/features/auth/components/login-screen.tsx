@@ -8,10 +8,11 @@ interface LoginScreenProps {
   loading: boolean
   error?: string | null
   onSubmit: (email: string, password: string) => Promise<void>
+  onSwitchToSignup?: () => void
 }
 
-export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
-  const [email, setEmail] = useState("operations@metroglasspro.com")
+export function LoginScreen({ loading, error, onSubmit, onSwitchToSignup }: LoginScreenProps) {
+  const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -28,15 +29,15 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
             <div>
               <div className="inline-flex items-center gap-3 rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/20 dark:text-orange-200">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500 text-white">
-                  MG
+                  PP
                 </div>
-                MetroGlass Leads
+                PermitPulse CRM
               </div>
               <h1 className="mt-6 max-w-2xl text-[2rem] font-semibold tracking-[-0.05em] text-navy-900 sm:text-5xl dark:text-dark-text">
-                Private lead ops for real permit-driven outreach.
+                Private lead ops for real outbound CRM work.
               </h1>
               <p className="mt-3 max-w-xl text-sm leading-6 text-navy-600 sm:text-base sm:leading-7 dark:text-dark-muted">
-                Scan DOB permits, resolve the real company, pick the best recipient, and send through Gmail from one controlled workspace.
+                Run permit scanning, enrichment, and Gmail outreach from one private workspace you can turn into a real client account.
               </p>
             </div>
 
@@ -62,35 +63,36 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
           <div className="rounded-[28px] border border-navy-200/70 bg-white/88 p-5 shadow-[0_24px_90px_rgba(70,55,37,0.12)] backdrop-blur-xl sm:rounded-[32px] sm:p-8 dark:border-dark-border/70 dark:bg-dark-card/92">
             <div className="mb-5 flex items-center gap-3 rounded-full border border-orange-200 bg-orange-50/80 px-3.5 py-2 sm:hidden dark:border-orange-800/50 dark:bg-orange-900/20">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-500 text-xs font-semibold text-white">
-                MG
+                PP
               </div>
               <div className="min-w-0">
-                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">MetroGlass Leads</div>
+                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">PermitPulse CRM</div>
                 <div className="text-[11px] uppercase tracking-[0.18em] text-orange-700 dark:text-orange-200">
-                  Internal access
+                  Workspace access
                 </div>
               </div>
             </div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-orange-600 dark:text-orange-300">
-              Internal access
+              Workspace access
             </div>
             <h2 className="mt-2 text-[1.75rem] font-semibold tracking-[-0.04em] text-navy-900 sm:mt-3 sm:text-3xl dark:text-dark-text">
-              Sign in to MetroGlass Leads
+              Sign in to your workspace
             </h2>
             <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">
-              Private MetroGlass Pro workspace for scanning, enrichment, and Gmail outreach.
+              Sign in to run scanning, enrichment, outreach, and workspace administration inside your tenant.
             </p>
 
             <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.18em] text-navy-500 dark:text-dark-muted">
-                  Email
+                  Email or username
                 </label>
                 <Input
-                  autoComplete="email"
+                  autoComplete="username"
                   className="h-12 rounded-2xl border-navy-200 bg-white/90 px-4 dark:border-dark-border dark:bg-dark-bg"
                   onChange={(event) => setEmail(event.target.value)}
-                  type="email"
+                  placeholder="operations@metroglasspro.com or lokeil"
+                  type="text"
                   value={email}
                 />
               </div>
@@ -129,6 +131,12 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
                 )}
               </Button>
             </form>
+
+            {onSwitchToSignup ? (
+              <button className="mt-4 text-sm font-medium text-orange-700" onClick={onSwitchToSignup} type="button">
+                Need a new owner workspace? Create an account.
+              </button>
+            ) : null}
           </div>
         </div>
       </div>

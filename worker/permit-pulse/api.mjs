@@ -1,4 +1,4 @@
-import { getDefaultAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
+import { getAttachmentStatus, hasGmailAutomation } from './lib/gmail.mjs';
 import { isApprovedRouteCandidate, isPublishedEmailCandidate, isOfficialSitePublishedContact, withApprovedTrustFloor } from './lib/email-approval.mjs';
 import {
   getProspectAutomationOverview,
@@ -18,7 +18,29 @@ import {
   runScheduledProspectPilot,
 } from './lib/prospects.mjs';
 import { createSupabaseClient, eq, inList, order } from './lib/supabase.mjs';
-import { getAppConfig } from './lib/config.mjs';
+import {
+  acceptWorkspaceInvite,
+  archiveWorkspaceAttachment,
+  beginGmailMailboxConnect,
+  bootstrapWorkspaceOwner,
+  createWorkspaceInvite,
+  disableWorkspaceMember,
+  getOnboardingState,
+  getWorkspaceInvite,
+  listWorkspaceAttachments,
+  listWorkspaceMailboxes,
+  resendWorkspaceInvite,
+  resolveTenantContext,
+  setWorkspaceAttachmentDefault,
+  transferWorkspaceOwnership,
+  updateOnboardingProfile,
+  updateWorkspaceAccount,
+  updateWorkspaceMemberRole,
+  uploadWorkspaceAttachment,
+} from './lib/account.mjs';
+import { listAuditEvents } from './lib/audit.mjs';
+import { createBillingCheckoutSession, createBillingPortalSession, handleBillingWebhook } from './lib/billing.mjs';
+import { getAppConfig, saveAppConfig } from './lib/config.mjs';
 import { countPendingAutomationLeads, listPendingAutomationLeads, summarizeRunQueue } from './lib/automation-queue.mjs';
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle, startLeadBatchAutomation } from './pipeline/engine.mjs';
 import { generateLeadDraft } from './pipeline/draft.mjs';
@@ -35,6 +57,7 @@ import {
 } from './pipeline/outcomes.mjs';
 import { readReplySyncState, syncOutreachReplies } from './lib/reply-sync.mjs';
 import { completeRun, createRun, failRun } from './lib/runs.mjs';
+import { createTenantScopedDb, resolveSharedProspectTenantId } from './lib/tenant-db.mjs';
 
 function corsHeaders() {
   return {
@@ -88,6 +111,175 @@ function parseBody(request) {
     }
     return JSON.parse(text);
   });
+}
+
+function minutesAgo(timestamp) {
+  if (!timestamp) {
+    return null;
+  }
+
+  const value = new Date(timestamp).getTime();
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return Math.max(Math.round((Date.now() - value) / (1000 * 60)), 0);
+}
+
+function freshnessStatus(timestamp, thresholds = { healthy: 90, warning: 360 }) {
+  const ageMinutes = minutesAgo(timestamp);
+  if (ageMinutes === null) {
+    return {
+      status: 'missing',
+      age_minutes: null,
+    };
+  }
+
+  if (ageMinutes <= thresholds.healthy) {
+    return {
+      status: 'healthy',
+      age_minutes: ageMinutes,
+    };
+  }
+
+  if (ageMinutes <= thresholds.warning) {
+    return {
+      status: 'warning',
+      age_minutes: ageMinutes,
+    };
+  }
+
+  return {
+    status: 'stale',
+    age_minutes: ageMinutes,
+  };
+}
+
+async function buildWorkspaceMetrics(db) {
+  const [leadOutcomes, prospectOutcomes, runs] = await Promise.all([
+    db.select('v2_email_outcomes', {
+      columns: 'outcome,sent_at,created_at',
+      ordering: [order('created_at', 'desc')],
+      limit: 500,
+    }).catch(() => []),
+    db.select('v2_prospect_outcomes', {
+      columns: 'outcome,sent_at,created_at',
+      ordering: [order('created_at', 'desc')],
+      limit: 500,
+    }).catch(() => []),
+    db.select('v2_automation_runs', {
+      columns: 'status,created_at,sends_succeeded,sends_failed',
+      ordering: [order('created_at', 'desc')],
+      limit: 120,
+    }).catch(() => []),
+  ]);
+
+  const last30Days = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000));
+  const recentLeadOutcomes = leadOutcomes.filter((row) => new Date(row.sent_at || row.created_at || 0) >= last30Days);
+  const recentProspectOutcomes = prospectOutcomes.filter((row) => new Date(row.sent_at || row.created_at || 0) >= last30Days);
+  const recentRuns = runs.filter((row) => new Date(row.created_at || 0) >= last30Days);
+
+  return {
+    lead_sends_30d: recentLeadOutcomes.filter((row) => row.outcome === 'sent').length,
+    prospect_sends_30d: recentProspectOutcomes.filter((row) => row.outcome === 'sent').length,
+    prospect_positive_replies_30d: recentProspectOutcomes.filter((row) => row.outcome === 'positive_reply').length,
+    prospect_opt_outs_30d: recentProspectOutcomes.filter((row) => row.outcome === 'opt_out').length,
+    runs_30d: recentRuns.length,
+    runs_failed_30d: recentRuns.filter((row) => row.status === 'failed').length,
+  };
+}
+
+function resolveRedirectBase(env, requestUrl) {
+  const configured = String(env?.PERMIT_PULSE_APP_URL || env?.PUBLIC_APP_URL || env?.APP_URL || '').trim().replace(/\/$/, '');
+  if (configured) {
+    return configured;
+  }
+
+  try {
+    return new URL(requestUrl).origin;
+  } catch {
+    return '';
+  }
+}
+
+async function buildSystemPayload(env, db, tenantContext) {
+  const [attachment, recentFailureRows, totalLeads, totalProspects, domainHealth, runs, replySync, config, metrics] = await Promise.all([
+    getAttachmentStatus(env, {
+      attachmentKey: tenantContext.tenant?.default_attachment?.storage_key || undefined,
+      attachmentFilename: tenantContext.tenant?.default_attachment?.filename || undefined,
+      attachmentContentType: tenantContext.tenant?.default_attachment?.content_type || undefined,
+    }),
+    db.select('v2_lead_jobs', {
+      filters: [eq('status', 'failed')],
+      ordering: [order('created_at', 'desc')],
+      limit: 25,
+    }),
+    db.select('v2_leads', { columns: 'id' }),
+    db.select('v2_prospects', { columns: 'id' }).catch(() => []),
+    db.select('v2_domain_health', { columns: 'domain,health_score,checked_at', limit: 20 }).catch(() => []),
+    db.select('v2_automation_runs', {
+      ordering: [order('created_at', 'desc')],
+      limit: 5,
+    }),
+    readReplySyncState(env, { scopeKey: tenantContext.reply_sync_scope_key || tenantContext.tenant.id }),
+    getAppConfig(db),
+    buildWorkspaceMetrics(db),
+  ]);
+
+  const recentFailures = recentFailureRows
+    .filter((failure) => !isBenignSystemFailure(failure))
+    .slice(0, 5);
+  const latestRun = runs[0] || null;
+  const workspaceHealth = {
+    mailbox_connected: Boolean(tenantContext.tenant?.default_mailbox?.email),
+    mailbox_email: tenantContext.tenant?.default_mailbox?.email || null,
+    attachment_loaded: Boolean(attachment.loaded),
+    attachment_filename: attachment.filename || null,
+    billing_status: tenantContext.tenant.subscription_status,
+    run_freshness: freshnessStatus(latestRun?.created_at || latestRun?.started_at || null, {
+      healthy: 180,
+      warning: 720,
+    }),
+    reply_sync_freshness: freshnessStatus(replySync?.checked_at || null, {
+      healthy: 180,
+      warning: 720,
+    }),
+    outbound_safety: {
+      permit_auto_send_enabled: Boolean(config.permit_auto_send_enabled),
+      daily_send_cap: Number(config.daily_send_cap || 0),
+      auto_send_trust_threshold: Number(config.auto_send_trust_threshold || 0),
+      follow_up_enabled: Boolean(config.follow_up_enabled),
+    },
+  };
+
+  return {
+    account: tenantContext.presentedTenant,
+    current_member: tenantContext.presentedMember,
+    members: tenantContext.members,
+    onboarding: tenantContext.onboarding,
+    attachments: tenantContext.attachments,
+    default_attachment: tenantContext.tenant?.default_attachment || null,
+    mailboxes: tenantContext.mailboxes,
+    default_mailbox: tenantContext.tenant?.default_mailbox || null,
+    billing: {
+      status: tenantContext.tenant.subscription_status,
+      stripe_customer_id: tenantContext.tenant.stripe_customer_id || null,
+      stripe_subscription_id: tenantContext.tenant.stripe_subscription_id || null,
+      owner_only: true,
+    },
+    worker: {
+      ok: workspaceHealth.mailbox_connected && attachment.loaded,
+      has_gmail_client: hasGmailAutomation(env),
+    },
+    health: workspaceHealth,
+    metrics,
+    total_leads: totalLeads.length,
+    total_prospects: totalProspects.length,
+    recent_failures: recentFailures,
+    domain_health_reference: domainHealth,
+    recent_runs: await Promise.all(runs.map((run) => presentRun(db, run))),
+    reply_sync: replySync,
+  };
 }
 
 function tierOrder(tier) {
@@ -263,10 +455,9 @@ async function getProcessedLeadsForRun(db, run) {
   }
 }
 
-async function getTodayPayload(env) {
-  const db = createSupabaseClient(env);
+async function getTodayPayload(env, db, tenantContext) {
   const config = await getAppConfig(db);
-  const { currentRun, lastRun } = await getLatestRuns(env);
+  const { currentRun, lastRun } = await getLatestRuns(env, { db });
   const displayRun = currentRun || lastRun || null;
   const [
     presentedCurrentRun,
@@ -313,7 +504,9 @@ async function getTodayPayload(env) {
     }),
     getProcessedLeadsForRun(db, displayRun),
     getProspectAutomationOverview(db, config),
-    readReplySyncState(env),
+    readReplySyncState(env, {
+      scopeKey: tenantContext?.sharedProspectTenantId || tenantContext?.tenant?.id || 'global',
+    }),
   ]);
 
   const leadIds = [...new Set([...followUps.map((row) => row.lead_id), ...sentOutcomes.map((row) => row.lead_id)])];
@@ -344,7 +537,7 @@ async function getTodayPayload(env) {
     .slice(0, 40);
 
   return {
-    greeting: `Good ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(new Date()) < 12 ? 'morning' : 'afternoon'}, Donald`,
+    greeting: `Good ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: config.prospect_timezone || 'America/New_York' }).format(new Date()) < 12 ? 'morning' : 'afternoon'}, ${tenantContext?.tenant?.sender_name || 'there'}`,
     daily_cap: {
       sent: sentToday.length,
       cap,
@@ -392,8 +585,7 @@ async function getTodayPayload(env) {
   };
 }
 
-async function getLeadDetail(env, leadId) {
-  const db = createSupabaseClient(env);
+async function getLeadDetail(db, leadId) {
   const [lead, companies, emails, followUps, timeline, relatedPermits] = await Promise.all([
     db.single('v2_leads', { filters: [eq('id', leadId)] }),
     db.select('v2_company_candidates', {
@@ -472,8 +664,7 @@ async function getLeadDetail(env, leadId) {
   };
 }
 
-async function listLeads(env, requestUrl) {
-  const db = createSupabaseClient(env);
+async function listLeads(db, requestUrl) {
   const page = Math.max(1, Number(requestUrl.searchParams.get('page') || 1));
   const limit = Math.min(50, Math.max(1, Number(requestUrl.searchParams.get('limit') || 20)));
   const status = requestUrl.searchParams.get('status');
@@ -533,7 +724,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
   }
 
   if (url.pathname === '/api/health' && request.method === 'GET') {
-    const attachment = await getDefaultAttachmentStatus(env);
+    const attachment = await getAttachmentStatus(env);
     return json({
       ok: true,
       hasSupabase: Boolean(env.SUPABASE_URL && (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY)),
@@ -546,24 +737,91 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     });
   }
 
+  const rawDb = createSupabaseClient(env);
+
+  if (url.pathname === '/api/billing/webhook' && request.method === 'POST') {
+    try {
+      return json(await handleBillingWebhook(request, env, rawDb));
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : 'Webhook failed' }, 400);
+    }
+  }
+
+  const inviteMatch = url.pathname.match(/^\/api\/account\/invites\/([^/]+)$/);
+  if (inviteMatch && request.method === 'GET') {
+    try {
+      return json(await getWorkspaceInvite(rawDb, decodeURIComponent(inviteMatch[1])));
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : 'Invite not found' }, 404);
+    }
+  }
+
+  if (url.pathname === '/api/account/mailboxes/gmail/callback' && request.method === 'GET') {
+    try {
+      const result = await completeGmailMailboxConnect(env, rawDb, {
+        state: url.searchParams.get('state'),
+        code: url.searchParams.get('code'),
+        error: url.searchParams.get('error'),
+      });
+      const destination = `${resolveRedirectBase(env, request.url)}${result.redirect_path || '/app/settings'}?gmail=connected`;
+      return Response.redirect(destination, 302);
+    } catch (error) {
+      const destination = `${resolveRedirectBase(env, request.url)}/app/settings?gmail=error&message=${encodeURIComponent(error instanceof Error ? error.message : 'Gmail connect failed')}`;
+      return Response.redirect(destination, 302);
+    }
+  }
+
   const user = await authenticateRequest(request, env);
   if (!user) {
     return json({ error: 'Unauthorized' }, 401);
   }
 
-  const db = createSupabaseClient(env);
+  if (url.pathname === '/api/onboarding' && request.method === 'GET') {
+    return json(await getOnboardingState(rawDb, user));
+  }
+
+  if (url.pathname === '/api/onboarding/bootstrap' && request.method === 'POST') {
+    const body = await parseBody(request);
+    const tenantContext = await bootstrapWorkspaceOwner(rawDb, user, body);
+    return json({
+      account: tenantContext.presentedTenant,
+      current_member: tenantContext.presentedMember,
+      onboarding: tenantContext.onboarding,
+      attachments: tenantContext.attachments,
+      mailboxes: tenantContext.mailboxes,
+    }, 201);
+  }
+
+  if (inviteMatch && request.method === 'POST') {
+    return json(await acceptWorkspaceInvite(rawDb, user, decodeURIComponent(inviteMatch[1])));
+  }
+
+  const tenantContext = await resolveTenantContext(rawDb, user);
+
+  if (!tenantContext) {
+    return json({ error: 'No workspace access configured for this user' }, 403);
+  }
+
+  const sharedProspectTenantId = await resolveSharedProspectTenantId(rawDb, tenantContext.tenant.id);
+  tenantContext.sharedProspectTenantId = sharedProspectTenantId;
+  const replySyncScopeKey = sharedProspectTenantId || tenantContext.tenant.id;
+  const db = createTenantScopedDb(rawDb, tenantContext.tenant.id, {
+    sharedProspectTenantId,
+  });
 
   try {
     if (url.pathname === '/api/today' && request.method === 'GET') {
-      return json(await getTodayPayload(env));
+      return json(await getTodayPayload(env, db, tenantContext));
     }
 
     if (url.pathname === '/api/scan' && request.method === 'POST') {
       const { run, task, activeRunReused } = await startAutomationCycle(env, {
+        db,
         triggerType: 'operator',
         triggeredBy: user.email || null,
         mode: 'operator_scan',
         skipFollowUps: true,
+        workspace: tenantContext.tenant,
       });
 
       if (task && ctx?.waitUntil) {
@@ -591,8 +849,10 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     if ((url.pathname === '/api/leads/enrich-batch' || url.pathname === '/api/leads/automate-batch') && request.method === 'POST') {
       const body = await parseBody(request);
       const { run, accepted, task } = await startLeadBatchAutomation(env, parseLeadIds(body), {
+        db,
         triggerType: 'operator',
         triggeredBy: user.email || null,
+        workspace: tenantContext.tenant,
       });
 
       if (ctx?.waitUntil) {
@@ -619,11 +879,14 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     if (url.pathname === '/api/leads/send-ready' && request.method === 'POST') {
       const config = await getAppConfig(db);
-      return json(await sendReadyLeads(env, db, null, config));
+      return json(await sendReadyLeads(env, db, null, config, {
+        ignoreDailyCap: true,
+        workspace: tenantContext.tenant,
+      }));
     }
 
     if (url.pathname === '/api/leads' && request.method === 'GET') {
-      return json(await listLeads(env, url));
+      return json(await listLeads(db, url));
     }
 
     if (url.pathname === '/api/prospects' && request.method === 'GET') {
@@ -635,7 +898,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
           page: Number(url.searchParams.get('page') || 1),
           limit: Number(url.searchParams.get('limit') || 20),
         }),
-        readReplySyncState(env),
+        readReplySyncState(env, { scopeKey: replySyncScopeKey }),
       ]);
       return json({
         ...payload,
@@ -655,13 +918,18 @@ export async function handlePermitPulseRequest(request, env, ctx) {
       return json(await syncOutreachReplies(env, db, {
         maxResults: 60,
         newerThanDays: 21,
+        queueUnmatched: false,
+        scopeKey: replySyncScopeKey,
+        mailbox: tenantContext.tenant.default_mailbox || null,
       }));
     }
 
     if (url.pathname === '/api/prospects/run-daily-send' && request.method === 'POST') {
       return json(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
+        ignoreDailyCap: true,
         mode: 'prospect_manual_send',
         slotKey: null,
+        workspace: tenantContext.tenant,
       }));
     }
 
@@ -680,6 +948,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
       const body = await parseBody(request);
       return json(await processDueFollowUps(env, db, {
         limit: Number(body?.limit || 20),
+        workspace: tenantContext.tenant,
       }));
     }
 
@@ -694,7 +963,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (runMatch && request.method === 'GET') {
-      const run = await getRunById(env, decodeURIComponent(runMatch[1]));
+      const run = await getRunById(env, decodeURIComponent(runMatch[1]), { db });
       return json(run ? await presentRun(db, run) : { error: 'Run not found' }, run ? 200 : 404);
     }
 
@@ -706,7 +975,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const prospectSendMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/send$/);
     if (prospectSendMatch && request.method === 'POST') {
-      return json(await sendProspect(env, db, decodeURIComponent(prospectSendMatch[1]), user.email || null));
+      return json(await sendProspect(env, db, decodeURIComponent(prospectSendMatch[1]), user.email || null, tenantContext.tenant));
     }
 
     const prospectReplyMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/reply$/);
@@ -757,7 +1026,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const leadMatch = url.pathname.match(/^\/api\/leads\/([^/]+)$/);
     if (leadMatch && request.method === 'GET') {
-      const detail = await getLeadDetail(env, decodeURIComponent(leadMatch[1]));
+      const detail = await getLeadDetail(db, decodeURIComponent(leadMatch[1]));
       return json(detail || { error: 'Lead not found' }, detail ? 200 : 404);
     }
 
@@ -767,14 +1036,17 @@ export async function handlePermitPulseRequest(request, env, ctx) {
       return json(await sendLead(env, db, decodeURIComponent(sendMatch[1]), {
         actorId: user.email || null,
         followUpSequence: config.follow_up_sequence,
+        workspace: tenantContext.tenant,
       }));
     }
 
     const enrichMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/enrich$/);
     if (enrichMatch && request.method === 'POST') {
       return json(await enrichLead(env, decodeURIComponent(enrichMatch[1]), {
+        db,
         triggerType: 'retry',
         triggeredBy: user.email || null,
+        workspace: tenantContext.tenant,
       }));
     }
 
@@ -832,15 +1104,15 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const draftRefreshMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/draft\/refresh$/);
     if (draftRefreshMatch && request.method === 'POST') {
-      return json(await generateLeadDraft(db, null, decodeURIComponent(draftRefreshMatch[1])));
+      return json(await generateLeadDraft(db, null, decodeURIComponent(draftRefreshMatch[1]), tenantContext.tenant));
     }
 
     const draftMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/draft$/);
     if (draftMatch && request.method === 'PUT') {
       const body = await parseBody(request);
       const [lead] = await db.update('v2_leads', [`id=eq.${decodeURIComponent(draftMatch[1])}`], {
-        draft_subject: body.subject || '',
-        draft_body: body.body || '',
+        draft_subject: typeof body.subject === 'string' ? body.subject.trim() : '',
+        draft_body: typeof body.body === 'string' ? body.body.trim() : '',
         draft_cta_type: body.cta_type || '',
         updated_at: new Date().toISOString(),
       });
@@ -858,7 +1130,14 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const followUpSendMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/follow-ups\/([^/]+)\/send$/);
     if (followUpSendMatch && request.method === 'POST') {
-      return json(await sendFollowUp(env, db, decodeURIComponent(followUpSendMatch[1]), Number(followUpSendMatch[2]), user.email || null));
+      return json(await sendFollowUp(
+        env,
+        db,
+        decodeURIComponent(followUpSendMatch[1]),
+        Number(followUpSendMatch[2]),
+        user.email || null,
+        tenantContext.tenant,
+      ));
     }
 
     const followUpSkipMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/follow-ups\/([^/]+)\/skip$/);
@@ -880,44 +1159,150 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     if (url.pathname === '/api/config' && request.method === 'PUT') {
       const body = await parseBody(request);
-      const payload = Object.entries(body || {}).map(([key, value]) => ({ key, value }));
-      if (payload.length > 0) {
-        await db.upsert('v2_app_config', payload, 'key');
+      const previousConfig = await getAppConfig(db);
+      const nextConfig = await saveAppConfig(db, body);
+      const trackedKeys = ['permit_auto_send_enabled', 'daily_send_cap', 'auto_send_trust_threshold', 'manual_send_trust_threshold', 'follow_up_enabled'];
+      const changed = trackedKeys
+        .filter((key) => JSON.stringify(previousConfig?.[key]) !== JSON.stringify(nextConfig?.[key]))
+        .reduce((result, key) => {
+          result[key] = {
+            before: previousConfig?.[key],
+            after: nextConfig?.[key],
+          };
+          return result;
+        }, {});
+
+      if (Object.keys(changed).length > 0) {
+        await appendAuditEvent(db, {
+          actorType: 'user',
+          actorId: user.email || null,
+          eventType: 'outbound_safety_settings_updated',
+          targetType: 'tenant_config',
+          targetId: tenantContext.tenant.id,
+          detail: changed,
+        });
       }
-      return json(await getAppConfig(db));
+
+      return json(nextConfig);
+    }
+
+    if (url.pathname === '/api/onboarding/profile' && request.method === 'PUT') {
+      const body = await parseBody(request);
+      return json(await updateOnboardingProfile(rawDb, tenantContext, body, user.email || null));
     }
 
     if (url.pathname === '/api/system' && request.method === 'GET') {
-      const [recentFailureRows, totalLeads, totalProspects, domainHealth, runs] = await Promise.all([
-        db.select('v2_lead_jobs', {
-          filters: [eq('status', 'failed')],
-          ordering: [order('created_at', 'desc')],
-          limit: 25,
-        }),
-        db.select('v2_leads', { columns: 'id' }),
-        db.select('v2_prospects', { columns: 'id' }).catch(() => []),
-        db.select('v2_domain_health', { columns: 'domain,health_score,checked_at', limit: 20 }),
-        db.select('v2_automation_runs', {
-          ordering: [order('created_at', 'desc')],
-          limit: 5,
-        }),
-      ]);
-      const recentFailures = recentFailureRows
-        .filter((failure) => !isBenignSystemFailure(failure))
-        .slice(0, 5);
-
-      return json({
-        worker: {
-          ok: true,
-          has_gmail: hasGmailAutomation(env),
+      return json(await buildSystemPayload(env, db, {
+        ...tenantContext,
+        reply_sync_scope_key: replySyncScopeKey,
+        tenant: {
+          ...tenantContext.tenant,
+          onboarding: tenantContext.onboarding,
+          attachments: tenantContext.attachments,
+          mailboxes: tenantContext.mailboxes,
         },
-        total_leads: totalLeads.length,
-        total_prospects: totalProspects.length,
-        recent_failures: recentFailures,
-        domain_health: domainHealth,
-        recent_runs: await Promise.all(runs.map((run) => presentRun(db, run))),
-        reply_sync: await readReplySyncState(env),
-      });
+      }));
+    }
+
+    if (url.pathname === '/api/system/audit' && request.method === 'GET') {
+      return json(await listAuditEvents(db, {
+        page: Number(url.searchParams.get('page') || 1),
+        limit: Number(url.searchParams.get('limit') || 20),
+        eventType: url.searchParams.get('event_type') || '',
+      }));
+    }
+
+    if (url.pathname === '/api/system/metrics' && request.method === 'GET') {
+      return json(await buildWorkspaceMetrics(db));
+    }
+
+    if (url.pathname === '/api/account' && request.method === 'PUT') {
+      const body = await parseBody(request);
+      return json(await updateWorkspaceAccount(rawDb, tenantContext, body, user.email || null));
+    }
+
+    if (url.pathname === '/api/account/attachments' && request.method === 'GET') {
+      return json(await listWorkspaceAttachments(rawDb, tenantContext));
+    }
+
+    if (url.pathname === '/api/account/attachments' && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await uploadWorkspaceAttachment(env, rawDb, tenantContext, body, user.email || null), 201);
+    }
+
+    if (url.pathname === '/api/account/attachment' && request.method === 'PUT') {
+      const body = await parseBody(request);
+      return json(await uploadWorkspaceAttachment(env, rawDb, tenantContext, body, user.email || null), 201);
+    }
+
+    const attachmentDefaultMatch = url.pathname.match(/^\/api\/account\/attachments\/([^/]+)\/default$/);
+    if (attachmentDefaultMatch && request.method === 'POST') {
+      return json(await setWorkspaceAttachmentDefault(
+        rawDb,
+        tenantContext,
+        decodeURIComponent(attachmentDefaultMatch[1]),
+        user.email || null,
+      ));
+    }
+
+    const attachmentArchiveMatch = url.pathname.match(/^\/api\/account\/attachments\/([^/]+)\/archive$/);
+    if (attachmentArchiveMatch && request.method === 'POST') {
+      return json(await archiveWorkspaceAttachment(
+        rawDb,
+        tenantContext,
+        decodeURIComponent(attachmentArchiveMatch[1]),
+        user.email || null,
+      ));
+    }
+
+    if (url.pathname === '/api/account/mailboxes' && request.method === 'GET') {
+      return json(await listWorkspaceMailboxes(rawDb, tenantContext));
+    }
+
+    if (url.pathname === '/api/account/mailboxes/gmail/connect' && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await beginGmailMailboxConnect(env, tenantContext, {
+        redirect_path: body.redirect_path,
+        request_origin: new URL(request.url).origin,
+      }));
+    }
+
+    if (url.pathname === '/api/account/invites' && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await createWorkspaceInvite(env, rawDb, tenantContext, body, user.email || null), 201);
+    }
+
+    if (url.pathname === '/api/account/users' && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await createWorkspaceInvite(env, rawDb, tenantContext, body, user.email || null), 201);
+    }
+
+    const memberActionMatch = url.pathname.match(/^\/api\/account\/members\/([^/]+)\/(resend|disable|role|transfer-ownership)$/);
+    if (memberActionMatch && request.method === 'POST') {
+      const memberId = decodeURIComponent(memberActionMatch[1]);
+      const action = memberActionMatch[2];
+      const body = await parseBody(request);
+
+      if (action === 'resend') {
+        return json(await resendWorkspaceInvite(env, rawDb, tenantContext, memberId, user.email || null));
+      }
+      if (action === 'disable') {
+        return json(await disableWorkspaceMember(rawDb, tenantContext, memberId, user.email || null));
+      }
+      if (action === 'role') {
+        return json(await updateWorkspaceMemberRole(rawDb, tenantContext, memberId, body.role, user.email || null));
+      }
+      if (action === 'transfer-ownership') {
+        return json(await transferWorkspaceOwnership(rawDb, tenantContext, memberId, user.email || null));
+      }
+    }
+
+    if (url.pathname === '/api/billing/checkout' && request.method === 'POST') {
+      return json(await createBillingCheckoutSession(env, rawDb, tenantContext));
+    }
+
+    if (url.pathname === '/api/billing/portal' && request.method === 'POST') {
+      return json(await createBillingPortalSession(env, rawDb, tenantContext));
     }
 
     return json({ error: 'Not found' }, 404);

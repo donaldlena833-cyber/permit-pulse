@@ -1,9 +1,11 @@
 import { getAppConfig } from '../lib/config.mjs';
 import { hasGmailAutomation } from '../lib/gmail.mjs';
+import { listActiveTenants } from '../lib/account.mjs';
 import {
   runScheduledProspectPilot,
 } from '../lib/prospects.mjs';
 import { syncOutreachReplies } from '../lib/reply-sync.mjs';
+import { createTenantScopedDb, resolveSharedProspectTenantId } from '../lib/tenant-db.mjs';
 import {
   buildSlotKey,
   isWeekdayInZone,
@@ -14,7 +16,7 @@ import { createSupabaseClient } from '../lib/supabase.mjs';
 import { backfillPermitFollowUps, processDueFollowUps } from './follow-up.mjs';
 import { runAutomationCycle } from './engine.mjs';
 
-async function runProspectSchedules(env, db, config, now) {
+async function runProspectSchedules(env, db, config, now, tenant) {
   const timeZone = config.prospect_timezone || 'America/New_York';
   if (!isWeekdayInZone(now, timeZone)) {
     return [];
@@ -30,6 +32,7 @@ async function runProspectSchedules(env, db, config, now) {
     results.push(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
       mode: 'prospect_daily_send',
       slotKey: buildSlotKey('prospect_daily_send', now, timeZone),
+      workspace: tenant,
     }));
     return results;
   }
@@ -38,6 +41,7 @@ async function runProspectSchedules(env, db, config, now) {
     results.push(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
       mode: 'prospect_initial_send',
       slotKey: buildSlotKey('prospect_initial_send', now, timeZone),
+      workspace: tenant,
     }));
   }
 
@@ -45,6 +49,7 @@ async function runProspectSchedules(env, db, config, now) {
     results.push(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
       mode: 'prospect_follow_up_send',
       slotKey: buildSlotKey('prospect_follow_up_send', now, timeZone),
+      workspace: tenant,
     }));
   }
 
@@ -56,40 +61,67 @@ function shouldRunPermitSchedule(now, timeZone = 'America/New_York') {
 }
 
 export async function runScheduledWork(env, now = new Date()) {
-  const db = createSupabaseClient(env);
-  const config = await getAppConfig(db);
+  const rawDb = createSupabaseClient(env);
+  const tenants = await listActiveTenants(rawDb);
+  const sharedProspectTenantId = await resolveSharedProspectTenantId(rawDb, tenants[0]?.id || null);
   const results = {
-    prospects: [],
-    permits: null,
-    permit_follow_ups: null,
-    permit_follow_up_backfill: null,
-    reply_sync: null,
+    workspaces: [],
   };
 
-  if (hasGmailAutomation(env)) {
-    results.reply_sync = await syncOutreachReplies(env, db, {
-      maxResults: 40,
-      newerThanDays: 21,
+  for (const tenant of tenants) {
+    const db = createTenantScopedDb(rawDb, tenant.id, {
+      sharedProspectTenantId,
     });
-  }
+    const config = await getAppConfig(db);
+    const hasWorkspaceMailbox = Boolean(tenant?.default_mailbox?.email);
+    const ownsSharedProspects = !sharedProspectTenantId || tenant.id === sharedProspectTenantId;
+    const tenantResults = {
+      tenant: {
+        id: tenant.id,
+        slug: tenant.slug,
+        name: tenant.name,
+      },
+      prospects: [],
+      permits: null,
+      permit_follow_ups: null,
+      permit_follow_up_backfill: null,
+      reply_sync: null,
+    };
 
-  if (config.prospect_pilot_enabled) {
-    results.prospects = await runProspectSchedules(env, db, config, now);
-  }
+    if (hasGmailAutomation(env) && ownsSharedProspects && hasWorkspaceMailbox) {
+      tenantResults.reply_sync = await syncOutreachReplies(env, db, {
+        maxResults: 40,
+        newerThanDays: 21,
+        queueUnmatched: false,
+        scopeKey: sharedProspectTenantId || tenant.id,
+        mailbox: tenant.default_mailbox,
+      });
+    }
 
-  if (config.follow_up_enabled) {
-    results.permit_follow_up_backfill = await backfillPermitFollowUps(db, config);
-  }
+    if (config.prospect_pilot_enabled && ownsSharedProspects && hasWorkspaceMailbox) {
+      tenantResults.prospects = await runProspectSchedules(env, db, config, now, tenant);
+    }
 
-  if (config.permit_auto_send_enabled && shouldRunPermitSchedule(now, config.prospect_timezone || 'America/New_York')) {
-    results.permits = await runAutomationCycle(env, {
-      triggerType: 'schedule',
-      triggeredBy: null,
-    });
-  }
+    if (config.follow_up_enabled) {
+      tenantResults.permit_follow_up_backfill = await backfillPermitFollowUps(db, config);
+    }
 
-  if (config.follow_up_enabled && shouldRunPermitSchedule(now, config.prospect_timezone || 'America/New_York')) {
-    results.permit_follow_ups = await processDueFollowUps(env, db);
+    if (config.permit_auto_send_enabled && hasWorkspaceMailbox && shouldRunPermitSchedule(now, config.prospect_timezone || 'America/New_York')) {
+      tenantResults.permits = await runAutomationCycle(env, {
+        db,
+        triggerType: 'schedule',
+        triggeredBy: null,
+        workspace: tenant,
+      });
+    }
+
+    if (config.follow_up_enabled && hasWorkspaceMailbox && shouldRunPermitSchedule(now, config.prospect_timezone || 'America/New_York')) {
+      tenantResults.permit_follow_ups = await processDueFollowUps(env, db, {
+        workspace: tenant,
+      });
+    }
+
+    results.workspaces.push(tenantResults);
   }
 
   return results;

@@ -5,6 +5,7 @@ import {
   ensureSession,
   type AuthSession,
   signInWithPassword,
+  signUpWithPassword,
   signOutSession,
 } from "@/features/auth/lib/session"
 
@@ -89,6 +90,23 @@ export function useMetroglassAuth() {
     }
   }, [])
 
+  const signup = useCallback(async (email: string, password: string) => {
+    setStatus("loading")
+    setError(null)
+    try {
+      const nextSession = await signUpWithPassword(email, password)
+      setSession(nextSession)
+      setStatus("authenticated")
+      return nextSession
+    } catch (signupError) {
+      setSession(null)
+      setStatus("unauthenticated")
+      const message = signupError instanceof Error ? signupError.message : "Signup failed"
+      setError(message)
+      throw signupError
+    }
+  }, [])
+
   const logout = useCallback(async () => {
     await signOutSession()
     setSession(null)
@@ -101,6 +119,7 @@ export function useMetroglassAuth() {
     session,
     error,
     login,
+    signup,
     logout,
     refresh,
   }

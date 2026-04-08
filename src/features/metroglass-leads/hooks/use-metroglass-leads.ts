@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import {
   addManualLeadEmail,
   archiveLead,
+  createWorkspaceUser,
   enrichLeadNow,
   fetchConfig,
   fetchHealth,
@@ -41,6 +42,8 @@ import {
   updateProspectDraft,
   updateProspectNotes,
   updateProspectStatus,
+  updateWorkspaceAccount,
+  uploadWorkspaceAttachment,
   vouchLead,
   runProspectDailySendNow,
 } from "@/features/metroglass-leads/lib/remote"
@@ -63,6 +66,10 @@ function scopeTypeLabel(scopeType: "email" | "domain" | "company") {
   if (scopeType === "email") return "Email"
   if (scopeType === "domain") return "Domain"
   return "Company"
+}
+
+function sumCounts(values?: Record<string, number>) {
+  return Object.values(values ?? {}).reduce((total, value) => total + Number(value || 0), 0)
 }
 
 export function useMetroglassLeads() {
@@ -457,7 +464,31 @@ export function useMetroglassLeads() {
 
   const actions = useMemo(() => ({
     scan,
-    sendAllReady: () => runGlobalAction("send-ready", async () => { await sendAllReady() }, "Ready leads sent"),
+    sendAllReady: async () => {
+      setActionLeadId("send-ready")
+      try {
+        const result = await sendAllReady()
+        if (result.succeeded > 0) {
+          toast.success(`Sent ${result.succeeded} ready permit${result.succeeded === 1 ? "" : "s"}${result.failed ? ` (${result.failed} failed)` : ""}`)
+        } else if (result.failed > 0) {
+          throw new Error(`Ready permit batch failed for ${result.failed} lead${result.failed === 1 ? "" : "s"}`)
+        } else {
+          toast("No ready permits to send right now")
+        }
+        await Promise.all([
+          refreshToday(),
+          refreshLeads(),
+          refreshProspects(),
+          refreshSelectedLead(selectedLeadId),
+          refreshSelectedProspect(selectedProspectId),
+          refreshSystem(),
+        ])
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Action failed")
+      } finally {
+        setActionLeadId(null)
+      }
+    },
     sendDueFollowUps: (limit = 20) => runGlobalAction("send-due-follow-ups", async () => {
       await sendDueLeadFollowUps(limit)
     }, `Sent up to ${limit} due permit follow-ups`),
@@ -480,7 +511,16 @@ export function useMetroglassLeads() {
                 : "Outreach batch did not start",
           )
         }
-        toast.success(`Outreach batch started${result.summary?.selected_count ? ` for ${result.summary.selected_count} contacts` : ""}`)
+        const selectedCount = Number(result.summary?.selected_count || 0)
+        const sentCount = sumCounts(result.summary?.sent_by_category)
+        const skippedCount = sumCounts(result.summary?.skipped_by_category)
+        if (sentCount > 0) {
+          toast.success(`Outreach batch sent ${sentCount} contact${sentCount === 1 ? "" : "s"}${skippedCount ? ` (${skippedCount} skipped)` : ""}`)
+        } else if (selectedCount > 0) {
+          throw new Error(`Outreach batch attempted ${selectedCount} contact${selectedCount === 1 ? "" : "s"} but sent none`)
+        } else {
+          toast("No eligible prospects to send right now")
+        }
         await Promise.all([
           refreshToday(),
           refreshLeads(),
@@ -544,6 +584,7 @@ export function useMetroglassLeads() {
         const details = [
           reasons.missing_valid_email ? `${reasons.missing_valid_email} missing valid email` : null,
           reasons.duplicate_in_file ? `${reasons.duplicate_in_file} duplicate email in file` : null,
+          reasons.already_in_database ? `${reasons.already_in_database} already in database` : null,
         ].filter(Boolean)
         toast.success(
           `Imported ${result.imported} prospects${result.skipped ? `, skipped ${result.skipped}${details.length ? ` (${details.join(", ")})` : ""}` : ""}`,
@@ -597,6 +638,59 @@ export function useMetroglassLeads() {
         toast.error(error instanceof Error ? error.message : "Settings update failed")
       }
     },
+    saveWorkspaceProfile: async (payload: {
+      name?: string
+      business_name?: string
+      website?: string | null
+      sender_name?: string | null
+      sender_email?: string | null
+      billing_email?: string | null
+      phone?: string | null
+      outreach_pitch?: string | null
+      outreach_focus?: string | null
+      outreach_cta?: string | null
+      first_campaign_ready?: boolean
+    }) => {
+      try {
+        await updateWorkspaceAccount(payload)
+        await refreshSystem()
+        toast.success("Workspace profile updated")
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Workspace update failed")
+        throw error
+      }
+    },
+    uploadWorkspaceAttachment: async (payload: {
+      filename: string
+      content_type: string
+      content_base64: string
+      make_default?: boolean
+      archive_previous_default?: boolean
+    }) => {
+      try {
+        await uploadWorkspaceAttachment(payload)
+        await Promise.all([refreshSystem(), fetchHealth().then(setHealth)])
+        toast.success("Workspace attachment updated")
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Attachment upload failed")
+        throw error
+      }
+    },
+    createWorkspaceUser: async (payload: {
+      email: string
+      password: string
+      full_name?: string
+      role?: "owner" | "admin" | "member"
+    }) => {
+      try {
+        await createWorkspaceUser(payload)
+        await refreshSystem()
+        toast.success("Workspace user created")
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "User creation failed")
+        throw error
+      }
+    },
   }), [refreshLeads, refreshProspects, refreshSelectedLead, refreshSelectedProspect, refreshSystem, refreshToday, runAction, runGlobalAction, runProspectAction, scan, selectedLeadId, selectedProspectId])
 
   return {
@@ -627,5 +721,6 @@ export function useMetroglassLeads() {
     loading,
     actionLeadId,
     actions,
+    refreshAll,
   }
 }

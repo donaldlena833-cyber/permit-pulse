@@ -71,6 +71,14 @@ npx wrangler secret put GMAIL_CLIENT_SECRET
 # Paste: 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
 ```
 
+### Default outreach attachment
+
+PermitPulse is configured to attach a default PDF to every sent outreach email. To load the current LOKEIL one-pager:
+
+```bash
+npx wrangler kv key put --binding=PERMIT_PULSE default_outreach_attachment --path "/Users/donaldlena/Desktop/MetroGlass Pro - About Us.pdf"
+```
+
 ### Step 5: Deploy + test the worker
 
 ```bash

@@ -1,13 +1,20 @@
 import { getAccessToken } from "@/features/auth/lib/session"
 import type {
+  AuditEvent,
   ConfigPayload,
   HealthPayload,
+  InvitePreviewPayload,
   LeadDetailResponse,
   LeadsPayload,
+  OnboardingPayload,
   ProspectDetailResponse,
   ProspectsPayload,
   SystemPayload,
   TodayPayload,
+  WorkspaceAttachment,
+  WorkspaceMailbox,
+  WorkspaceMember,
+  WorkspaceMetricSeries,
 } from "@/features/metroglass-leads/types/api"
 
 function apiBase(): string {
@@ -219,6 +226,7 @@ export function importProspectsCsv(payload: { filename: string; category: string
     skipped_by_reason?: {
       missing_valid_email?: number
       duplicate_in_file?: number
+      already_in_database?: number
     }
   }>(
     "/api/prospects/import",
@@ -365,6 +373,62 @@ export function fetchSystem() {
   return requestJson<SystemPayload>("/api/system")
 }
 
+export function updateWorkspaceAccount(payload: {
+  name?: string
+  business_name?: string
+  website?: string | null
+  sender_name?: string | null
+  sender_email?: string | null
+  billing_email?: string | null
+  phone?: string | null
+  outreach_pitch?: string | null
+  outreach_focus?: string | null
+  outreach_cta?: string | null
+  first_campaign_ready?: boolean
+}) {
+  return requestJson<{ account: SystemPayload["account"] }>("/api/account", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function uploadWorkspaceAttachment(payload: {
+  filename: string
+  content_type: string
+  content_base64: string
+  make_default?: boolean
+  archive_previous_default?: boolean
+}) {
+  return requestJson<{ attachments: WorkspaceAttachment[]; default_attachment: WorkspaceAttachment | null }>("/api/account/attachments", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function createWorkspaceUser(payload: {
+  email: string
+  full_name?: string
+  role?: "owner" | "admin" | "member"
+}) {
+  return requestJson<{
+    member: WorkspaceMember
+    invite_url?: string | null
+    auth_invite_url?: string | null
+  }>("/api/account/users", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
 export function syncOutreachRepliesNow() {
   return requestJson<{
     checked_at: string
@@ -397,4 +461,150 @@ export function runProspectDailySendNow() {
   }>("/api/prospects/run-daily-send", {
     method: "POST",
   })
+}
+
+export function fetchOnboardingState() {
+  return requestJson<OnboardingPayload>("/api/onboarding")
+}
+
+export function bootstrapWorkspace(payload: {
+  name: string
+  business_name: string
+  website?: string | null
+  sender_name?: string | null
+  sender_email?: string | null
+  billing_email?: string | null
+  phone?: string | null
+}) {
+  return requestJson<OnboardingPayload>("/api/onboarding/bootstrap", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateOnboardingProfile(payload: Record<string, unknown>) {
+  return requestJson<{ account: SystemPayload["account"]; onboarding: SystemPayload["onboarding"] }>("/api/onboarding/profile", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchInvitePreview(token: string) {
+  return requestJson<InvitePreviewPayload>(`/api/account/invites/${encodeURIComponent(token)}`)
+}
+
+export function acceptInvite(token: string) {
+  return requestJson<{ account: SystemPayload["account"] | null; onboarding: SystemPayload["onboarding"] | null }>(
+    `/api/account/invites/${encodeURIComponent(token)}`,
+    {
+      method: "POST",
+    },
+  )
+}
+
+export function fetchWorkspaceAttachments() {
+  return requestJson<{ attachments: WorkspaceAttachment[]; default_attachment: WorkspaceAttachment | null }>("/api/account/attachments")
+}
+
+export function setWorkspaceAttachmentDefault(attachmentId: string) {
+  return requestJson<{ attachments: WorkspaceAttachment[]; default_attachment: WorkspaceAttachment | null }>(
+    `/api/account/attachments/${encodeURIComponent(attachmentId)}/default`,
+    { method: "POST" },
+  )
+}
+
+export function archiveWorkspaceAttachmentRequest(attachmentId: string) {
+  return requestJson<{ attachments: WorkspaceAttachment[]; default_attachment: WorkspaceAttachment | null }>(
+    `/api/account/attachments/${encodeURIComponent(attachmentId)}/archive`,
+    { method: "POST" },
+  )
+}
+
+export function fetchWorkspaceMailboxes() {
+  return requestJson<{ mailboxes: WorkspaceMailbox[]; default_mailbox: WorkspaceMailbox | null }>("/api/account/mailboxes")
+}
+
+export function beginWorkspaceGmailConnect(redirectPath = "/app/settings") {
+  return requestJson<{ authorization_url: string }>("/api/account/mailboxes/gmail/connect", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ redirect_path: redirectPath }),
+  })
+}
+
+export function createWorkspaceInviteRequest(payload: {
+  email: string
+  full_name?: string
+  role?: "admin" | "member"
+}) {
+  return requestJson<{ member: WorkspaceMember; invite_url?: string | null; auth_invite_url?: string | null }>("/api/account/invites", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function resendWorkspaceInviteRequest(memberId: string) {
+  return requestJson<{ member: WorkspaceMember; invite_url?: string | null; auth_invite_url?: string | null }>(
+    `/api/account/members/${encodeURIComponent(memberId)}/resend`,
+    { method: "POST" },
+  )
+}
+
+export function disableWorkspaceMemberRequest(memberId: string) {
+  return requestJson<{ member: WorkspaceMember; members: WorkspaceMember[] }>(
+    `/api/account/members/${encodeURIComponent(memberId)}/disable`,
+    { method: "POST" },
+  )
+}
+
+export function updateWorkspaceMemberRoleRequest(memberId: string, role: "admin" | "member") {
+  return requestJson<{ member: WorkspaceMember; members: WorkspaceMember[] }>(
+    `/api/account/members/${encodeURIComponent(memberId)}/role`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ role }),
+    },
+  )
+}
+
+export function transferWorkspaceOwnershipRequest(memberId: string) {
+  return requestJson<{ members: WorkspaceMember[] }>(
+    `/api/account/members/${encodeURIComponent(memberId)}/transfer-ownership`,
+    { method: "POST" },
+  )
+}
+
+export function createBillingCheckout() {
+  return requestJson<{ url: string; session_id: string }>("/api/billing/checkout", {
+    method: "POST",
+  })
+}
+
+export function createBillingPortal() {
+  return requestJson<{ url: string }>("/api/billing/portal", {
+    method: "POST",
+  })
+}
+
+export function fetchAuditLog(page = 1, limit = 20) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) })
+  return requestJson<{ events: AuditEvent[]; page: number; limit: number }>(`/api/system/audit?${params.toString()}`)
+}
+
+export function fetchWorkspaceMetrics() {
+  return requestJson<WorkspaceMetricSeries>("/api/system/metrics")
 }

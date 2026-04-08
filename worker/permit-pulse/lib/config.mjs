@@ -82,10 +82,31 @@ function normalizeFollowUpSequence(value) {
   return normalized.length > 0 ? normalized : fallback;
 }
 
+function isTenantConfigTableMissing(error) {
+  const message = String(error?.message || '');
+  return message.includes('v2_tenant_app_config') || message.includes('tenant_id');
+}
+
+function configPayloadFromPatch(patch = {}) {
+  return Object.entries(patch || {}).map(([key, value]) => ({ key, value }));
+}
+
 export async function getAppConfig(db) {
-  const rows = await db.select('v2_app_config', {
-    columns: 'key,value,updated_at',
-  });
+  let rows = [];
+
+  try {
+    rows = await db.select('v2_tenant_app_config', {
+      columns: 'key,value,updated_at',
+    });
+  } catch (error) {
+    if (!isTenantConfigTableMissing(error)) {
+      throw error;
+    }
+
+    rows = await db.select('v2_app_config', {
+      columns: 'key,value,updated_at',
+    });
+  }
 
   const mapped = { ...DEFAULT_CONFIG };
 
@@ -124,6 +145,26 @@ export async function getAppConfig(db) {
   mapped.permit_auto_send_enabled = Boolean(mapped.permit_auto_send_enabled);
 
   return mapped;
+}
+
+export async function saveAppConfig(db, patch = {}) {
+  const payload = configPayloadFromPatch(patch);
+  if (payload.length === 0) {
+    return getAppConfig(db);
+  }
+
+  try {
+    await db.upsert('v2_tenant_app_config', payload, 'tenant_id,key');
+  } catch (error) {
+    if (!isTenantConfigTableMissing(error)) {
+      throw error;
+    }
+
+    const rawDb = db.raw || db;
+    await rawDb.upsert('v2_app_config', payload, 'key');
+  }
+
+  return getAppConfig(db);
 }
 
 export const APP_CONFIG_DEFAULTS = DEFAULT_CONFIG;

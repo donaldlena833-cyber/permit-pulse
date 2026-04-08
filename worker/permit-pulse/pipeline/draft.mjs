@@ -1,5 +1,10 @@
 import { appendLeadEvent } from '../lib/events.mjs';
 import { eq } from '../lib/supabase.mjs';
+import {
+  workspaceBusinessName,
+  workspaceSenderName,
+  workspaceSignatureLines,
+} from '../lib/workspace-email.mjs';
 
 function serviceFromLead(lead) {
   const keyword = String(lead.relevance_keyword || '').toLowerCase();
@@ -8,6 +13,24 @@ function serviceFromLead(lead) {
   if (keyword.includes('partition')) return 'glass partition';
   if (keyword.includes('railing')) return 'glass railing';
   return 'glass scope';
+}
+
+function compactText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function workspaceLeadPitch(workspace) {
+  return compactText(workspace?.outreach_pitch)
+    || 'help teams move custom glass scope from pricing through installation without a long handoff';
+}
+
+function workspaceLeadFocus(workspace, lead) {
+  return compactText(workspace?.outreach_focus)
+    || `We can help with pricing, takeoffs, fabrication, and install coordination for ${serviceFromLead(lead)} work.`;
+}
+
+function workspaceLeadCta(workspace, fallbackSentence) {
+  return compactText(workspace?.outreach_cta) || compactText(fallbackSentence);
 }
 
 export function chooseDraftCta(lead) {
@@ -41,29 +64,39 @@ export function chooseDraftCta(lead) {
   };
 }
 
-export function buildInitialDraft(lead) {
+export function buildInitialDraft(lead, workspace = null) {
   const firstName = String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
   const address = lead.address || 'your project';
-  const subject = lead.address ? `Quick note on ${lead.address}` : 'Quick note from MetroGlass Pro';
+  const businessName = workspaceBusinessName(workspace, 'our team');
+  const senderName = workspaceSenderName(workspace);
+  const cta = chooseDraftCta(lead);
+  const subject = lead.address ? `Quick note on ${lead.address}` : `Quick note from ${businessName}`;
   const lines = [
     `Hi ${firstName},`,
     `I saw the filing for ${address} and wanted to reach out.`,
-    "I'm with MetroGlass Pro. We work on custom glass installations across NYC, NJ, and CT, including mirrors, partitions, shower glass, cabinets, and similar scope.",
-    "I know filings do not always show the full picture, but if any glass related work is still being lined up, I'd be happy to connect.",
+    `I'm with ${businessName}. We ${workspaceLeadPitch(workspace)}.`,
+    workspaceLeadFocus(workspace, lead),
+    "I know filings do not always show the full picture, but if related work is still being lined up, I'd be happy to connect.",
+    workspaceLeadCta(workspace, cta.sentence),
     'Best,',
-    'Donald',
+    ...workspaceSignatureLines({
+      ...workspace,
+      sender_name: senderName,
+      business_name: businessName,
+    }),
   ];
 
   return {
     subject,
     body: lines.join('\n\n'),
-    cta_type: 'soft_intro',
+    cta_type: cta.type || 'soft_intro',
   };
 }
 
-export function buildFollowUpDraft(lead, stepNumber) {
+export function buildFollowUpDraft(lead, stepNumber, workspace = null) {
   const firstName = String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
   const service = serviceFromLead(lead);
+  const signature = workspaceSignatureLines(workspace);
 
   if (Number(stepNumber || 0) <= 1) {
     return {
@@ -71,9 +104,10 @@ export function buildFollowUpDraft(lead, stepNumber) {
       body: [
         `Hi ${firstName},`,
         `Wanted to follow up on my note about the ${service} at ${lead.address || 'your project'}.`,
-        'If it helps, we can turn around a quick number or review plans without a long handoff.',
+        workspaceLeadFocus(workspace, lead),
+        workspaceLeadCta(workspace, 'If it helps, we can turn around a quick number or review plans without a long handoff.'),
         'Best,',
-        'Donald',
+        ...signature,
       ].join('\n\n'),
     };
   }
@@ -83,14 +117,14 @@ export function buildFollowUpDraft(lead, stepNumber) {
     body: [
       `Hi ${firstName},`,
       'Just wanted to make sure this did not get buried.',
-      `If the glass scope for ${lead.address || 'the project'} is still open, I would be happy to help.`,
+      workspaceLeadCta(workspace, `If the ${service} scope for ${lead.address || 'the project'} is still open, I would be happy to help.`),
       'Best,',
-      'Donald',
+      ...signature,
     ].join('\n\n'),
   };
 }
 
-export async function generateLeadDraft(db, runId, leadId) {
+export async function generateLeadDraft(db, runId, leadId, workspace = null) {
   const lead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
   });
@@ -99,7 +133,7 @@ export async function generateLeadDraft(db, runId, leadId) {
     return null;
   }
 
-  const draft = buildInitialDraft(lead);
+  const draft = buildInitialDraft(lead, workspace);
 
   await db.update('v2_leads', [`id=eq.${leadId}`], {
     draft_subject: draft.subject,

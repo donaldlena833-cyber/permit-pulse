@@ -66,6 +66,19 @@ function compactText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function scopeKeySuffix(scopeKey) {
+  const normalized = compactText(scopeKey).replace(/[^a-zA-Z0-9:_-]/g, '_');
+  return normalized || 'global';
+}
+
+function summaryKey(scopeKey) {
+  return `${SUMMARY_KEY}:${scopeKeySuffix(scopeKey)}`;
+}
+
+function seenKey(messageId, scopeKey) {
+  return `${SEEN_PREFIX}${scopeKeySuffix(scopeKey)}:${messageId}`;
+}
+
 function normalizeEmail(value) {
   const email = compactText(value).toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
@@ -109,33 +122,33 @@ function kvAvailable(env) {
   return Boolean(env?.PERMIT_PULSE?.get && env?.PERMIT_PULSE?.put);
 }
 
-async function hasSeenMessage(env, messageId) {
+async function hasSeenMessage(env, messageId, scopeKey = 'global') {
   if (!kvAvailable(env) || !messageId) {
     return false;
   }
-  return Boolean(await env.PERMIT_PULSE.get(`${SEEN_PREFIX}${messageId}`));
+  return Boolean(await env.PERMIT_PULSE.get(seenKey(messageId, scopeKey)));
 }
 
-async function markMessageSeen(env, messageId) {
+async function markMessageSeen(env, messageId, scopeKey = 'global') {
   if (!kvAvailable(env) || !messageId) {
     return;
   }
-  await env.PERMIT_PULSE.put(`${SEEN_PREFIX}${messageId}`, '1', { expirationTtl: 60 * 60 * 24 * 60 });
+  await env.PERMIT_PULSE.put(seenKey(messageId, scopeKey), '1', { expirationTtl: 60 * 60 * 24 * 60 });
 }
 
-async function writeSummary(env, summary) {
+async function writeSummary(env, summary, scopeKey = 'global') {
   if (!kvAvailable(env)) {
     return summary;
   }
-  await env.PERMIT_PULSE.put(SUMMARY_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 60 });
+  await env.PERMIT_PULSE.put(summaryKey(scopeKey), JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 60 });
   return summary;
 }
 
-export async function readReplySyncState(env) {
+export async function readReplySyncState(env, options = {}) {
   if (!kvAvailable(env)) {
     return null;
   }
-  const value = await env.PERMIT_PULSE.get(SUMMARY_KEY);
+  const value = await env.PERMIT_PULSE.get(summaryKey(options.scopeKey || 'global'));
   if (!value) {
     return null;
   }
@@ -324,8 +337,10 @@ async function queueReview(db, message, prospect = null, reason = 'reply_review_
 export async function syncOutreachReplies(env, db, options = {}) {
   const maxResults = Math.min(Math.max(Number(options.maxResults || 0), 1), 100);
   const newerThanDays = Math.min(Math.max(Number(options.newerThanDays || 0), 1), 45);
+  const scopeKey = options.scopeKey || db?.tenant_id || 'global';
+  const queueUnmatched = options.queueUnmatched !== false;
   const [messages, prospects, leads] = await Promise.all([
-    listRecentInboxMessages(env, { maxResults, newerThanDays, includeBody: true }),
+    listRecentInboxMessages(env, { maxResults, newerThanDays, includeBody: true, mailbox: options.mailbox || null }),
     listCandidateProspects(db),
     listCandidateLeads(db),
   ]);
@@ -351,7 +366,7 @@ export async function syncOutreachReplies(env, db, options = {}) {
     if (!message?.id) {
       continue;
     }
-    if (await hasSeenMessage(env, message.id)) {
+    if (await hasSeenMessage(env, message.id, scopeKey)) {
       continue;
     }
 
@@ -364,10 +379,14 @@ export async function syncOutreachReplies(env, db, options = {}) {
       || (referencedEmail ? leadEmailMap.get(referencedEmail) : null);
 
     if (classification === 'review') {
+      if (!queueUnmatched && !prospect) {
+        summary.unmatched_messages += 1;
+        continue;
+      }
       await queueReview(db, message, prospect, 'auto_reply_review');
       summary.processed_messages += 1;
       summary.review_items += 1;
-      await markMessageSeen(env, message.id);
+      await markMessageSeen(env, message.id, scopeKey);
       continue;
     }
 
@@ -384,7 +403,7 @@ export async function syncOutreachReplies(env, db, options = {}) {
       if (applied === 'bounce') {
         summary.bounces += 1;
       }
-      await markMessageSeen(env, message.id);
+      await markMessageSeen(env, message.id, scopeKey);
       continue;
     }
 
@@ -401,7 +420,12 @@ export async function syncOutreachReplies(env, db, options = {}) {
       if (applied === 'bounce') {
         summary.bounces += 1;
       }
-      await markMessageSeen(env, message.id);
+      await markMessageSeen(env, message.id, scopeKey);
+      continue;
+    }
+
+    if (!queueUnmatched) {
+      summary.unmatched_messages += 1;
       continue;
     }
 
@@ -413,9 +437,9 @@ export async function syncOutreachReplies(env, db, options = {}) {
       summary.unmatched_messages += 1;
     }
 
-    await markMessageSeen(env, message.id);
+    await markMessageSeen(env, message.id, scopeKey);
   }
 
-  await writeSummary(env, summary);
+  await writeSummary(env, summary, scopeKey);
   return summary;
 }

@@ -2,6 +2,7 @@ import { sendAutomationEmail } from '../lib/gmail.mjs';
 import { appendLeadEvent } from '../lib/events.mjs';
 import { formatPriorOutreachMessage, getPriorOutreach } from '../lib/outreach-guard.mjs';
 import { eq, gte, lte, order } from '../lib/supabase.mjs';
+import { resolveWorkspaceSender, workspaceSenderName } from '../lib/workspace-email.mjs';
 import { buildFollowUpDraft } from './draft.mjs';
 
 function normalizeFollowUpSequence(sequence) {
@@ -41,6 +42,10 @@ function followUpNeedsRepair(existing, sequence) {
   const expectedSteps = normalizeFollowUpSequence(sequence);
   const existingSteps = new Set(existing.map((item) => Number(item.step_number || 0)));
   return expectedSteps.some((_, index) => !existingSteps.has(index + 1));
+}
+
+function hasDraftContent(value) {
+  return String(value || '').trim().length > 0;
 }
 
 export async function scheduleFollowUps(db, leadId, sequence, sentAt) {
@@ -107,7 +112,7 @@ export async function cancelFollowUps(db, leadId, reason) {
   });
 }
 
-export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null) {
+export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null, workspace = null) {
   const followUp = await db.single('v2_follow_ups', {
     filters: [eq('lead_id', leadId), eq('step_number', stepNumber)],
   });
@@ -123,9 +128,12 @@ export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null) 
     throw new Error('Phone follow up must be logged manually');
   }
 
-  const draft = followUp.draft_content
-    ? { subject: lead.draft_subject || `Follow up for ${lead.address}`, body: followUp.draft_content }
-    : buildFollowUpDraft(lead, stepNumber);
+  const draft = hasDraftContent(followUp.draft_content)
+    ? {
+        subject: hasDraftContent(lead.draft_subject) ? String(lead.draft_subject).trim() : `Follow up for ${lead.address}`,
+        body: String(followUp.draft_content || '').trim(),
+      }
+    : buildFollowUpDraft(lead, stepNumber, workspace);
 
   const recipient = lead.active_email_role === 'fallback' && lead.fallback_email ? lead.fallback_email : lead.contact_email;
   if (!recipient) {
@@ -158,8 +166,17 @@ export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null) 
     }
   }
 
+  const { sender, replyTo } = resolveWorkspaceSender(env, workspace);
+
   await sendAutomationEmail(env, {
+    attachmentContentType: workspace?.attachment_content_type || undefined,
+    attachmentFilename: workspace?.attachment_filename || undefined,
+    attachmentKey: workspace?.attachment_kv_key || undefined,
+    mailbox: workspace?.default_mailbox || null,
     recipient,
+    replyTo,
+    sender,
+    senderName: workspaceSenderName(workspace),
     subject: draft.subject,
     body: draft.body,
   });
@@ -259,7 +276,7 @@ export async function processDueFollowUps(env, db, options = {}) {
       continue;
     }
     try {
-      await sendFollowUp(env, db, item.lead_id, item.step_number);
+      await sendFollowUp(env, db, item.lead_id, item.step_number, null, options.workspace || null);
       sent += 1;
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes('Repeat outreach is disabled')) {

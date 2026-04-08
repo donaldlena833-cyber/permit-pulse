@@ -1,5 +1,9 @@
 const STORAGE_KEY = "metroglass-leads-auth-session"
 const REFRESH_WINDOW_MS = 5 * 60 * 1000
+const LOGIN_IDENTIFIER_ALIASES: Record<string, string> = {
+  operations: "operations@metroglasspro.com",
+  lokeil: "lokeil@lokeilrenovating.com",
+}
 
 export interface AuthUser {
   id: string
@@ -38,6 +42,19 @@ function getSupabaseHeaders(token?: string): HeadersInit {
     apikey: __SUPABASE_ANON_KEY__,
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
+}
+
+function normalizeLoginIdentifier(value: string): string {
+  const normalized = String(value || "").trim().toLowerCase()
+  if (!normalized) {
+    return normalized
+  }
+
+  if (normalized.includes("@")) {
+    return normalized
+  }
+
+  return LOGIN_IDENTIFIER_ALIASES[normalized] ?? normalized
 }
 
 function normalizeSession(payload: SupabaseAuthPayload): AuthSession {
@@ -127,7 +144,7 @@ export async function signInWithPassword(email: string, password: string): Promi
     "/token?grant_type=password",
     {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email: normalizeLoginIdentifier(email), password }),
     },
   )
 
@@ -199,7 +216,7 @@ export async function signUpWithPassword(email: string, password: string): Promi
     "/signup",
     {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email: normalizeLoginIdentifier(email), password }),
     },
   )
 

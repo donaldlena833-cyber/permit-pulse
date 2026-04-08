@@ -1,5 +1,5 @@
 export {
-  getDefaultAttachmentStatus,
+  getAttachmentStatus,
   hasGmailAutomation,
   sendAutomationEmail,
 } from '../gmail.mjs';

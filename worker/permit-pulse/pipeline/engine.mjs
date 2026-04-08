@@ -237,7 +237,7 @@ async function expireAndReleaseStaleRuns(db, options = {}) {
   return staleRuns;
 }
 
-async function processLeadStages(env, db, runId, leadId, counters, config, saveStage) {
+async function processLeadStages(env, db, runId, leadId, counters, config, saveStage, workspace = null) {
   await saveStage('resolve', counters);
   await withJob(db, leadId, runId, 'resolve_company', 'resolver', async () => (
     resolveLeadCompany(env, db, runId, leadId)
@@ -271,7 +271,7 @@ async function processLeadStages(env, db, runId, leadId, counters, config, saveS
 
   await saveStage('draft', counters);
   const draft = await withJob(db, leadId, runId, 'generate_draft', 'internal', async () => (
-    generateLeadDraft(db, runId, leadId)
+    generateLeadDraft(db, runId, leadId, workspace)
   ));
 
   if (draft) {
@@ -384,7 +384,7 @@ async function executeAutomationRun(env, db, run, config, options = {}) {
 
     for (const leadId of slice) {
       try {
-        await processLeadStages(env, db, run.id, leadId, counters, config, saveStage);
+        await processLeadStages(env, db, run.id, leadId, counters, config, saveStage, options.workspace || null);
         await markLeadAutomationProcessed(db, leadId, run.id);
         processedLeadIds.push(leadId);
         scope = {
@@ -414,6 +414,7 @@ async function executeAutomationRun(env, db, run, config, options = {}) {
   const sendResult = await withJob(db, null, run.id, 'send', 'gmail', async () => (
     sendReadyLeads(env, db, run.id, config, {
       leadIds: processedLeadIds,
+      workspace: options.workspace || null,
     })
   ));
 
@@ -424,7 +425,7 @@ async function executeAutomationRun(env, db, run, config, options = {}) {
   if (!options.skipFollowUps) {
     await persistRunState(db, run.id, 'follow_up', counters, scope, { error_count: errorCount });
     await withJob(db, null, run.id, 'follow_up', 'gmail', async () => (
-      processDueFollowUps(env, db)
+      processDueFollowUps(env, db, { workspace: options.workspace || null })
     ));
   }
 
@@ -482,7 +483,7 @@ async function getQueuedLeadIds(db, excludedLeadIds = [], limit = 10, minRelevan
 }
 
 export async function startAutomationCycle(env, options = {}) {
-  const db = createSupabaseClient(env);
+  const db = options.db || createSupabaseClient(env);
   await expireAndReleaseStaleRuns(db, {
     staleAfterMinutes: (options.triggerType || 'operator') === 'operator' ? 5 : 10,
   });
@@ -509,6 +510,7 @@ export async function startAutomationCycle(env, options = {}) {
   const task = executeAutomationRun(env, db, run, config, {
     skipFollowUps: Boolean(options.skipFollowUps),
     mode: options.mode,
+    workspace: options.workspace || null,
   }).catch(async (error) => {
     await failRun(db, run.id, error);
     await releaseClaimedLeadsForRuns(db, [run.id]);
@@ -533,7 +535,7 @@ export async function runAutomationCycle(env, options = {}) {
 }
 
 export async function enrichLead(env, leadId, options = {}) {
-  const db = createSupabaseClient(env);
+  const db = options.db || createSupabaseClient(env);
   const config = await getAppConfig(db);
   const run = await createRun(
     db,
@@ -565,7 +567,7 @@ export async function enrichLead(env, leadId, options = {}) {
     const saveStage = async (stage) => {
       await persistRunState(db, run.id, stage, counters, scope);
     };
-    await processLeadStages(env, db, run.id, leadId, counters, config, saveStage);
+    await processLeadStages(env, db, run.id, leadId, counters, config, saveStage, options.workspace || null);
     await markLeadAutomationProcessed(db, leadId, run.id);
     scope = {
       ...scope,
@@ -585,7 +587,7 @@ export async function enrichLead(env, leadId, options = {}) {
   }
 }
 
-async function executeLeadBatchAutomation(env, db, run, config, leadIds = []) {
+async function executeLeadBatchAutomation(env, db, run, config, leadIds = [], options = {}) {
   const counters = emptyCounters();
   const targetLeadIds = normalizeLeadIds(leadIds, 50);
   let scope = normalizeRunScope(run, config, { mode: 'selected_leads' });
@@ -595,7 +597,7 @@ async function executeLeadBatchAutomation(env, db, run, config, leadIds = []) {
   };
 
   for (const leadId of targetLeadIds) {
-    await processLeadStages(env, db, run.id, leadId, counters, config, saveStage);
+    await processLeadStages(env, db, run.id, leadId, counters, config, saveStage, options.workspace || null);
     await markLeadAutomationProcessed(db, leadId, run.id);
     scope = {
       ...scope,
@@ -605,7 +607,10 @@ async function executeLeadBatchAutomation(env, db, run, config, leadIds = []) {
 
   await persistRunState(db, run.id, 'send', counters, scope);
   const sendResult = await withJob(db, null, run.id, 'send', 'gmail', async () => (
-    sendReadyLeads(env, db, run.id, config, { leadIds: targetLeadIds })
+    sendReadyLeads(env, db, run.id, config, {
+      leadIds: targetLeadIds,
+      workspace: options.workspace || null,
+    })
   ));
 
   counters.sends_attempted = sendResult.attempted;
@@ -624,7 +629,7 @@ async function executeLeadBatchAutomation(env, db, run, config, leadIds = []) {
 }
 
 export async function startLeadBatchAutomation(env, leadIds = [], options = {}) {
-  const db = createSupabaseClient(env);
+  const db = options.db || createSupabaseClient(env);
   await expireAndReleaseStaleRuns(db, {
     staleAfterMinutes: 5,
   });
@@ -644,7 +649,9 @@ export async function startLeadBatchAutomation(env, leadIds = [], options = {}) 
       : { mode: 'new_leads', claimed_lead_ids: [], processed_lead_ids: [] },
   );
 
-  const task = executeLeadBatchAutomation(env, db, run, config, normalizedLeadIds).catch(async (error) => {
+  const task = executeLeadBatchAutomation(env, db, run, config, normalizedLeadIds, {
+    workspace: options.workspace || null,
+  }).catch(async (error) => {
     await failRun(db, run.id, error);
     throw error;
   });
@@ -656,8 +663,8 @@ export async function startLeadBatchAutomation(env, leadIds = [], options = {}) 
   };
 }
 
-export async function getRunById(env, runId) {
-  const db = createSupabaseClient(env);
+export async function getRunById(env, runId, options = {}) {
+  const db = options.db || createSupabaseClient(env);
   await expireAndReleaseStaleRuns(db, {
     staleAfterMinutes: 5,
   });
@@ -666,8 +673,8 @@ export async function getRunById(env, runId) {
   });
 }
 
-export async function getLatestRuns(env) {
-  const db = createSupabaseClient(env);
+export async function getLatestRuns(env, options = {}) {
+  const db = options.db || createSupabaseClient(env);
   await expireAndReleaseStaleRuns(db, {
     staleAfterMinutes: 5,
   });
@@ -683,8 +690,8 @@ export async function getLatestRuns(env) {
   return { currentRun, lastRun };
 }
 
-export async function getAutomationBacklogPreview(env, limit = 10) {
-  const db = createSupabaseClient(env);
+export async function getAutomationBacklogPreview(env, limit = 10, options = {}) {
+  const db = options.db || createSupabaseClient(env);
   const [pendingCount, pendingLeads] = await Promise.all([
     countPendingAutomationLeads(db),
     listPendingAutomationLeads(db, limit),

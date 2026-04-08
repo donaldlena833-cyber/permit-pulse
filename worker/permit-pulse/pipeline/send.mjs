@@ -4,6 +4,7 @@ import { appendLeadEvent } from '../lib/events.mjs';
 import { formatPriorOutreachMessage, getPriorOutreach } from '../lib/outreach-guard.mjs';
 import { eq, inList, order } from '../lib/supabase.mjs';
 import { inferEmailPattern, nowIso } from '../lib/utils.mjs';
+import { resolveWorkspaceSender, workspaceSenderName } from '../lib/workspace-email.mjs';
 import { scheduleFollowUps } from './follow-up.mjs';
 import { generateLeadDraft } from './draft.mjs';
 
@@ -17,6 +18,10 @@ function startOfDayIso() {
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   return now.toISOString();
+}
+
+function hasDraftContent(value) {
+  return String(value || '').trim().length > 0;
 }
 
 async function countSentToday(db) {
@@ -96,18 +101,39 @@ export async function sendLead(env, db, leadId, options = {}) {
     }
   }
 
-  if (!lead.draft_subject || !lead.draft_body) {
-    await generateLeadDraft(db, options.runId || null, leadId);
+  if (!hasDraftContent(lead.draft_subject) || !hasDraftContent(lead.draft_body)) {
+    await generateLeadDraft(db, options.runId || null, leadId, options.workspace || null);
   }
 
-  const refreshedLead = await db.single('v2_leads', {
+  let refreshedLead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
   });
 
+  if (!hasDraftContent(refreshedLead?.draft_subject) || !hasDraftContent(refreshedLead?.draft_body)) {
+    await generateLeadDraft(db, options.runId || null, leadId, options.workspace || null);
+    refreshedLead = await db.single('v2_leads', {
+      filters: [eq('id', leadId)],
+    });
+  }
+
+  if (!hasDraftContent(refreshedLead?.draft_subject) || !hasDraftContent(refreshedLead?.draft_body)) {
+    throw new Error('Email draft is empty. Refresh the draft before sending.');
+  }
+
+  const workspace = options.workspace || null;
+  const { sender, replyTo } = resolveWorkspaceSender(env, workspace);
+
   await sendAutomationEmail(env, {
+    attachmentContentType: workspace?.attachment_content_type || undefined,
+    attachmentFilename: workspace?.attachment_filename || undefined,
+    attachmentKey: workspace?.attachment_kv_key || undefined,
+    mailbox: workspace?.default_mailbox || null,
     recipient: normalizedRecipient,
-    subject: refreshedLead.draft_subject,
-    body: refreshedLead.draft_body,
+    replyTo,
+    sender,
+    senderName: workspaceSenderName(workspace),
+    subject: String(refreshedLead.draft_subject || '').trim(),
+    body: String(refreshedLead.draft_body || '').trim(),
   });
 
   await db.insert('v2_email_outcomes', {
@@ -149,9 +175,9 @@ export async function sendLead(env, db, leadId, options = {}) {
 }
 
 export async function sendReadyLeads(env, db, runId, config, options = {}) {
-  const sentToday = await countSentToday(db);
   const cap = config.warm_up_mode ? Number(config.warm_up_daily_cap || 5) : Number(config.daily_send_cap || 20);
-  const remaining = Math.max(cap - sentToday, 0);
+  const sentToday = options.ignoreDailyCap ? 0 : await countSentToday(db);
+  const remaining = options.ignoreDailyCap ? cap : Math.max(cap - sentToday, 0);
 
   if (remaining <= 0) {
     return {
@@ -190,6 +216,7 @@ export async function sendReadyLeads(env, db, runId, config, options = {}) {
         runId,
         requireAutoApproved: true,
         followUpSequence: config.follow_up_sequence,
+        workspace: options.workspace || null,
       });
       succeeded += 1;
     } catch {

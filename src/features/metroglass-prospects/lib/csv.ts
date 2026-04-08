@@ -150,11 +150,32 @@ const EMAIL_ALIASES = [
   "email",
   "email_address",
   "email_addresses",
+  "email_address_1",
+  "email_1",
   "e_mail",
+  "e_mail_address",
+  "primary_email",
+  "work_email",
+  "business_email",
   "email_cc_list",
   "email_and_cc_list",
   "emails",
 ]
+
+const EMAIL_ALIAS_SET = new Set(EMAIL_ALIASES)
+
+function looksLikeEmailField(key: string) {
+  const slug = slugHeader(key)
+  if (!slug) {
+    return false
+  }
+
+  if (EMAIL_ALIAS_SET.has(slug)) {
+    return true
+  }
+
+  return slug.includes("email") || slug.includes("e_mail")
+}
 
 function extractRowEmail(row: Record<string, string>) {
   for (const alias of EMAIL_ALIASES) {
@@ -164,6 +185,18 @@ function extractRowEmail(row: Record<string, string>) {
       return email
     }
   }
+
+  for (const [key, value] of Object.entries(row)) {
+    if (!looksLikeEmailField(key) || EMAIL_ALIAS_SET.has(key)) {
+      continue
+    }
+
+    const email = extractPrimaryEmail(value || "")
+    if (email) {
+      return email
+    }
+  }
+
   return null
 }
 

@@ -2,6 +2,7 @@ import { sendAutomationEmail } from '../gmail.mjs';
 import { getAppConfig } from './config.mjs';
 import { formatPriorOutreachMessage, getPriorOutreach } from './outreach-guard.mjs';
 import { eq, inList, order } from './supabase.mjs';
+import { resolveWorkspaceSender } from './workspace-email.mjs';
 import {
   addDaysToDateKey,
   formatLocalDateKey,
@@ -93,6 +94,8 @@ const FIELD_ALIASES = {
   state: ['state', 'province'],
   notes: ['notes', 'note', 'comments', 'comment', 'description', 'desc', 'outreach_insight', 'insight'],
 };
+
+const EMAIL_ALIAS_KEYS = new Set(FIELD_ALIASES.email_address.map((alias) => slugHeader(alias)));
 
 function categoryCounter(initialValue = 0) {
   return Object.fromEntries(PROSPECT_CATEGORIES.map((category) => [category, initialValue]));
@@ -187,6 +190,42 @@ function pickField(row, aliases) {
       return value;
     }
   }
+  return null;
+}
+
+function looksLikeEmailField(key) {
+  const slug = slugHeader(key);
+  if (!slug) {
+    return false;
+  }
+
+  if (EMAIL_ALIAS_KEYS.has(slug)) {
+    return true;
+  }
+
+  return slug.includes('email') || slug.includes('e_mail');
+}
+
+function pickEmailField(row) {
+  for (const alias of FIELD_ALIASES.email_address) {
+    const value = compactText(row?.[slugHeader(alias)]);
+    const email = extractPrimaryEmail(value);
+    if (email) {
+      return email;
+    }
+  }
+
+  for (const [key, rawValue] of Object.entries(row || {})) {
+    if (!looksLikeEmailField(key) || EMAIL_ALIAS_KEYS.has(slugHeader(key))) {
+      continue;
+    }
+
+    const email = extractPrimaryEmail(rawValue);
+    if (email) {
+      return email;
+    }
+  }
+
   return null;
 }
 
@@ -343,6 +382,46 @@ function greetingLine(prospect) {
   return `Hi ${firstName},`;
 }
 
+function workspaceBusinessName(workspace) {
+  return compactText(workspace?.business_name) || compactText(workspace?.name) || 'our team';
+}
+
+function workspaceSenderName(workspace) {
+  return compactText(workspace?.sender_name) || workspaceBusinessName(workspace);
+}
+
+function workspaceWebsiteLabel(workspace) {
+  const website = compactText(workspace?.website);
+  if (!website) {
+    return null;
+  }
+
+  return website.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+}
+
+function workspacePitch(workspace, category) {
+  return compactText(workspace?.outreach_pitch) || categoryPitch(category);
+}
+
+function workspaceFocus(workspace, prospect) {
+  return compactText(workspace?.outreach_focus) || categoryFocusLine(prospect);
+}
+
+function workspaceCta(workspace) {
+  return compactText(workspace?.outreach_cta)
+    || 'If you have a project where glass scope still needs a responsive partner, I would be glad to connect, turn around pricing quickly, and help keep things moving.';
+}
+
+function workspaceSignatureLines(workspace) {
+  return [
+    'Warm regards,',
+    workspaceSenderName(workspace),
+    workspaceBusinessName(workspace),
+    compactText(workspace?.phone) || null,
+    workspaceWebsiteLabel(workspace),
+  ].filter(Boolean);
+}
+
 function categoryPitch(category) {
   if (category === 'architect') {
     return 'support architects with clean detailing, responsive coordination, and high-end glass execution';
@@ -434,8 +513,8 @@ function personalizedContextLine(prospect) {
     .test(normalized);
 
   const line = asStatement
-    ? `I noticed ${snippet}, which felt especially aligned with the kind of detailed glass scope we support.`
-    : `I noticed your focus on ${snippet}, which felt especially aligned with the kind of detailed glass scope we support.`;
+    ? `I noticed ${snippet}, which felt especially aligned with the kind of work we support.`
+    : `I noticed your focus on ${snippet}, which felt especially aligned with the kind of work we support.`;
 
   return sentenceCase(line);
 }
@@ -683,7 +762,7 @@ function mergeValue(nextValue, currentValue) {
 
 function normalizeProspectRow(row, category) {
   const normalized = normalizeRow(row);
-  const emailAddress = extractPrimaryEmail(pickField(normalized, FIELD_ALIASES.email_address));
+  const emailAddress = pickEmailField(normalized);
   const rowCategory = pickField(normalized, FIELD_ALIASES.category);
   const nextCategory = normalizeProspectCategory(rowCategory, category);
   const combinedContact = parseCombinedContact(pickField(normalized, FIELD_ALIASES.contact_name));
@@ -1333,78 +1412,76 @@ function summaryLabel(prospect) {
   return prospect.contact_name || prospect.company_name || prospect.email_address;
 }
 
-function baseFollowUpDraft(prospect) {
+function baseFollowUpDraft(prospect, workspace = null) {
   const personalizedLine = personalizedContextLine(prospect);
   const followUpStep = Number(prospect?.follow_up_step || 1);
   const secondTouch = followUpStep >= 2;
   const company = compactText(prospect.company_name) || 'your team';
+  const businessName = workspaceBusinessName(workspace);
+  const pitch = workspacePitch(workspace, prospect.category);
 
   return {
     subject: secondTouch
-      ? `Final follow-up for ${company} | MetroGlass Pro`
-      : `Quick follow-up for ${company} | MetroGlass Pro`,
+      ? `Final follow-up for ${company} | ${businessName}`
+      : `Quick follow-up for ${company} | ${businessName}`,
     body: [
       greetingLine(prospect),
       '',
       secondTouch
-        ? `One last note from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`
-        : `Following up on my note from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`,
+        ? `One last note from ${businessName}. We ${pitch}.`
+        : `Following up on my note from ${businessName}. We ${pitch}.`,
       personalizedLine,
       '',
-      categoryFocusLine(prospect),
+      workspaceFocus(workspace, prospect),
       '',
       secondTouch
-        ? 'If there is any upcoming glass scope, I would still be glad to share our MetroGlass Pro About Us one-pager again and map out quick next steps.'
-        : 'If there is any upcoming glass scope, I would be glad to send over our MetroGlass Pro About Us one-pager again and put together quick next steps.',
+        ? 'If there is any upcoming glass scope, I would still be glad to share our About Us one-pager again and map out quick next steps.'
+        : 'If there is any upcoming glass scope, I would be glad to send over our About Us one-pager again and put together quick next steps.',
       '',
-      'Warm regards,',
-      'Donald Lena',
-      'MetroGlass Pro',
-      '(332) 999-3846',
-      'metroglasspro.com',
+      ...workspaceSignatureLines(workspace),
     ].filter(Boolean).join('\n'),
   };
 }
 
-function initialSubject(prospect) {
+function initialSubject(prospect, workspace = null) {
   const subjectBase = compactText(prospect.company_name) || compactText(prospect.contact_name) || 'your team';
   const snippet = firstDescriptionSnippet(prospect, 48);
-  return snippet ? `${subjectBase} | ${snippet} | MetroGlass Pro` : `${subjectBase} | MetroGlass Pro`;
+  const businessName = workspaceBusinessName(workspace);
+  return snippet ? `${subjectBase} | ${snippet} | ${businessName}` : `${subjectBase} | ${businessName}`;
 }
 
-function initialBody(prospect) {
+function initialBody(prospect, workspace = null) {
   const personalizedLine = personalizedContextLine(prospect);
   const company = compactText(prospect.company_name);
+  const senderName = workspaceSenderName(workspace);
+  const businessName = workspaceBusinessName(workspace);
+  const pitch = workspacePitch(workspace, prospect.category);
 
   return [
     greetingLine(prospect),
     '',
     company
-      ? `I’m Donald from MetroGlass Pro, and I’m reaching out because ${company} looks closely aligned with the kind of glass scope we help support.`
-      : `I’m Donald from MetroGlass Pro, and I’m reaching out because your work looks closely aligned with the kind of glass scope we help support.`,
+      ? `I’m ${senderName} from ${businessName}, and I’m reaching out because ${company} looks closely aligned with the kind of work we support.`
+      : `I’m ${senderName} from ${businessName}, and I’m reaching out because your work looks closely aligned with the kind of work we support.`,
     '',
-    `We ${categoryPitch(prospect.category)} across NYC, New Jersey, and Connecticut.`,
+    `We ${pitch}.`,
     '',
     personalizedLine,
     '',
-    categoryFocusLine(prospect),
+    workspaceFocus(workspace, prospect),
     '',
-    'I attached our MetroGlass Pro About Us one-pager so you can get a quick feel for the work, responsiveness, and detail we bring to projects.',
+    'I attached our About Us one-pager so you can get a quick feel for the work, responsiveness, and detail we bring to projects.',
     '',
-    'If you have a project where glass scope still needs a responsive partner, I would be glad to connect, turn around pricing quickly, and help keep things moving.',
+    workspaceCta(workspace),
     '',
-    'Warm regards,',
-    'Donald Lena',
-    'MetroGlass Pro',
-    '(332) 999-3846',
-    'metroglasspro.com',
+    ...workspaceSignatureLines(workspace),
   ].filter(Boolean).join('\n');
 }
 
-function resolveInitialDraft(prospect) {
+function resolveInitialDraft(prospect, workspace = null) {
   const generated = {
-    subject: initialSubject(prospect),
-    body: initialBody(prospect),
+    subject: initialSubject(prospect, workspace),
+    body: initialBody(prospect, workspace),
   };
 
   if (!shouldUseStoredInitialDraft(prospect)) {
@@ -1420,12 +1497,12 @@ function resolveInitialDraft(prospect) {
 function resolveFollowUpDraft(prospect, options = {}) {
   if (options.subject || options.body) {
     return {
-      subject: compactText(options.subject) || baseFollowUpDraft(prospect).subject,
-      body: compactMultilineText(options.body) || baseFollowUpDraft(prospect).body,
+      subject: compactText(options.subject) || baseFollowUpDraft(prospect, options.workspace).subject,
+      body: compactMultilineText(options.body) || baseFollowUpDraft(prospect, options.workspace).body,
     };
   }
 
-  return baseFollowUpDraft(prospect);
+  return baseFollowUpDraft(prospect, options.workspace);
 }
 
 function updatedStoredInitialDraft(prospect, subject, body) {
@@ -1592,6 +1669,9 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
     throw new Error('Initial outreach already sent for this prospect');
   }
 
+  const workspace = options.workspace || null;
+  const { sender, replyTo } = resolveWorkspaceSender(env, workspace);
+
   if (kind === 'initial') {
     const priorOutreach = await getPriorOutreach(db, recipient);
     const sameProspect = priorOutreach?.prospect_id && String(priorOutreach.prospect_id) === String(prospectId);
@@ -1620,9 +1700,9 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
     }
   }
 
-  const resolvedInitialDraft = resolveInitialDraft(hydrated);
+  const resolvedInitialDraft = resolveInitialDraft(hydrated, workspace);
   const resolvedFollowUpDraft = kind === 'follow_up'
-    ? resolveFollowUpDraft({ ...hydrated, follow_up_step: Number(options.stepNumber || 1) }, options)
+    ? resolveFollowUpDraft({ ...hydrated, follow_up_step: Number(options.stepNumber || 1) }, { ...options, workspace })
     : null;
   const draftSubject = kind === 'follow_up'
     ? resolvedFollowUpDraft?.subject || ''
@@ -1630,17 +1710,30 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
   const draftBody = kind === 'follow_up'
     ? resolvedFollowUpDraft?.body || ''
     : compactMultilineText(options.body) || resolvedInitialDraft.body || '';
+  const normalizedDraftSubject = compactText(draftSubject);
+  const normalizedDraftBody = compactMultilineText(draftBody);
+
+  if (!normalizedDraftSubject || !normalizedDraftBody) {
+    throw new Error('Prospect draft is empty. Refresh the draft before sending.');
+  }
 
   const gmail = await sendAutomationEmail(env, {
+    attachmentContentType: workspace?.attachment_content_type || undefined,
+    attachmentFilename: workspace?.attachment_filename || undefined,
+    attachmentKey: workspace?.attachment_kv_key || undefined,
+    mailbox: workspace?.default_mailbox || null,
     recipient,
-    subject: draftSubject,
-    body: draftBody,
+    replyTo,
+    sender,
+    senderName: workspaceSenderName(workspace),
+    subject: normalizedDraftSubject,
+    body: normalizedDraftBody,
     threadId: kind === 'follow_up' ? hydrated.gmail_thread_id || undefined : undefined,
   });
 
   const sentAt = nowIso();
   const nextPatch = {
-    ...(kind === 'initial' ? updatedStoredInitialDraft(hydrated, draftSubject, draftBody) : {}),
+    ...(kind === 'initial' ? updatedStoredInitialDraft(hydrated, normalizedDraftSubject, normalizedDraftBody) : {}),
     status: 'sent',
     first_sent_at: kind === 'initial' ? (hydrated.first_sent_at || sentAt) : hydrated.first_sent_at,
     last_sent_at: sentAt,
@@ -1661,7 +1754,7 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
     detail: {
       kind,
       step_number: kind === 'follow_up' ? Number(options.stepNumber || 1) : 0,
-      subject: draftSubject,
+      subject: normalizedDraftSubject,
       automated: Boolean(options.automated),
       slot_key: options.slotKey || null,
     },
@@ -1676,7 +1769,7 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
     options.actorId || null,
     {
       recipient,
-      subject: draftSubject,
+      subject: normalizedDraftSubject,
       slot_key: options.slotKey || null,
     },
   );
@@ -1694,8 +1787,8 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
       status: 'sent',
       sent_at: sentAt,
       slot_key: options.slotKey || null,
-      draft_subject: draftSubject,
-      draft_body: draftBody,
+      draft_subject: normalizedDraftSubject,
+      draft_body: normalizedDraftBody,
       updated_at: sentAt,
     });
   }
@@ -2359,6 +2452,7 @@ export async function importProspects(db, payload, actorId = null) {
   const skippedByReason = {
     missing_valid_email: 0,
     duplicate_in_file: 0,
+    already_in_database: 0,
   };
   const seenEmails = new Set();
   const normalizedRows = [];
@@ -2379,9 +2473,8 @@ export async function importProspects(db, payload, actorId = null) {
     normalizedRows.push(result.row);
   }
 
-  const skipped = Object.values(skippedByReason).reduce((total, value) => total + Number(value || 0), 0);
-
   if (!normalizedRows.length) {
+    const skipped = Object.values(skippedByReason).reduce((total, value) => total + Number(value || 0), 0);
     await db.update('v2_prospect_import_batches', [eq('id', batch.id)], {
       imported_count: 0,
       skipped_count: skipped,
@@ -2412,45 +2505,83 @@ export async function importProspects(db, payload, actorId = null) {
   });
 
   const existingMap = Object.fromEntries(existing.map((row) => [row.email_normalized, row]));
+  const freshRows = [];
+
+  for (const row of normalizedRows) {
+    if (existingMap[row.email_normalized]) {
+      skippedByReason.already_in_database += 1;
+      continue;
+    }
+
+    freshRows.push(row);
+  }
+
+  const skipped = Object.values(skippedByReason).reduce((total, value) => total + Number(value || 0), 0);
+
+  if (!freshRows.length) {
+    await db.update('v2_prospect_import_batches', [eq('id', batch.id)], {
+      imported_count: 0,
+      skipped_count: skipped,
+      ...(campaign?.id ? { campaign_id: campaign.id } : {}),
+      skipped_by_reason: skippedByReason,
+    }).catch(async (error) => {
+      if (!isMissingProspectCrmError(error)) {
+        throw error;
+      }
+      await db.update('v2_prospect_import_batches', [eq('id', batch.id)], {
+        imported_count: 0,
+        skipped_count: skipped,
+        ...(campaign?.id ? { campaign_id: campaign.id } : {}),
+      });
+    });
+    return {
+      batch_id: batch.id,
+      filename,
+      category,
+      imported: 0,
+      skipped,
+      skipped_by_reason: skippedByReason,
+    };
+  }
+
   const now = nowIso();
 
-  const prepared = normalizedRows.map((row) => {
-    const current = existingMap[row.email_normalized] || null;
+  const prepared = freshRows.map((row) => {
     const merged = {
       category: row.category,
-      company_name: mergeValue(row.company_name, current?.company_name),
-      contact_name: mergeValue(row.contact_name, current?.contact_name),
-      contact_role: mergeValue(row.contact_role, current?.contact_role),
+      company_name: row.company_name,
+      contact_name: row.contact_name,
+      contact_role: row.contact_role,
       email_address: row.email_address,
       email_normalized: row.email_normalized,
-      phone: mergeValue(row.phone, current?.phone),
-      website: mergeValue(row.website, current?.website),
-      city: mergeValue(row.city, current?.city),
-      state: mergeValue(row.state, current?.state),
+      phone: row.phone,
+      website: row.website,
+      city: row.city,
+      state: row.state,
       source: 'csv_import',
       import_batch_id: batch.id,
-      campaign_id: current?.campaign_id || campaign?.id || null,
-      company_id: current?.company_id || null,
-      status: current?.status || 'new',
-      notes: mergeValue(row.notes, current?.notes),
-      personalization_summary: mergeValue(firstDescriptionSnippet(row, 220), current?.personalization_summary),
-      gmail_thread_id: current?.gmail_thread_id || null,
-      sent_count: Number(current?.sent_count || 0),
-      do_not_contact: Boolean(current?.do_not_contact || false),
-      opted_out_at: current?.opted_out_at || null,
-      first_sent_at: current?.first_sent_at || null,
-      last_sent_at: current?.last_sent_at || null,
-      last_follow_up_at: current?.last_follow_up_at || null,
-      last_replied_at: current?.last_replied_at || null,
-      created_at: current?.created_at || now,
+      campaign_id: campaign?.id || null,
+      company_id: null,
+      status: 'new',
+      notes: row.notes,
+      personalization_summary: firstDescriptionSnippet(row, 220),
+      gmail_thread_id: null,
+      sent_count: 0,
+      do_not_contact: false,
+      opted_out_at: null,
+      first_sent_at: null,
+      last_sent_at: null,
+      last_follow_up_at: null,
+      last_replied_at: null,
+      created_at: now,
       updated_at: now,
     };
     const draft = buildProspectDraft(merged);
 
     return {
       ...merged,
-      draft_subject: current?.draft_subject || draft.subject,
-      draft_body: current?.draft_body || draft.body,
+      draft_subject: draft.subject,
+      draft_body: draft.body,
     };
   });
 
@@ -2492,7 +2623,7 @@ export async function importProspects(db, payload, actorId = null) {
     prospect_id: prospect.id,
     actor_type: 'operator',
     actor_id: actorId,
-    event_type: existingMap[prospect.email_normalized] ? 'reimported' : 'imported',
+    event_type: 'imported',
     detail: {
       batch_id: batch.id,
       filename,
@@ -2702,7 +2833,7 @@ export async function markProspectBounced(db, prospectId, actorId = null, actorT
   });
 }
 
-export async function sendProspect(env, db, prospectId, actorId = null) {
+export async function sendProspect(env, db, prospectId, actorId = null, workspace = null) {
   const { prospect, followUps } = await getProspectWithFollowUps(db, prospectId);
   const kind = prospect?.first_sent_at ? 'follow_up' : 'initial';
   const pendingFollowUp = followUps.find((row) => row.status === 'pending') || null;
@@ -2714,6 +2845,7 @@ export async function sendProspect(env, db, prospectId, actorId = null) {
     followUpId: kind === 'follow_up' ? pendingFollowUp?.id || null : null,
     stepNumber: kind === 'follow_up' ? Number(pendingFollowUp?.step_number || 1) : 0,
     config: await getAppConfig(db),
+    workspace,
   });
 }
 
@@ -2760,7 +2892,7 @@ function sentTodayByCategory(outcomes, prospectMap, timeZone) {
   return totals;
 }
 
-export async function runProspectDailyBatch(env, db, config, slotKey) {
+export async function runProspectDailyBatch(env, db, config, slotKey, options = {}) {
   const [followUps, prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspectFollowUps(db),
     listAllProspects(db),
@@ -2826,7 +2958,9 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
   const selectedInitials = [];
 
   for (const category of PROSPECT_CATEGORIES) {
-    const remaining = Math.max(totalPerCategory - Number(sentToday[category] || 0), 0);
+    const remaining = options.ignoreDailyCap
+      ? totalPerCategory
+      : Math.max(totalPerCategory - Number(sentToday[category] || 0), 0);
     if (remaining <= 0) {
       continue;
     }
@@ -2859,6 +2993,7 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
         stepNumber: Number(followUp.step_number || 1),
         followUpId: followUp.id,
         config,
+        workspace: options.workspace || null,
       });
       sentByCategory[prospect.category] += 1;
       followUpSentByCategory[prospect.category] += 1;
@@ -2881,6 +3016,7 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
         actorId: null,
         slotKey,
         config,
+        workspace: options.workspace || null,
       });
       sentByCategory[prospect.category] += 1;
       initialSentByCategory[prospect.category] += 1;
@@ -2905,7 +3041,7 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
   };
 }
 
-export async function runProspectInitialBatch(env, db, config, slotKey) {
+export async function runProspectInitialBatch(env, db, config, slotKey, options = {}) {
   const [prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspects(db),
     listRecentProspectOutcomes(db),
@@ -2968,6 +3104,7 @@ export async function runProspectInitialBatch(env, db, config, slotKey) {
         actorId: null,
         slotKey,
         config,
+        workspace: options.workspace || null,
       });
       sentByCategory[prospect.category] += 1;
     } catch (error) {
@@ -2987,7 +3124,7 @@ export async function runProspectInitialBatch(env, db, config, slotKey) {
   };
 }
 
-export async function runProspectFollowUpBatch(env, db, config, slotKey) {
+export async function runProspectFollowUpBatch(env, db, config, slotKey, options = {}) {
   const [followUps, prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspectFollowUps(db),
     listAllProspects(db),
@@ -3067,6 +3204,7 @@ export async function runProspectFollowUpBatch(env, db, config, slotKey) {
         stepNumber: Number(followUp.step_number || 1),
         followUpId: followUp.id,
         config,
+        workspace: options.workspace || null,
       });
       sentByCategory[prospect.category] += 1;
     } catch (error) {
@@ -3123,11 +3261,11 @@ export async function runScheduledProspectPilot(env, db, createRun, completeRun,
     let summary;
 
     if (mode === 'prospect_initial_send') {
-      summary = await runProspectInitialBatch(env, db, config, slotKey);
+      summary = await runProspectInitialBatch(env, db, config, slotKey, options);
     } else if (mode === 'prospect_follow_up_send') {
-      summary = await runProspectFollowUpBatch(env, db, config, slotKey);
+      summary = await runProspectFollowUpBatch(env, db, config, slotKey, options);
     } else {
-      summary = await runProspectDailyBatch(env, db, config, slotKey);
+      summary = await runProspectDailyBatch(env, db, config, slotKey, options);
     }
 
     await completeRun(db, run.id, {

@@ -5,6 +5,9 @@ export type ProspectCategory = "interior_designer" | "gc" | "property_manager" |
 export type ProspectStatus = "new" | "drafted" | "sent" | "replied" | "opted_out" | "archived"
 export type ProspectQueueState = "queued_initial" | "sent" | "queued_follow_up" | "follow_up_sent" | "replied" | "opted_out" | "archived" | "suppressed" | "pending_review"
 
+export type WorkspaceRole = "owner" | "admin" | "member"
+export type WorkspaceStatus = "active" | "invited" | "disabled"
+
 export interface LeadRow {
   id: string
   permit_number: string
@@ -516,6 +519,165 @@ export interface HealthPayload {
   defaultAttachmentName: string | null
 }
 
+export interface WorkspaceAccount {
+  id: string
+  slug: string
+  name: string
+  business_name: string
+  website: string | null
+  primary_login_domain: string
+  icon: string | null
+  accent_color: string | null
+  sender_name: string | null
+  sender_email: string | null
+  billing_email?: string | null
+  phone?: string | null
+  attachment_filename: string | null
+  plan_name: string
+  plan_price_cents: number
+  subscription_status: "trialing" | "active" | "past_due" | "cancelled"
+  stripe_customer_id?: string | null
+  stripe_subscription_id?: string | null
+  onboarding_status?: "pending" | "in_progress" | "completed"
+  outreach_pitch?: string | null
+  outreach_focus?: string | null
+  outreach_cta?: string | null
+  default_attachment?: WorkspaceAttachment | null
+  default_mailbox?: WorkspaceMailbox | null
+  brand?: {
+    icon: string | null
+    accent_color: string | null
+  }
+}
+
+export interface WorkspaceMember {
+  id: string | null
+  email: string
+  full_name: string | null
+  role: WorkspaceRole
+  status: WorkspaceStatus
+  can_manage_billing: boolean
+  invited_at?: string | null
+  invite_expires_at?: string | null
+  accepted_at?: string | null
+  disabled_at?: string | null
+}
+
+export interface WorkspaceAttachment {
+  id: string
+  filename: string
+  content_type: string
+  file_size_bytes: number
+  status: "active" | "archived"
+  is_default: boolean
+  uploaded_by: string | null
+  storage_key: string
+  archived_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface WorkspaceMailbox {
+  id: string
+  provider: "gmail" | string
+  email: string
+  display_name: string | null
+  status: "active" | "disabled" | "error" | string
+  is_default: boolean
+  connected_by: string | null
+  last_synced_at: string | null
+  last_sent_at: string | null
+  last_error: string | null
+  metadata: Record<string, unknown>
+  archived_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface OnboardingState {
+  status: "pending" | "in_progress" | "completed"
+  business_info_completed: boolean
+  sender_identity_completed: boolean
+  attachment_completed: boolean
+  mailbox_completed: boolean
+  first_campaign_ready: boolean
+  completed_at: string | null
+  business_info_completed_at: string | null
+  sender_identity_completed_at: string | null
+  attachment_completed_at: string | null
+  mailbox_completed_at: string | null
+  first_campaign_ready_at: string | null
+  attachment_count: number
+  mailbox_count: number
+  has_default_attachment: boolean
+  has_default_mailbox: boolean
+}
+
+export interface WorkspaceHealth {
+  mailbox_connected: boolean
+  mailbox_email: string | null
+  attachment_loaded: boolean
+  attachment_filename: string | null
+  billing_status: WorkspaceAccount["subscription_status"]
+  run_freshness: {
+    status: "healthy" | "warning" | "stale" | "missing"
+    age_minutes: number | null
+  }
+  reply_sync_freshness: {
+    status: "healthy" | "warning" | "stale" | "missing"
+    age_minutes: number | null
+  }
+  outbound_safety: {
+    permit_auto_send_enabled: boolean
+    daily_send_cap: number
+    auto_send_trust_threshold: number
+    follow_up_enabled: boolean
+  }
+}
+
+export interface WorkspaceMetricSeries {
+  lead_sends_30d: number
+  prospect_sends_30d: number
+  prospect_positive_replies_30d: number
+  prospect_opt_outs_30d: number
+  runs_30d: number
+  runs_failed_30d: number
+}
+
+export interface AuditEvent {
+  id: string
+  actor_type: string
+  actor_id: string | null
+  event_type: string
+  target_type: string | null
+  target_id: string | null
+  detail: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface OnboardingPayload {
+  requires_bootstrap: boolean
+  email?: string
+  suggested_slug?: string
+  account?: WorkspaceAccount
+  current_member?: WorkspaceMember
+  onboarding?: OnboardingState | null
+  attachments?: WorkspaceAttachment[]
+  mailboxes?: WorkspaceMailbox[]
+}
+
+export interface InvitePreviewPayload {
+  invite: {
+    token: string
+    email: string
+    full_name: string | null
+    role: WorkspaceRole
+    status: WorkspaceStatus
+    invite_expires_at: string | null
+  }
+  account: WorkspaceAccount
+}
+
 export interface ConfigPayload {
   daily_send_cap: number
   min_relevance_threshold: number
@@ -557,10 +719,26 @@ export interface ProspectsPayload {
 }
 
 export interface SystemPayload {
+  account: WorkspaceAccount
+  current_member: WorkspaceMember
+  members: WorkspaceMember[]
+  onboarding?: OnboardingState | null
+  attachments?: WorkspaceAttachment[]
+  default_attachment?: WorkspaceAttachment | null
+  mailboxes?: WorkspaceMailbox[]
+  default_mailbox?: WorkspaceMailbox | null
+  billing?: {
+    status: WorkspaceAccount["subscription_status"]
+    stripe_customer_id: string | null
+    stripe_subscription_id: string | null
+    owner_only: boolean
+  }
   worker: {
     ok: boolean
-    has_gmail: boolean
+    has_gmail_client: boolean
   }
+  health: WorkspaceHealth
+  metrics?: WorkspaceMetricSeries
   total_leads: number
   total_prospects?: number
   recent_failures: Array<{
@@ -570,7 +748,7 @@ export interface SystemPayload {
     error_code: string | null
     created_at: string
   }>
-  domain_health: Array<{
+  domain_health_reference: Array<{
     domain: string
     health_score: number
     checked_at: string
