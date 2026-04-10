@@ -1,5 +1,7 @@
 const STORAGE_KEY = "metroglass-leads-auth-session"
 const REFRESH_WINDOW_MS = 5 * 60 * 1000
+export const AUTH_SESSION_CHANGED_EVENT = "permit-pulse-auth-session-changed"
+
 const LOGIN_IDENTIFIER_ALIASES: Record<string, string> = {
   operations: "operations@metroglasspro.com",
   metroglasspro: "operations@metroglasspro.com",
@@ -27,6 +29,10 @@ interface SupabaseAuthPayload {
     id?: string
     email?: string
   }
+}
+
+interface AuthSessionChangeDetail {
+  reason: "saved" | "cleared" | "expired" | "signed-out" | "refreshed"
 }
 
 function isBrowser(): boolean {
@@ -74,17 +80,28 @@ function normalizeSession(payload: SupabaseAuthPayload): AuthSession {
   }
 }
 
-function saveSession(session: AuthSession | null) {
+function notifySessionChanged(reason: AuthSessionChangeDetail["reason"]) {
+  if (!isBrowser()) {
+    return
+  }
+
+  window.dispatchEvent(new CustomEvent<AuthSessionChangeDetail>(AUTH_SESSION_CHANGED_EVENT, {
+    detail: { reason },
+  }))
+}
+
+function saveSession(session: AuthSession | null, reason: AuthSessionChangeDetail["reason"] = session ? "saved" : "cleared") {
   if (!isBrowser()) {
     return
   }
 
   if (!session) {
     window.localStorage.removeItem(STORAGE_KEY)
-    return
+  } else {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session))
   }
 
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session))
+  notifySessionChanged(reason)
 }
 
 async function requestAuth<T>(path: string, init: RequestInit, token?: string): Promise<T> {
@@ -132,8 +149,8 @@ export function loadStoredSession(): AuthSession | null {
   }
 }
 
-export function clearStoredSession() {
-  saveSession(null)
+export function clearStoredSession(reason: AuthSessionChangeDetail["reason"] = "cleared") {
+  saveSession(null, reason)
 }
 
 export function getAccessToken(): string | null {
@@ -169,7 +186,7 @@ export async function refreshStoredSession(currentSession?: AuthSession | null):
   )
 
   const nextSession = normalizeSession(payload)
-  saveSession(nextSession)
+  saveSession(nextSession, "refreshed")
   return nextSession
 }
 
@@ -193,7 +210,7 @@ export async function ensureSession(): Promise<AuthSession | null> {
 
 export async function signOutSession() {
   const session = loadStoredSession()
-  saveSession(null)
+  saveSession(null, "signed-out")
 
   if (!session?.accessToken) {
     return
@@ -222,6 +239,6 @@ export async function signUpWithPassword(email: string, password: string): Promi
   )
 
   const session = normalizeSession(payload)
-  saveSession(session)
+  saveSession(session, "saved")
   return session
 }

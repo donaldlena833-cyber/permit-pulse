@@ -1,4 +1,8 @@
-import { getAccessToken } from "@/features/auth/lib/session"
+import {
+  clearStoredSession,
+  getAccessToken,
+  refreshStoredSession,
+} from "@/features/auth/lib/session"
 import type {
   AuditEvent,
   ConfigPayload,
@@ -20,7 +24,20 @@ function apiBase(): string {
   return __PERMIT_PULSE_WORKER_URL__.replace(/\/$/, "")
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+function shouldInvalidateSession(response: Response, payload: unknown): boolean {
+  if (response.status === 401) {
+    return true
+  }
+
+  if (response.status !== 403 || !payload || typeof payload !== "object" || !("error" in payload)) {
+    return false
+  }
+
+  const message = typeof payload.error === "string" ? payload.error.toLowerCase() : ""
+  return message.includes("unauthorized") || message.includes("workspace access") || message.includes("session")
+}
+
+async function requestJson<T>(path: string, init?: RequestInit, retryOnAuthFailure = true): Promise<T> {
   const accessToken = getAccessToken()
   const response = await fetch(`${apiBase()}${path}`, {
     ...init,
@@ -38,6 +55,20 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
       payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
         ? payload.error
         : `API error ${response.status}`
+
+    if (retryOnAuthFailure && accessToken && shouldInvalidateSession(response, payload)) {
+      try {
+        const refreshedSession = await refreshStoredSession()
+        if (refreshedSession?.accessToken && refreshedSession.accessToken !== accessToken) {
+          return requestJson<T>(path, init, false)
+        }
+      } catch {
+        // Fall through to the normal failure path below.
+      }
+
+      clearStoredSession("expired")
+    }
+
     throw new Error(message)
   }
 

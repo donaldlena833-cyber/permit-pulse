@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 
 import {
+  AUTH_SESSION_CHANGED_EVENT,
   clearStoredSession,
   ensureSession,
   type AuthSession,
@@ -44,19 +45,36 @@ export function useWorkspaceAuth() {
     }
   }, [])
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<AuthSession | null> => {
     try {
       const nextSession = await ensureSession()
       setSession(nextSession)
       setStatus(nextSession ? "authenticated" : "unauthenticated")
       setError(null)
+      return nextSession
     } catch (hydrateError) {
       clearStoredSession()
       setSession(null)
       setStatus("unauthenticated")
       setError(hydrateError instanceof Error ? hydrateError.message : "Session restore failed")
+      return null
     }
   }, [])
+
+  useEffect(() => {
+    const handleSessionChange = (event: Event) => {
+      const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason
+      void (async () => {
+        const nextSession = await refresh()
+        if (!nextSession && reason === "expired") {
+          setError("Your session expired. Please sign in again.")
+        }
+      })()
+    }
+
+    window.addEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChange as EventListener)
+    return () => window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChange as EventListener)
+  }, [refresh])
 
   useEffect(() => {
     if (status !== "authenticated") {
