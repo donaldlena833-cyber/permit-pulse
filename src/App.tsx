@@ -382,7 +382,6 @@ function RoutedApp() {
   const [invitePreview, setInvitePreview] = useState<InvitePreviewPayload | null>(null)
   const [inviteLoading, setInviteLoading] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
-  const workspaceSessionKey = auth.session?.user.email || "workspace"
 
   const refreshWorkspaceState = useCallback(async () => {
     if (auth.status !== "authenticated") {
@@ -586,7 +585,6 @@ function RoutedApp() {
               ? <Navigate replace to="/app" />
               : (
                 <OnboardingScreen
-                  key={workspaceSessionKey}
                   loading={workspaceLoading}
                   onBootstrap={handleBootstrap}
                   onConnectMailbox={handleConnectMailbox}
@@ -603,7 +601,6 @@ function RoutedApp() {
           : resolveAuthenticatedPath(workspaceState) !== "/app"
               ? <Navigate replace to={resolveAuthenticatedPath(workspaceState)} />
               : <OperatorConsoleApp
-                  key={workspaceSessionKey}
                   activeSessionEmail={auth.session?.user.email || null}
                   onLogout={auth.logout}
                   onSwitchSession={handleSwitchSession}
