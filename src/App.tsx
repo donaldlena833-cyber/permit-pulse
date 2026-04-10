@@ -26,7 +26,6 @@ import type { InvitePreviewPayload, OnboardingPayload } from "@/features/operato
 import { ProspectDetailView } from "@/features/prospect-workspace/components/prospect-detail-view"
 import { ProspectsScreen } from "@/features/prospect-workspace/components/prospects-screen"
 import { OnboardingScreen } from "@/features/onboarding/components/onboarding-screen"
-import { getSessionDisplayName, type AuthSession } from "@/features/auth/lib/session"
 
 function AppTabs({
   tab,
@@ -69,17 +68,7 @@ function AppTabs({
   )
 }
 
-function OperatorConsoleApp({
-  activeSessionEmail,
-  onLogout,
-  onSwitchSession,
-  savedSessions,
-}: {
-  activeSessionEmail: string | null
-  onLogout: () => Promise<void>
-  onSwitchSession: (email: string) => Promise<void>
-  savedSessions: AuthSession[]
-}) {
+function OperatorConsoleApp({ onLogout }: { onLogout: () => Promise<void> }) {
   const {
     tab,
     setTab,
@@ -174,37 +163,9 @@ function OperatorConsoleApp({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {savedSessions.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-2 rounded-full border border-steel-200 bg-white/80 px-2 py-2 shadow-[0_10px_20px_rgba(15,23,42,0.05)]">
-                <span className="pl-2 pr-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-steel-500">
-                  Switch
-                </span>
-                {savedSessions.map((savedSession) => {
-                  const email = savedSession.user.email
-                  const active = email === activeSessionEmail
-                  return (
-                    <button
-                      key={email}
-                      className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                        active
-                          ? "bg-steel-900 text-white shadow-[0_10px_20px_rgba(15,23,42,0.18)]"
-                          : "bg-steel-50 text-steel-700 hover:bg-steel-100"
-                      }`}
-                      onClick={() => { void onSwitchSession(email).catch(() => undefined) }}
-                      type="button"
-                    >
-                      {getSessionDisplayName(email)}
-                    </button>
-                  )
-                })}
-              </div>
-            ) : null}
-
-            <Button className="h-11 rounded-full px-5" onClick={() => void onLogout()} type="button" variant="outline">
-              Log out
-            </Button>
-          </div>
+          <Button className="h-11 rounded-full px-5" onClick={() => void onLogout()} type="button" variant="outline">
+            Log out
+          </Button>
         </div>
       </header>
 
@@ -521,13 +482,6 @@ function RoutedApp() {
     window.location.assign(result.authorization_url)
   }, [])
 
-  const handleSwitchSession = useCallback(async (email: string) => {
-    await auth.switchSession(email)
-    const nextState = await fetchOnboardingState()
-    setWorkspaceState(nextState)
-    navigate(resolveAuthenticatedPath(nextState), { replace: true })
-  }, [auth, navigate])
-
   if (auth.status === "loading" || (auth.status === "authenticated" && workspaceLoading && location.pathname !== "/accept-invite")) {
     return (
       <>
@@ -548,14 +502,7 @@ function RoutedApp() {
           path="/login"
           element={auth.status === "authenticated"
             ? <Navigate replace to={resolveAuthenticatedPath(workspaceState)} />
-            : <LoginScreen
-                error={auth.error}
-                loading={auth.status === "loading"}
-                onSubmit={handleLogin}
-                onSwitchSession={handleSwitchSession}
-                onSwitchToSignup={() => navigate("/signup")}
-                savedSessions={auth.storedSessions}
-              />}
+            : <LoginScreen error={auth.error} loading={auth.status === "loading"} onSubmit={handleLogin} onSwitchToSignup={() => navigate("/signup")} />}
         />
         <Route
           path="/signup"
@@ -598,14 +545,9 @@ function RoutedApp() {
           path="/app/*"
           element={auth.status !== "authenticated"
             ? <Navigate replace to="/login" />
-          : resolveAuthenticatedPath(workspaceState) !== "/app"
+            : resolveAuthenticatedPath(workspaceState) !== "/app"
               ? <Navigate replace to={resolveAuthenticatedPath(workspaceState)} />
-              : <OperatorConsoleApp
-                  activeSessionEmail={auth.session?.user.email || null}
-                  onLogout={auth.logout}
-                  onSwitchSession={handleSwitchSession}
-                  savedSessions={auth.storedSessions}
-                />}
+              : <OperatorConsoleApp onLogout={auth.logout} />}
         />
       </Routes>
       <Toaster position="top-center" richColors />
