@@ -39,7 +39,6 @@ interface SettingsScreenProps {
     outreach_pitch?: string | null
     outreach_focus?: string | null
     outreach_cta?: string | null
-    first_campaign_ready?: boolean
   }) => Promise<void>
   onUploadWorkspaceAttachment: (payload: {
     filename: string
@@ -103,7 +102,6 @@ export function SettingsScreen({
     outreach_pitch: system?.account?.outreach_pitch || "",
     outreach_focus: system?.account?.outreach_focus || "",
     outreach_cta: system?.account?.outreach_cta || "",
-    first_campaign_ready: Boolean(system?.onboarding?.first_campaign_ready),
   })
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null)
   const [archiveOldDefault, setArchiveOldDefault] = useState(true)
@@ -131,9 +129,8 @@ export function SettingsScreen({
       outreach_pitch: system?.account?.outreach_pitch || "",
       outreach_focus: system?.account?.outreach_focus || "",
       outreach_cta: system?.account?.outreach_cta || "",
-      first_campaign_ready: Boolean(system?.onboarding?.first_campaign_ready),
     })
-  }, [system?.account, system?.onboarding?.first_campaign_ready])
+  }, [system?.account])
 
   useEffect(() => {
     let cancelled = false
@@ -213,7 +210,6 @@ export function SettingsScreen({
   }
 
   const metrics = system.metrics
-  const onboarding = system.onboarding
   const mailboxSelfServeEnabled = Boolean(system.capabilities?.mailbox_self_serve_connect)
 
   return (
@@ -222,7 +218,7 @@ export function SettingsScreen({
         <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Workspace Settings</div>
         <h1 className="mt-3 text-4xl font-extrabold tracking-[-0.05em] text-steel-900">Growth-ready controls</h1>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-steel-600">
-          Manage onboarding, attachment files, workspace access, audit history, and the send policy for this internal operator workspace.
+          Manage attachments, workspace access, audit history, and the send policy for this internal operator workspace.
         </p>
       </Panel>
 
@@ -233,20 +229,6 @@ export function SettingsScreen({
             <div className="rounded-[18px] border border-steel-200 bg-white px-4 py-4">
               <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Workspace mode</div>
               <div className="mt-2 text-sm text-steel-900">Internal operator workspace with future-ready workspace boundaries</div>
-            </div>
-            <div className="rounded-[18px] border border-steel-200 bg-white px-4 py-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Onboarding</div>
-              <div className="mt-2 flex items-center gap-2 text-sm text-steel-900">
-                <span className={`h-2.5 w-2.5 rounded-full ${statusDot(onboarding?.status)}`} />
-                {onboarding?.status || system.account.onboarding_status || "pending"}
-              </div>
-              <div className="mt-3 grid gap-2 text-xs text-steel-600">
-                <div>Business info: {onboarding?.business_info_completed ? "Done" : "Pending"}</div>
-                <div>Sender identity: {onboarding?.sender_identity_completed ? "Done" : "Pending"}</div>
-                <div>Attachment: {onboarding?.attachment_completed ? "Done" : "Pending"}</div>
-                <div>Mailbox: {onboarding?.mailbox_completed ? "Done" : "Pending"}</div>
-                <div>First campaign: {onboarding?.first_campaign_ready ? "Done" : "Pending"}</div>
-              </div>
             </div>
             <div className="rounded-[18px] border border-steel-200 bg-white px-4 py-4">
               <div className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-500">Workspace Health</div>
@@ -331,16 +313,6 @@ export function SettingsScreen({
                 onChange={(event) => setWorkspaceForm((current) => ({ ...current, outreach_cta: event.target.value }))}
               />
             </label>
-            <div className="flex items-center justify-between rounded-[16px] border border-steel-200 bg-white px-4 py-4">
-              <div>
-                <div className="font-medium text-steel-900">First campaign ready</div>
-                <div className="text-sm text-steel-600">Mark onboarding complete once the workspace is ready to start its first live campaign.</div>
-              </div>
-              <Switch
-                checked={workspaceForm.first_campaign_ready}
-                onCheckedChange={(checked) => setWorkspaceForm((current) => ({ ...current, first_campaign_ready: checked }))}
-              />
-            </div>
           </div>
           <Button
             className="mt-5 h-11 rounded-full px-5"

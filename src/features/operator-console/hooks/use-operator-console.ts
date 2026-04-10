@@ -651,7 +651,6 @@ export function useOperatorConsole() {
       outreach_pitch?: string | null
       outreach_focus?: string | null
       outreach_cta?: string | null
-      first_campaign_ready?: boolean
     }) => {
       try {
         await updateWorkspaceAccount(payload)

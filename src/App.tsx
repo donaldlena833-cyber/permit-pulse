@@ -15,17 +15,11 @@ import { TodayScreen } from "@/features/operator-console/components/today-screen
 import { useOperatorConsole } from "@/features/operator-console/hooks/use-operator-console"
 import {
   acceptInvite,
-  beginWorkspaceGmailConnect,
-  bootstrapWorkspace,
   fetchInvitePreview,
-  fetchOnboardingState,
-  updateOnboardingProfile,
-  uploadWorkspaceAttachment as uploadWorkspaceAttachmentRequest,
 } from "@/features/operator-console/lib/remote"
-import type { InvitePreviewPayload, OnboardingPayload } from "@/features/operator-console/types/api"
+import type { InvitePreviewPayload } from "@/features/operator-console/types/api"
 import { ProspectDetailView } from "@/features/prospect-workspace/components/prospect-detail-view"
 import { ProspectsScreen } from "@/features/prospect-workspace/components/prospects-screen"
-import { OnboardingScreen } from "@/features/onboarding/components/onboarding-screen"
 
 function AppTabs({
   tab,
@@ -286,45 +280,6 @@ function OperatorConsoleApp({ onLogout }: { onLogout: () => Promise<void> }) {
   )
 }
 
-async function fileToBase64(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-  let binary = ""
-  const chunkSize = 0x8000
-
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
-  }
-
-  return btoa(binary)
-}
-
-function resolveAuthenticatedPath(state: OnboardingPayload | null): string {
-  if (!state) {
-    return "/onboarding"
-  }
-
-  if (state.requires_bootstrap) {
-    return "/onboarding"
-  }
-
-  const onboarding = state.onboarding
-  const mailboxSelfServeEnabled = Boolean(state.capabilities?.mailbox_self_serve_connect)
-  const internalReadyWithoutMailbox = Boolean(
-    onboarding?.business_info_completed
-    && onboarding?.sender_identity_completed
-    && onboarding?.attachment_completed
-    && onboarding?.first_campaign_ready
-    && !mailboxSelfServeEnabled,
-  )
-
-  if (onboarding?.status !== "completed" && !internalReadyWithoutMailbox) {
-    return "/onboarding"
-  }
-
-  return "/app"
-}
-
 function FullScreenLoader() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
@@ -338,36 +293,9 @@ function RoutedApp() {
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const [workspaceState, setWorkspaceState] = useState<OnboardingPayload | null>(null)
-  const [workspaceLoading, setWorkspaceLoading] = useState(false)
   const [invitePreview, setInvitePreview] = useState<InvitePreviewPayload | null>(null)
   const [inviteLoading, setInviteLoading] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
-
-  const refreshWorkspaceState = useCallback(async () => {
-    if (auth.status !== "authenticated") {
-      setWorkspaceState(null)
-      return null
-    }
-
-    setWorkspaceLoading(true)
-    try {
-      const payload = await fetchOnboardingState()
-      setWorkspaceState(payload)
-      return payload
-    } finally {
-      setWorkspaceLoading(false)
-    }
-  }, [auth.status])
-
-  useEffect(() => {
-    if (auth.status === "authenticated") {
-      void refreshWorkspaceState()
-      return
-    }
-
-    setWorkspaceState(null)
-  }, [auth.status, refreshWorkspaceState])
 
   useEffect(() => {
     const token = searchParams.get("token")
@@ -404,26 +332,22 @@ function RoutedApp() {
 
   const handleLogin = useCallback(async (email: string, password: string) => {
     await auth.login(email, password)
-    const nextState = await fetchOnboardingState()
-    setWorkspaceState(nextState)
     const inviteToken = searchParams.get("token")
     navigate(
       location.pathname === "/accept-invite" && inviteToken
         ? `/accept-invite?token=${encodeURIComponent(inviteToken)}`
-        : resolveAuthenticatedPath(nextState),
+        : "/app",
       { replace: true },
     )
   }, [auth, location.pathname, navigate, searchParams])
 
   const handleSignup = useCallback(async (email: string, password: string) => {
     await auth.signup(email, password)
-    const nextState = await fetchOnboardingState()
-    setWorkspaceState(nextState)
     const inviteToken = searchParams.get("token")
     navigate(
       location.pathname === "/accept-invite" && inviteToken
         ? `/accept-invite?token=${encodeURIComponent(inviteToken)}`
-        : resolveAuthenticatedPath(nextState),
+        : "/app",
       { replace: true },
     )
   }, [auth, location.pathname, navigate, searchParams])
@@ -437,52 +361,13 @@ function RoutedApp() {
     setInviteLoading(true)
     try {
       await acceptInvite(token)
-      const nextState = await fetchOnboardingState()
-      setWorkspaceState(nextState)
-      navigate(resolveAuthenticatedPath(nextState), { replace: true })
+      navigate("/app", { replace: true })
     } finally {
       setInviteLoading(false)
     }
   }, [navigate, searchParams])
 
-  const handleBootstrap = useCallback(async (payload: {
-    name: string
-    business_name: string
-    website?: string | null
-    sender_name?: string | null
-    sender_email?: string | null
-    billing_email?: string | null
-    phone?: string | null
-  }) => {
-    await bootstrapWorkspace(payload)
-    const nextState = await fetchOnboardingState()
-    setWorkspaceState(nextState)
-    navigate(resolveAuthenticatedPath(nextState), { replace: true })
-  }, [navigate])
-
-  const handleOnboardingSave = useCallback(async (payload: Record<string, unknown>) => {
-    await updateOnboardingProfile(payload)
-    await refreshWorkspaceState()
-  }, [refreshWorkspaceState])
-
-  const handleOnboardingUpload = useCallback(async (file: File) => {
-    const contentBase64 = await fileToBase64(file)
-    await uploadWorkspaceAttachmentRequest({
-      filename: file.name,
-      content_type: file.type || "application/pdf",
-      content_base64: contentBase64,
-      make_default: true,
-      archive_previous_default: true,
-    })
-    await refreshWorkspaceState()
-  }, [refreshWorkspaceState])
-
-  const handleConnectMailbox = useCallback(async () => {
-    const result = await beginWorkspaceGmailConnect("/onboarding")
-    window.location.assign(result.authorization_url)
-  }, [])
-
-  if (auth.status === "loading" || (auth.status === "authenticated" && workspaceLoading && location.pathname !== "/accept-invite")) {
+  if (auth.status === "loading") {
     return (
       <>
         <FullScreenLoader />
@@ -496,18 +381,18 @@ function RoutedApp() {
       <Routes>
         <Route
           path="/"
-          element={<Navigate replace to={auth.status === "authenticated" ? resolveAuthenticatedPath(workspaceState) : "/login"} />}
+          element={<Navigate replace to={auth.status === "authenticated" ? "/app" : "/login"} />}
         />
         <Route
           path="/login"
           element={auth.status === "authenticated"
-            ? <Navigate replace to={resolveAuthenticatedPath(workspaceState)} />
+            ? <Navigate replace to="/app" />
             : <LoginScreen error={auth.error} loading={auth.status === "loading"} onSubmit={handleLogin} onSwitchToSignup={() => navigate("/signup")} />}
         />
         <Route
           path="/signup"
           element={auth.status === "authenticated"
-            ? <Navigate replace to={resolveAuthenticatedPath(workspaceState)} />
+            ? <Navigate replace to="/app" />
             : <SignupScreen error={auth.error} loading={auth.status === "loading"} onSubmit={handleSignup} onSwitchToLogin={() => navigate("/login")} />}
         />
         <Route
@@ -525,29 +410,14 @@ function RoutedApp() {
           }
         />
         <Route
-          path="/onboarding"
-          element={auth.status !== "authenticated"
-            ? <Navigate replace to="/signup" />
-            : workspaceState && !workspaceState.requires_bootstrap && workspaceState.onboarding?.status === "completed"
-              ? <Navigate replace to="/app" />
-              : (
-                <OnboardingScreen
-                  loading={workspaceLoading}
-                  onBootstrap={handleBootstrap}
-                  onConnectMailbox={handleConnectMailbox}
-                  onSaveProfile={handleOnboardingSave}
-                  onUploadAttachment={handleOnboardingUpload}
-                  state={workspaceState}
-                />
-              )}
-        />
-        <Route
           path="/app/*"
           element={auth.status !== "authenticated"
             ? <Navigate replace to="/login" />
-            : resolveAuthenticatedPath(workspaceState) !== "/app"
-              ? <Navigate replace to={resolveAuthenticatedPath(workspaceState)} />
-              : <OperatorConsoleApp onLogout={auth.logout} />}
+            : <OperatorConsoleApp onLogout={auth.logout} />}
+        />
+        <Route
+          path="*"
+          element={<Navigate replace to={auth.status === "authenticated" ? "/app" : "/login"} />}
         />
       </Routes>
       <Toaster position="top-center" richColors />

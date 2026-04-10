@@ -32,10 +32,10 @@ export function SignupScreen({ loading, error, onSubmit, onSwitchToLogin }: Sign
                 PermitPulse
               </div>
               <h1 className="mt-6 max-w-2xl text-[2rem] font-semibold tracking-[-0.05em] text-navy-900 sm:text-5xl">
-                Create the workspace before you ever touch SQL, Wrangler, or a shared inbox.
+                Set up your workspace in a few quick steps.
               </h1>
               <p className="mt-4 max-w-xl text-base leading-7 text-navy-600">
-                Owner signup starts the workspace, guided onboarding connects the sender identity, and teammates join later through invites.
+                Start a new workspace now, then add the company details and sender identity when you’re ready.
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
@@ -46,8 +46,8 @@ export function SignupScreen({ loading, error, onSubmit, onSwitchToLogin }: Sign
               </div>
               <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/90 p-4">
                 <Sparkles className="h-5 w-5 text-orange-600" />
-                <div className="mt-3 text-sm font-semibold text-navy-900">Guided setup</div>
-                <p className="mt-1 text-sm leading-6 text-navy-500">Business info, sender identity, workspace PDF, and first campaign in one flow.</p>
+                <div className="mt-3 text-sm font-semibold text-navy-900">Workspace setup</div>
+                <p className="mt-1 text-sm leading-6 text-navy-500">Company info, sender identity, and the outbound PDF all live in one place.</p>
               </div>
               <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/90 p-4">
                 <ShieldCheck className="h-5 w-5 text-orange-600" />
@@ -60,7 +60,7 @@ export function SignupScreen({ loading, error, onSubmit, onSwitchToLogin }: Sign
           <div className="rounded-[32px] border border-navy-200/70 bg-white/90 p-6 shadow-[0_24px_90px_rgba(70,55,37,0.12)] backdrop-blur-xl sm:p-8">
             <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-orange-600">Owner signup</div>
             <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-navy-900">Create your account</h2>
-            <p className="mt-2 text-sm leading-6 text-navy-600">You'll set the workspace details and sender identity in the next step.</p>
+            <p className="mt-2 text-sm leading-6 text-navy-600">You’ll add the workspace details right after signup.</p>
 
             <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
               <label className="grid gap-2 text-sm text-navy-600">
@@ -96,7 +96,7 @@ export function SignupScreen({ loading, error, onSubmit, onSwitchToLogin }: Sign
                     Creating account
                   </>
                 ) : (
-                  "Continue to workspace setup"
+                  "Create account"
                 )}
               </Button>
             </form>

@@ -6,7 +6,6 @@ import type {
   InvitePreviewPayload,
   LeadDetailResponse,
   LeadsPayload,
-  OnboardingPayload,
   ProspectDetailResponse,
   ProspectsPayload,
   SystemPayload,
@@ -384,7 +383,6 @@ export function updateWorkspaceAccount(payload: {
   outreach_pitch?: string | null
   outreach_focus?: string | null
   outreach_cta?: string | null
-  first_campaign_ready?: boolean
 }) {
   return requestJson<{ account: SystemPayload["account"] }>("/api/account", {
     method: "PUT",
@@ -445,49 +443,14 @@ export function runProspectDailySendNow() {
   })
 }
 
-export function fetchOnboardingState() {
-  return requestJson<OnboardingPayload>("/api/onboarding")
-}
-
-export function bootstrapWorkspace(payload: {
-  name: string
-  business_name: string
-  website?: string | null
-  sender_name?: string | null
-  sender_email?: string | null
-  billing_email?: string | null
-  phone?: string | null
-}) {
-  return requestJson<OnboardingPayload>("/api/onboarding/bootstrap", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  })
-}
-
-export function updateOnboardingProfile(payload: Record<string, unknown>) {
-  return requestJson<{ account: SystemPayload["account"]; onboarding: SystemPayload["onboarding"] }>("/api/onboarding/profile", {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  })
-}
-
 export function fetchInvitePreview(token: string) {
   return requestJson<InvitePreviewPayload>(`/api/account/invites/${encodeURIComponent(token)}`)
 }
 
 export function acceptInvite(token: string) {
-  return requestJson<{ account: SystemPayload["account"] | null; onboarding: SystemPayload["onboarding"] | null }>(
-    `/api/account/invites/${encodeURIComponent(token)}`,
-    {
-      method: "POST",
-    },
-  )
+  return requestJson<{ account: SystemPayload["account"] | null }>(`/api/account/invites/${encodeURIComponent(token)}`, {
+    method: "POST",
+  })
 }
 
 export function fetchWorkspaceAttachments() {

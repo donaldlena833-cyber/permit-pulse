@@ -543,7 +543,6 @@ export interface WorkspaceAccount {
   subscription_status: "trialing" | "active" | "past_due" | "cancelled"
   stripe_customer_id?: string | null
   stripe_subscription_id?: string | null
-  onboarding_status?: "pending" | "in_progress" | "completed"
   outreach_pitch?: string | null
   outreach_focus?: string | null
   outreach_cta?: string | null
@@ -599,25 +598,6 @@ export interface WorkspaceMailbox {
   updated_at: string | null
 }
 
-export interface OnboardingState {
-  status: "pending" | "in_progress" | "completed"
-  business_info_completed: boolean
-  sender_identity_completed: boolean
-  attachment_completed: boolean
-  mailbox_completed: boolean
-  first_campaign_ready: boolean
-  completed_at: string | null
-  business_info_completed_at: string | null
-  sender_identity_completed_at: string | null
-  attachment_completed_at: string | null
-  mailbox_completed_at: string | null
-  first_campaign_ready_at: string | null
-  attachment_count: number
-  mailbox_count: number
-  has_default_attachment: boolean
-  has_default_mailbox: boolean
-}
-
 export interface WorkspaceHealth {
   mailbox_connected: boolean
   mailbox_email: string | null
@@ -658,18 +638,6 @@ export interface AuditEvent {
   target_id: string | null
   detail: Record<string, unknown> | null
   created_at: string
-}
-
-export interface OnboardingPayload {
-  requires_bootstrap: boolean
-  email?: string
-  suggested_slug?: string
-  capabilities?: WorkspaceCapabilities
-  account?: WorkspaceAccount
-  current_member?: WorkspaceMember
-  onboarding?: OnboardingState | null
-  attachments?: WorkspaceAttachment[]
-  mailboxes?: WorkspaceMailbox[]
 }
 
 export interface InvitePreviewPayload {
@@ -729,7 +697,6 @@ export interface SystemPayload {
   current_member: WorkspaceMember
   members: WorkspaceMember[]
   capabilities?: WorkspaceCapabilities
-  onboarding?: OnboardingState | null
   attachments?: WorkspaceAttachment[]
   default_attachment?: WorkspaceAttachment | null
   mailboxes?: WorkspaceMailbox[]
