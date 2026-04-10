@@ -1406,7 +1406,7 @@ function baseFollowUpDraft(prospect, workspace = null) {
 function initialSubject(prospect, workspace = null) {
   const subjectBase = compactText(prospect.company_name) || compactText(prospect.contact_name) || 'your team';
   const businessName = workspaceBusinessName(workspace);
-  return subjectBase ? `Quick intro for ${subjectBase}` : `Quick intro from ${businessName}`;
+  return subjectBase ? `Glass scope for ${subjectBase}` : `Quick note from ${businessName}`;
 }
 
 function initialBody(prospect, workspace = null) {
@@ -1414,18 +1414,14 @@ function initialBody(prospect, workspace = null) {
   const senderName = workspaceSenderName(workspace);
   const businessName = workspaceBusinessName(workspace);
   const pitch = workspacePitch(workspace, prospect.category);
-  const focus = workspaceFocus(workspace, prospect);
 
   return [
     greetingLine(prospect),
     '',
     company
-      ? `I'm ${senderName} from ${businessName}, and I wanted to connect because ${company} looks like a fit for the kind of glass work we handle.`
-      : `I'm ${senderName} from ${businessName}, and I wanted to connect because your work looks like a fit for the kind of glass work we handle.`,
-    '',
+      ? `I'm ${senderName} from ${businessName}. I thought ${company} might be a fit for the kind of glass work we handle.`
+      : `I'm ${senderName} from ${businessName}. I thought your team might be a fit for the kind of glass work we handle.`,
     `We ${pitch}.`,
-    '',
-    focus,
     '',
     workspaceCta(workspace),
     '',
@@ -1437,6 +1433,7 @@ function isLegacyProspectDraft(subject, body) {
   const text = `${compactText(subject)}\n${compactMultilineText(body)}`.toLowerCase();
 
   return text.includes('metroglass pro')
+    || text.includes('quick intro for')
     || text.includes('about us one-pager')
     || text.includes('quick feel for the work')
     || text.includes('kind of work we support')

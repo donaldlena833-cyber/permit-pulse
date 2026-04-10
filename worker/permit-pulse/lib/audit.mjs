@@ -12,24 +12,37 @@ function sanitizeDetail(detail) {
   return detail;
 }
 
+function isMissingRelationError(error, tableName) {
+  const message = String(error?.message || '');
+  return message.includes(tableName) && (message.includes('does not exist') || message.includes('relation'));
+}
+
 export async function appendAuditEvent(db, payload = {}) {
   const tenantId = compactText(payload.tenant_id || payload.tenantId || db?.tenant_id);
   if (!tenantId) {
     throw new Error('Audit events require a tenant context');
   }
 
-  const [row] = await db.insert('v2_audit_events', {
-    tenant_id: tenantId,
-    actor_type: compactText(payload.actor_type || payload.actorType || 'system') || 'system',
-    actor_id: compactText(payload.actor_id || payload.actorId) || null,
-    event_type: compactText(payload.event_type || payload.eventType),
-    target_type: compactText(payload.target_type || payload.targetType) || null,
-    target_id: compactText(payload.target_id || payload.targetId) || null,
-    detail: sanitizeDetail(payload.detail),
-    created_at: new Date().toISOString(),
-  });
+  try {
+    const [row] = await db.insert('v2_audit_events', {
+      tenant_id: tenantId,
+      actor_type: compactText(payload.actor_type || payload.actorType || 'system') || 'system',
+      actor_id: compactText(payload.actor_id || payload.actorId) || null,
+      event_type: compactText(payload.event_type || payload.eventType),
+      target_type: compactText(payload.target_type || payload.targetType) || null,
+      target_id: compactText(payload.target_id || payload.targetId) || null,
+      detail: sanitizeDetail(payload.detail),
+      created_at: new Date().toISOString(),
+    });
 
-  return row || null;
+    return row || null;
+  } catch (error) {
+    if (!isMissingRelationError(error, 'v2_audit_events')) {
+      throw error;
+    }
+
+    return null;
+  }
 }
 
 export async function listAuditEvents(db, options = {}) {
@@ -41,12 +54,19 @@ export async function listAuditEvents(db, options = {}) {
     filters.push(eq('event_type', options.eventType));
   }
 
-  const rows = await db.select('v2_audit_events', {
-    filters,
-    ordering: [order('created_at', 'desc')],
-    limit,
-    offset: (page - 1) * limit,
-  });
+  let rows = [];
+  try {
+    rows = await db.select('v2_audit_events', {
+      filters,
+      ordering: [order('created_at', 'desc')],
+      limit,
+      offset: (page - 1) * limit,
+    });
+  } catch (error) {
+    if (!isMissingRelationError(error, 'v2_audit_events')) {
+      throw error;
+    }
+  }
 
   return {
     events: rows,

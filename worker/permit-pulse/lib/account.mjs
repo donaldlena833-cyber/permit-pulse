@@ -307,6 +307,99 @@ function presentOnboarding(row, extras = {}) {
   };
 }
 
+function isMissingRelationError(error, tableName) {
+  const message = String(error?.message || '');
+  return message.includes(tableName) && (message.includes('does not exist') || message.includes('relation'));
+}
+
+function isMissingColumnError(error, columnName) {
+  const message = String(error?.message || '');
+  return message.includes(columnName);
+}
+
+function legacyWorkspaceTimestamp(row) {
+  return row?.updated_at || row?.created_at || new Date().toISOString();
+}
+
+function buildLegacyAttachment(row) {
+  const storageKey = compactText(row?.attachment_kv_key);
+  const filename = compactText(row?.attachment_filename);
+
+  if (!storageKey && !filename) {
+    return null;
+  }
+
+  return {
+    id: `legacy-attachment:${row.id}`,
+    filename: filename || 'About Us.pdf',
+    content_type: compactText(row?.attachment_content_type) || 'application/pdf',
+    file_size_bytes: 0,
+    status: 'active',
+    is_default: true,
+    uploaded_by: null,
+    storage_key: storageKey || `legacy-attachment:${row.id}`,
+    archived_at: null,
+    created_at: row?.created_at || null,
+    updated_at: row?.updated_at || null,
+  };
+}
+
+function buildLegacyMailbox(row) {
+  const email = normalizeEmail(row?.sender_email);
+  if (!email) {
+    return null;
+  }
+
+  return {
+    id: `legacy-mailbox:${row.id}`,
+    provider: 'gmail',
+    email,
+    display_name: compactText(row?.sender_name) || compactText(row?.business_name) || compactText(row?.name) || email,
+    status: 'active',
+    is_default: true,
+    connected_by: null,
+    last_synced_at: null,
+    last_sent_at: null,
+    last_error: null,
+    metadata: { legacy: true },
+    archived_at: null,
+    created_at: row?.created_at || null,
+    updated_at: row?.updated_at || null,
+  };
+}
+
+function buildLegacyWorkspaceResources(row) {
+  const attachment = buildLegacyAttachment(row);
+  const mailbox = buildLegacyMailbox(row);
+  const timestamp = legacyWorkspaceTimestamp(row);
+  const businessReady = Boolean(compactText(row?.name) && compactText(row?.business_name));
+  const senderReady = Boolean(compactText(row?.sender_name) && normalizeEmail(row?.sender_email));
+  const attachmentReady = Boolean(attachment);
+  const mailboxReady = Boolean(mailbox);
+  const firstCampaignReady = Boolean(businessReady && senderReady && attachmentReady && mailboxReady);
+
+  return {
+    attachments: attachment ? [attachment] : [],
+    defaultAttachment: attachment,
+    mailboxes: mailbox ? [mailbox] : [],
+    defaultMailbox: mailbox,
+    onboarding: presentOnboarding({
+      status: firstCampaignReady ? 'completed' : 'in_progress',
+      business_info_completed_at: businessReady ? timestamp : null,
+      sender_identity_completed_at: senderReady ? timestamp : null,
+      attachment_completed_at: attachmentReady ? timestamp : null,
+      mailbox_completed_at: mailboxReady ? timestamp : null,
+      first_campaign_ready_at: firstCampaignReady ? timestamp : null,
+      completed_at: firstCampaignReady ? timestamp : null,
+    }, {
+      attachment_count: attachmentReady ? 1 : 0,
+      mailbox_count: mailboxReady ? 1 : 0,
+      has_default_attachment: attachmentReady,
+      has_default_mailbox: mailboxReady,
+    }),
+  };
+}
+
 function presentMember(row) {
   if (!row) {
     return null;
@@ -413,12 +506,20 @@ async function listAttachments(rawDb, tenantId, options = {}) {
     filters.push(eq('status', 'active'));
   }
 
-  const rows = await rawDb.select('v2_workspace_attachments', {
-    filters,
-    ordering: [order('is_default', 'desc'), order('created_at', 'desc')],
-  });
+  try {
+    const rows = await rawDb.select('v2_workspace_attachments', {
+      filters,
+      ordering: [order('is_default', 'desc'), order('created_at', 'desc')],
+    });
 
-  return rows.map(presentAttachment);
+    return rows.map(presentAttachment);
+  } catch (error) {
+    if (!isMissingRelationError(error, 'v2_workspace_attachments')) {
+      throw error;
+    }
+
+    return [];
+  }
 }
 
 async function listMailboxes(rawDb, tenantId, options = {}) {
@@ -428,18 +529,34 @@ async function listMailboxes(rawDb, tenantId, options = {}) {
     filters.push(eq('status', 'active'));
   }
 
-  const rows = await rawDb.select('v2_workspace_mailboxes', {
-    filters,
-    ordering: [order('is_default', 'desc'), order('created_at', 'desc')],
-  });
+  try {
+    const rows = await rawDb.select('v2_workspace_mailboxes', {
+      filters,
+      ordering: [order('is_default', 'desc'), order('created_at', 'desc')],
+    });
 
-  return rows.map(presentMailbox);
+    return rows.map(presentMailbox);
+  } catch (error) {
+    if (!isMissingRelationError(error, 'v2_workspace_mailboxes')) {
+      throw error;
+    }
+
+    return [];
+  }
 }
 
 async function getOnboardingRow(rawDb, tenantId) {
-  return rawDb.single('v2_workspace_onboarding', {
-    filters: [eq('tenant_id', tenantId)],
-  });
+  try {
+    return await rawDb.single('v2_workspace_onboarding', {
+      filters: [eq('tenant_id', tenantId)],
+    });
+  } catch (error) {
+    if (!isMissingRelationError(error, 'v2_workspace_onboarding')) {
+      throw error;
+    }
+
+    return null;
+  }
 }
 
 async function getWorkspaceResources(rawDb, tenantId) {
@@ -459,12 +576,12 @@ async function getWorkspaceResources(rawDb, tenantId) {
     defaultAttachment,
     mailboxes,
     defaultMailbox,
-    onboarding: presentOnboarding(onboardingRow, {
+    onboarding: onboardingRow ? presentOnboarding(onboardingRow, {
       attachment_count: activeAttachments.length,
       mailbox_count: activeMailboxes.length,
       has_default_attachment: Boolean(defaultAttachment),
       has_default_mailbox: Boolean(defaultMailbox),
-    }),
+    }) : null,
   };
 }
 
@@ -474,13 +591,21 @@ async function hydrateTenant(rawDb, row) {
   }
 
   const resources = await getWorkspaceResources(rawDb, row.id);
+  const legacyResources = buildLegacyWorkspaceResources(row);
+  const mergedResources = {
+    attachments: resources.attachments.length > 0 ? resources.attachments : legacyResources.attachments,
+    defaultAttachment: resources.defaultAttachment || legacyResources.defaultAttachment,
+    mailboxes: resources.mailboxes.length > 0 ? resources.mailboxes : legacyResources.mailboxes,
+    defaultMailbox: resources.defaultMailbox || legacyResources.defaultMailbox,
+    onboarding: resources.onboarding?.status ? resources.onboarding : legacyResources.onboarding,
+  };
   return resolveWorkspaceAccount({
     ...row,
-    attachments: resources.attachments,
-    default_attachment: resources.defaultAttachment,
-    mailboxes: resources.mailboxes,
-    default_mailbox: resources.defaultMailbox,
-    onboarding: resources.onboarding,
+    attachments: mergedResources.attachments,
+    default_attachment: mergedResources.defaultAttachment,
+    mailboxes: mergedResources.mailboxes,
+    default_mailbox: mergedResources.defaultMailbox,
+    onboarding: mergedResources.onboarding,
   });
 }
 
@@ -528,7 +653,15 @@ async function seedTenantConfig(rawDb, tenantId) {
     value,
   }));
 
-  await rawDb.upsert('v2_tenant_app_config', rows, 'tenant_id,key');
+  try {
+    await rawDb.upsert('v2_tenant_app_config', rows, 'tenant_id,key');
+  } catch (error) {
+    if (!isMissingRelationError(error, 'v2_tenant_app_config')) {
+      throw error;
+    }
+
+    await rawDb.upsert('v2_app_config', rows.map(({ key, value }) => ({ key, value })), 'key');
+  }
 }
 
 function onboardingPatchFromState(tenant, current, resources, manual = {}) {
@@ -570,39 +703,52 @@ async function syncOnboarding(rawDb, tenantId, manual = {}) {
   });
   const current = await getOnboardingRow(rawDb, tenantId);
   const resources = await getWorkspaceResources(rawDb, tenantId);
-  const patch = onboardingPatchFromState(tenant, current, resources, manual);
+  const legacyResources = buildLegacyWorkspaceResources(tenant || {});
+  const resolvedResources = {
+    attachments: resources.attachments.length > 0 ? resources.attachments : legacyResources.attachments,
+    defaultAttachment: resources.defaultAttachment || legacyResources.defaultAttachment,
+    mailboxes: resources.mailboxes.length > 0 ? resources.mailboxes : legacyResources.mailboxes,
+    defaultMailbox: resources.defaultMailbox || legacyResources.defaultMailbox,
+    onboarding: resources.onboarding?.status ? resources.onboarding : legacyResources.onboarding,
+  };
+  const patch = onboardingPatchFromState(tenant, current, resolvedResources, manual);
 
-  const [row] = await rawDb.upsert('v2_workspace_onboarding', {
-    tenant_id: tenantId,
-    status: patch.status,
-    business_info_completed_at: patch.business_info_completed_at,
-    sender_identity_completed_at: patch.sender_identity_completed_at,
-    attachment_completed_at: patch.attachment_completed_at,
-    mailbox_completed_at: patch.mailbox_completed_at,
-    first_campaign_ready_at: patch.first_campaign_ready_at,
-    completed_at: patch.completed_at,
-    updated_at: patch.updated_at,
-  }, 'tenant_id');
+  let row = null;
+  try {
+    [row] = await rawDb.upsert('v2_workspace_onboarding', {
+      tenant_id: tenantId,
+      status: patch.status,
+      business_info_completed_at: patch.business_info_completed_at,
+      sender_identity_completed_at: patch.sender_identity_completed_at,
+      attachment_completed_at: patch.attachment_completed_at,
+      mailbox_completed_at: patch.mailbox_completed_at,
+      first_campaign_ready_at: patch.first_campaign_ready_at,
+      completed_at: patch.completed_at,
+      updated_at: patch.updated_at,
+    }, 'tenant_id');
+  } catch (error) {
+    if (!isMissingRelationError(error, 'v2_workspace_onboarding')) {
+      throw error;
+    }
+  }
 
-  if (patch.status === 'completed') {
-    await rawDb.update('v2_tenants', [eq('id', tenantId)], {
-      onboarding_status: 'completed',
-      onboarding_completed_at: patch.completed_at,
-      updated_at: new Date().toISOString(),
-    });
-  } else {
+  try {
     await rawDb.update('v2_tenants', [eq('id', tenantId)], {
       onboarding_status: patch.status,
       onboarding_completed_at: patch.completed_at,
       updated_at: new Date().toISOString(),
     });
+  } catch (error) {
+    if (!isMissingColumnError(error, 'onboarding_status') && !isMissingColumnError(error, 'onboarding_completed_at')) {
+      throw error;
+    }
   }
 
   return presentOnboarding(row || patch, {
-    attachment_count: resources.attachments.filter((item) => item.status === 'active' && !item.archived_at).length,
-    mailbox_count: resources.mailboxes.filter((item) => item.status === 'active' && !item.archived_at).length,
-    has_default_attachment: Boolean(resources.defaultAttachment),
-    has_default_mailbox: Boolean(resources.defaultMailbox),
+    attachment_count: resolvedResources.attachments.filter((item) => item.status === 'active' && !item.archived_at).length,
+    mailbox_count: resolvedResources.mailboxes.filter((item) => item.status === 'active' && !item.archived_at).length,
+    has_default_attachment: Boolean(resolvedResources.defaultAttachment),
+    has_default_mailbox: Boolean(resolvedResources.defaultMailbox),
   });
 }
 
@@ -614,13 +760,25 @@ async function bindActiveMembership(rawDb, member, user) {
   }
 
   if (!member.auth_user_id && authUserId) {
-    const [updated] = await rawDb.update('v2_tenant_users', [eq('id', member.id)], {
+    const patch = {
       auth_user_id: authUserId,
       full_name: member.full_name || compactText(user?.user_metadata?.full_name) || null,
-      accepted_at: member.accepted_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    });
-    return updated || { ...member, auth_user_id: authUserId };
+    };
+
+    try {
+      const [updated] = await rawDb.update('v2_tenant_users', [eq('id', member.id)], {
+        ...patch,
+        accepted_at: member.accepted_at || new Date().toISOString(),
+      });
+      return updated || { ...member, auth_user_id: authUserId };
+    } catch (error) {
+      if (!isMissingColumnError(error, 'accepted_at')) {
+        throw error;
+      }
+      const [updated] = await rawDb.update('v2_tenant_users', [eq('id', member.id)], patch);
+      return updated || { ...member, auth_user_id: authUserId };
+    }
   }
 
   return member;
@@ -952,11 +1110,10 @@ export async function bootstrapWorkspaceOwner(rawDb, user, payload = {}) {
     plan_name: 'starter',
     plan_price_cents: Number(payload.plan_price_cents || 9900),
     subscription_status: 'trialing',
-    onboarding_status: 'in_progress',
     updated_at: now,
   });
 
-  await rawDb.insert('v2_tenant_users', {
+  const ownerMember = {
     tenant_id: tenantRow.id,
     auth_user_id: authUserId,
     email,
@@ -964,19 +1121,36 @@ export async function bootstrapWorkspaceOwner(rawDb, user, payload = {}) {
     role: 'owner',
     status: 'active',
     can_manage_billing: true,
-    accepted_at: now,
     updated_at: now,
-  });
+  };
+
+  try {
+    await rawDb.insert('v2_tenant_users', {
+      ...ownerMember,
+      accepted_at: now,
+    });
+  } catch (error) {
+    if (!isMissingColumnError(error, 'accepted_at')) {
+      throw error;
+    }
+    await rawDb.insert('v2_tenant_users', ownerMember);
+  }
 
   await seedTenantConfig(rawDb, tenantRow.id);
-  await rawDb.upsert('v2_workspace_onboarding', {
-    tenant_id: tenantRow.id,
-    status: 'in_progress',
-    created_by: email,
-    updated_by: email,
-    created_at: now,
-    updated_at: now,
-  }, 'tenant_id');
+  try {
+    await rawDb.upsert('v2_workspace_onboarding', {
+      tenant_id: tenantRow.id,
+      status: 'in_progress',
+      created_by: email,
+      updated_by: email,
+      created_at: now,
+      updated_at: now,
+    }, 'tenant_id');
+  } catch (error) {
+    if (!isMissingRelationError(error, 'v2_workspace_onboarding')) {
+      throw error;
+    }
+  }
 
   const scopedDb = createTenantScopedDb(rawDb, tenantRow.id);
   await appendAuditEvent(scopedDb, {
@@ -1044,7 +1218,13 @@ export async function updateOnboardingProfile(rawDb, tenantContext, payload, act
 
 export async function listWorkspaceAttachments(rawDb, tenantContext) {
   assertWorkspaceManager(tenantContext?.member);
-  const attachments = await listAttachments(rawDb, tenantContext.tenant.id, { includeArchived: true });
+  const attachments = await listAttachments(rawDb, tenantContext.tenant.id, { includeArchived: true })
+    .catch((error) => {
+      if (!isMissingRelationError(error, 'v2_workspace_attachments')) {
+        throw error;
+      }
+      return tenantContext.attachments || [];
+    });
   return {
     attachments,
     default_attachment: attachments.find((item) => item.is_default && item.status === 'active') || null,
@@ -1223,7 +1403,13 @@ export async function archiveWorkspaceAttachment(rawDb, tenantContext, attachmen
 
 export async function listWorkspaceMailboxes(rawDb, tenantContext) {
   assertWorkspaceManager(tenantContext?.member);
-  const mailboxes = await listMailboxes(rawDb, tenantContext.tenant.id, { includeArchived: true });
+  const mailboxes = await listMailboxes(rawDb, tenantContext.tenant.id, { includeArchived: true })
+    .catch((error) => {
+      if (!isMissingRelationError(error, 'v2_workspace_mailboxes')) {
+        throw error;
+      }
+      return tenantContext.mailboxes || [];
+    });
   return {
     mailboxes,
     default_mailbox: mailboxes.find((item) => item.is_default && item.status === 'active') || null,
@@ -1422,13 +1608,25 @@ export async function acceptWorkspaceInvite(rawDb, user, inviteTokenValue) {
     throw new Error('This user already belongs to another workspace');
   }
 
-  const [updated] = await rawDb.update('v2_tenant_users', [eq('id', member.id)], {
+  const updatePatch = {
     auth_user_id: authUserId,
     status: 'active',
-    accepted_at: new Date().toISOString(),
     invite_token: null,
     updated_at: new Date().toISOString(),
-  });
+  };
+
+  let updated = null;
+  try {
+    [updated] = await rawDb.update('v2_tenant_users', [eq('id', member.id)], {
+      ...updatePatch,
+      accepted_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (!isMissingColumnError(error, 'accepted_at')) {
+      throw error;
+    }
+    [updated] = await rawDb.update('v2_tenant_users', [eq('id', member.id)], updatePatch);
+  }
 
   const scopedDb = createTenantScopedDb(rawDb, member.tenant_id);
   await appendAuditEvent(scopedDb, {

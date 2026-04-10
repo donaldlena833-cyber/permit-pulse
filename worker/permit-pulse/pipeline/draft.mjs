@@ -36,6 +36,7 @@ function workspaceLeadCta(workspace, fallbackSentence) {
 export function isLegacyLeadDraft(subject, body) {
   const text = `${compactText(subject)}\n${compactText(body)}`.toLowerCase();
   return text.includes('metroglass pro')
+    || text.includes('question about')
     || text.includes('quick note on')
     || text.includes('quick note from')
     || text.includes('i came across the filing for')
@@ -82,12 +83,12 @@ export function buildInitialDraft(lead, workspace = null) {
   const businessName = workspaceBusinessName(workspace, 'our team');
   const senderName = workspaceSenderName(workspace);
   const cta = chooseDraftCta(lead);
-  const subject = lead.address ? `Question about ${lead.address}` : `Quick question from ${businessName}`;
+  const subjectBase = compactText(lead.company_name) || compactText(lead.contact_name) || address;
+  const subject = subjectBase ? `Glass scope for ${subjectBase}` : `Quick note from ${businessName}`;
   const lines = [
     `Hi ${firstName},`,
     `I'm ${senderName} from ${businessName}. I saw the filing for ${address} and wanted to reach out.`,
     `We ${workspaceLeadPitch(workspace)}.`,
-    workspaceLeadFocus(workspace, lead),
     workspaceLeadCta(workspace, cta.sentence),
     'Best,',
     ...workspaceSignatureLines({

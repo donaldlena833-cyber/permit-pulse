@@ -32,25 +32,32 @@ export const TENANT_SCOPED_TABLES = new Set([
   ...SHARED_PROSPECT_TABLES,
 ]);
 
+const LEGACY_UNSCOPED_TABLES = new Set();
+
+function normalizeTableName(table) {
+  return String(table || '').trim();
+}
+
 export function isTenantScopedTable(table) {
-  return TENANT_SCOPED_TABLES.has(String(table || '').trim());
+  return TENANT_SCOPED_TABLES.has(normalizeTableName(table));
 }
 
 function isTenantColumnMissing(error) {
   const message = String(error?.message || '');
-  return message.includes('tenant_id')
-    || message.includes('42703');
+  return message.includes('tenant_id');
 }
 
-function migrationRequiredError(table, error) {
-  const message = String(error?.message || '');
-  return new Error(
-    `Tenant migration required for ${table}: expected tenant_id-scoped schema but received ${message || 'a tenant scoping error'}`,
-  );
+function shouldUseTenantScope(table) {
+  const name = normalizeTableName(table);
+  return isTenantScopedTable(name) && !LEGACY_UNSCOPED_TABLES.has(name);
+}
+
+function markLegacyUnscopedTable(table) {
+  LEGACY_UNSCOPED_TABLES.add(normalizeTableName(table));
 }
 
 function scopedTenantIdForTable(table, tenantId, options = {}) {
-  const name = String(table || '').trim();
+  const name = normalizeTableName(table);
   if (SHARED_PROSPECT_TABLES.has(name) && options.sharedProspectTenantId) {
     return options.sharedProspectTenantId;
   }
@@ -59,7 +66,7 @@ function scopedTenantIdForTable(table, tenantId, options = {}) {
 }
 
 function withTenantFilters(table, tenantId, filters = [], options = {}) {
-  if (!isTenantScopedTable(table)) {
+  if (!shouldUseTenantScope(table)) {
     return filters;
   }
 
@@ -67,7 +74,7 @@ function withTenantFilters(table, tenantId, filters = [], options = {}) {
 }
 
 function withTenantPayload(table, tenantId, payload, options = {}) {
-  if (!isTenantScopedTable(table)) {
+  if (!shouldUseTenantScope(table)) {
     return payload;
   }
 
@@ -84,7 +91,7 @@ function withTenantPayload(table, tenantId, payload, options = {}) {
 }
 
 function tenantScopedConflict(table, onConflict = '') {
-  if (!isTenantScopedTable(table) || !onConflict || onConflict.includes('tenant_id') || onConflict === 'id') {
+  if (!shouldUseTenantScope(table) || !onConflict || onConflict.includes('tenant_id') || onConflict === 'id') {
     return onConflict;
   }
 
@@ -107,63 +114,95 @@ export function createTenantScopedDb(db, tenantId, options = {}) {
     sharedProspectTenantId: options.sharedProspectTenantId || null,
   };
 
-  async function withTenantGuard(table, runScoped) {
-    try {
-      return await runScoped();
-    } catch (error) {
-      if (!isTenantColumnMissing(error)) {
-        throw error;
-      }
-      throw migrationRequiredError(table, error);
-    }
-  }
-
   return {
     tenant_id: tenantId,
     raw: db,
 
     async select(table, options = {}) {
-      return withTenantGuard(table,
-        () => db.select(table, {
-          ...options,
-          filters: withTenantFilters(table, tenantId, options.filters || [], scopedOptions),
-        }),
-      );
+      const scopedQuery = () => db.select(table, {
+        ...options,
+        filters: withTenantFilters(table, tenantId, options.filters || [], scopedOptions),
+      });
+
+      try {
+        return await scopedQuery();
+      } catch (error) {
+        if (!isTenantColumnMissing(error)) {
+          throw error;
+        }
+        markLegacyUnscopedTable(table);
+        return db.select(table, options);
+      }
     },
 
     async single(table, options = {}) {
-      return withTenantGuard(table,
-        () => db.single(table, {
-          ...options,
-          filters: withTenantFilters(table, tenantId, options.filters || [], scopedOptions),
-        }),
-      );
+      const scopedQuery = () => db.single(table, {
+        ...options,
+        filters: withTenantFilters(table, tenantId, options.filters || [], scopedOptions),
+      });
+
+      try {
+        return await scopedQuery();
+      } catch (error) {
+        if (!isTenantColumnMissing(error)) {
+          throw error;
+        }
+        markLegacyUnscopedTable(table);
+        return db.single(table, options);
+      }
     },
 
     async insert(table, payload, prefer) {
-      return withTenantGuard(table,
-        () => db.insert(table, withTenantPayload(table, tenantId, payload, scopedOptions), prefer),
-      );
+      const scopedPayload = withTenantPayload(table, tenantId, payload, scopedOptions);
+      try {
+        return await db.insert(table, scopedPayload, prefer);
+      } catch (error) {
+        if (!isTenantColumnMissing(error)) {
+          throw error;
+        }
+        markLegacyUnscopedTable(table);
+        return db.insert(table, payload, prefer);
+      }
     },
 
     async update(table, filters, payload) {
-      return withTenantGuard(table,
-        () => db.update(table, withTenantFilters(table, tenantId, filters || [], scopedOptions), payload),
-      );
+      const scopedFilters = withTenantFilters(table, tenantId, filters || [], scopedOptions);
+      try {
+        return await db.update(table, scopedFilters, payload);
+      } catch (error) {
+        if (!isTenantColumnMissing(error)) {
+          throw error;
+        }
+        markLegacyUnscopedTable(table);
+        return db.update(table, filters || [], payload);
+      }
     },
 
     async upsert(table, payload, onConflict = '') {
       const scopedPayload = withTenantPayload(table, tenantId, payload, scopedOptions);
       const scopedConflict = tenantScopedConflict(table, onConflict);
-      return withTenantGuard(table,
-        () => db.upsert(table, scopedPayload, scopedConflict),
-      );
+      try {
+        return await db.upsert(table, scopedPayload, scopedConflict);
+      } catch (error) {
+        if (!isTenantColumnMissing(error)) {
+          throw error;
+        }
+        markLegacyUnscopedTable(table);
+        return db.upsert(table, payload, onConflict);
+      }
     },
 
     async remove(table, filters) {
-      return withTenantGuard(table,
-        () => db.remove(table, withTenantFilters(table, tenantId, filters || [], scopedOptions)),
-      );
+      const scopedFilters = withTenantFilters(table, tenantId, filters || [], scopedOptions);
+      try {
+        return await db.remove(table, scopedFilters);
+      } catch (error) {
+        if (!isTenantColumnMissing(error)) {
+          throw error;
+        }
+        markLegacyUnscopedTable(table);
+        return db.remove(table, filters || []);
+      }
     },
   };
 }
