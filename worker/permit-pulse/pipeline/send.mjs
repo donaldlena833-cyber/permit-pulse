@@ -6,7 +6,7 @@ import { eq, inList, order } from '../lib/supabase.mjs';
 import { inferEmailPattern, nowIso } from '../lib/utils.mjs';
 import { resolveWorkspaceSender, workspaceSenderName } from '../lib/workspace-email.mjs';
 import { scheduleFollowUps } from './follow-up.mjs';
-import { generateLeadDraft } from './draft.mjs';
+import { generateLeadDraft, isLegacyLeadDraft } from './draft.mjs';
 
 function tierRank(tier) {
   if (tier === 'hot') return 0;
@@ -101,7 +101,8 @@ export async function sendLead(env, db, leadId, options = {}) {
     }
   }
 
-  if (!hasDraftContent(lead.draft_subject) || !hasDraftContent(lead.draft_body)) {
+  const draftIsLegacy = isLegacyLeadDraft(lead.draft_subject, lead.draft_body);
+  if (!hasDraftContent(lead.draft_subject) || !hasDraftContent(lead.draft_body) || draftIsLegacy) {
     await generateLeadDraft(db, options.runId || null, leadId, options.workspace || null);
   }
 
@@ -109,7 +110,7 @@ export async function sendLead(env, db, leadId, options = {}) {
     filters: [eq('id', leadId)],
   });
 
-  if (!hasDraftContent(refreshedLead?.draft_subject) || !hasDraftContent(refreshedLead?.draft_body)) {
+  if (!hasDraftContent(refreshedLead?.draft_subject) || !hasDraftContent(refreshedLead?.draft_body) || isLegacyLeadDraft(refreshedLead?.draft_subject, refreshedLead?.draft_body)) {
     await generateLeadDraft(db, options.runId || null, leadId, options.workspace || null);
     refreshedLead = await db.single('v2_leads', {
       filters: [eq('id', leadId)],

@@ -52,7 +52,7 @@ export function SignupScreen({ loading, error, onSubmit, onSwitchToLogin }: Sign
               <div className="rounded-[22px] border border-navy-200/70 bg-cream-50/90 p-4">
                 <ShieldCheck className="h-5 w-5 text-orange-600" />
                 <div className="mt-3 text-sm font-semibold text-navy-900">Internal-first</div>
-                <p className="mt-1 text-sm leading-6 text-navy-500">Mailbox setup stays manual for now so MetroGlass can keep using the system safely every day.</p>
+                <p className="mt-1 text-sm leading-6 text-navy-500">Mailbox setup stays manual for now so the workspace can keep using the system safely every day.</p>
               </div>
             </div>
           </div>
@@ -60,7 +60,7 @@ export function SignupScreen({ loading, error, onSubmit, onSwitchToLogin }: Sign
           <div className="rounded-[32px] border border-navy-200/70 bg-white/90 p-6 shadow-[0_24px_90px_rgba(70,55,37,0.12)] backdrop-blur-xl sm:p-8">
             <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-orange-600">Owner signup</div>
             <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-navy-900">Create your account</h2>
-            <p className="mt-2 text-sm leading-6 text-navy-600">You’ll set the workspace details and sender identity in the next step.</p>
+            <p className="mt-2 text-sm leading-6 text-navy-600">You'll set the workspace details and sender identity in the next step.</p>
 
             <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
               <label className="grid gap-2 text-sm text-navy-600">

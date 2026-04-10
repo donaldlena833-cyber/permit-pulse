@@ -268,7 +268,7 @@ export async function sendAutomationEmail(env, draft) {
   }
 
   const accessToken = await fetchAccessToken(env, refreshToken);
-  const sender = draft.mailbox?.email || draft.sender || env.GMAIL_SENDER || 'operations@metroglasspro.com';
+  const sender = draft.mailbox?.email || draft.sender || env.GMAIL_SENDER || 'info@yourcompany.com';
   const replyTo = draft.replyTo || null;
   const subject = normalizeDraftText(draft.subject).trim();
   const body = normalizeDraftText(draft.body);
@@ -431,7 +431,7 @@ async function getMessageContent(env, messageId) {
 }
 
 export async function listRecentInboxMessages(env, options = {}) {
-  const sender = options.mailbox?.email || env.GMAIL_SENDER || 'operations@metroglasspro.com';
+  const sender = options.mailbox?.email || env.GMAIL_SENDER || 'info@yourcompany.com';
   const newerThanDays = Math.max(1, Number(options.newerThanDays || 30));
   const maxResults = Math.min(Math.max(Number(options.maxResults || 0), 1), 100);
   const query = options.query || `in:inbox newer_than:${newerThanDays}d -from:${sender} -from:me`;

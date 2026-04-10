@@ -2,7 +2,8 @@ const STORAGE_KEY = "metroglass-leads-auth-session"
 const REFRESH_WINDOW_MS = 5 * 60 * 1000
 const LOGIN_IDENTIFIER_ALIASES: Record<string, string> = {
   operations: "operations@metroglasspro.com",
-  lokeil: "lokeil@lokeilrenovating.com",
+  metroglasspro: "operations@metroglasspro.com",
+  lokeil: "info@lokeilremodeling.com",
 }
 
 export interface AuthUser {

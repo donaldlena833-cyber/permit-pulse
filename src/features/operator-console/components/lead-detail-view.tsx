@@ -64,7 +64,7 @@ function normalizeSmsPhone(value: string | null | undefined) {
 function buildTextDraft(detail: LeadDetailResponse) {
   const address = detail.lead.address || "your project"
 
-  return `Hi, this is Donald from MetroGlass Pro. I came across the filing for ${address} and wanted to reach out. Not sure if you're the right contact for the project, but we handle storefronts, shower doors, mirrors, railings, and custom glass across NYC. If any of that scope is still open, I'd be happy to help.`
+  return `Hi, this is Donald. I came across the filing for ${address} and wanted to reach out. If any glass scope is still open, I'd be happy to help.`
 }
 
 function buildSmsHref(phone: string | null | undefined, draft: string) {

@@ -450,7 +450,7 @@ export function SettingsScreen({
               </Button>
             ) : (
               <div className="rounded-[18px] border border-dashed border-steel-200 bg-white px-4 py-4 text-sm text-steel-600">
-                Billing and self-serve mailbox setup are intentionally hidden while PermitPulse remains an internal MetroGlass operator system.
+                Billing and self-serve mailbox setup are intentionally hidden while PermitPulse remains an internal operator system.
               </div>
             )}
           </div>

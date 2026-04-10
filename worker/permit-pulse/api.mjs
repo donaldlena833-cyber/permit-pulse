@@ -43,7 +43,7 @@ import { createBillingCheckoutSession, createBillingPortalSession, handleBilling
 import { getAppConfig, saveAppConfig } from './lib/config.mjs';
 import { countPendingAutomationLeads, listPendingAutomationLeads, summarizeRunQueue } from './lib/automation-queue.mjs';
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle, startLeadBatchAutomation } from './pipeline/engine.mjs';
-import { generateLeadDraft } from './pipeline/draft.mjs';
+import { buildLeadDraft, generateLeadDraft, isLegacyLeadDraft } from './pipeline/draft.mjs';
 import { sendLead, sendReadyLeads } from './pipeline/send.mjs';
 import { backfillPermitFollowUps, logPhoneFollowUp, processDueFollowUps, sendFollowUp, skipFollowUp } from './pipeline/follow-up.mjs';
 import {
@@ -594,7 +594,7 @@ async function getTodayPayload(env, db, tenantContext) {
   };
 }
 
-async function getLeadDetail(db, leadId) {
+async function getLeadDetail(db, leadId, workspace = null) {
   const [lead, companies, emails, followUps, timeline, relatedPermits] = await Promise.all([
     db.single('v2_leads', { filters: [eq('id', leadId)] }),
     db.select('v2_company_candidates', {
@@ -639,6 +639,15 @@ async function getLeadDetail(db, leadId) {
     || presentedEmails.find((candidate) => candidate.id !== approvedPrimary?.id && isSendApproved(candidate, lead))
     || null;
 
+  const storedSubject = String(lead.draft_subject || '').trim();
+  const storedBody = String(lead.draft_body || '').trim();
+  const draft = !storedSubject || !storedBody || isLegacyLeadDraft(storedSubject, storedBody)
+    ? buildLeadDraft(lead, workspace)
+    : {
+        subject: storedSubject,
+        body: storedBody,
+      };
+
   return {
     lead: presentLead({
       ...lead,
@@ -663,8 +672,8 @@ async function getLeadDetail(db, leadId) {
       emails: presentedEmails,
     },
     draft: {
-      subject: lead.draft_subject || '',
-      body: lead.draft_body || '',
+      subject: draft.subject,
+      body: draft.body,
       cta_type: lead.draft_cta_type || '',
     },
     follow_ups: followUps,
@@ -910,6 +919,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
           q: url.searchParams.get('q') || '',
           page: Number(url.searchParams.get('page') || 1),
           limit: Number(url.searchParams.get('limit') || 20),
+          workspace: tenantContext.tenant,
         }),
         readReplySyncState(env, { scopeKey: replySyncScopeKey }),
       ]);
@@ -924,7 +934,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     if (url.pathname === '/api/prospects/import' && request.method === 'POST') {
       const body = await parseBody(request);
-      return json(await importProspects(db, body, user.email || null));
+      return json(await importProspects(db, body, user.email || null, tenantContext.tenant));
     }
 
     if (url.pathname === '/api/outreach/sync-replies' && request.method === 'POST') {
@@ -982,7 +992,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const prospectMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)$/);
     if (prospectMatch && request.method === 'GET') {
-      const detail = await getProspectDetail(db, decodeURIComponent(prospectMatch[1]));
+      const detail = await getProspectDetail(db, decodeURIComponent(prospectMatch[1]), { workspace: tenantContext.tenant });
       return json(detail || { error: 'Prospect not found' }, detail ? 200 : 404);
     }
 
@@ -1022,13 +1032,13 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const prospectDraftMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/draft$/);
     if (prospectDraftMatch && request.method === 'PUT') {
       const body = await parseBody(request);
-      return json(await saveProspectDraft(db, decodeURIComponent(prospectDraftMatch[1]), body, user.email || null));
+      return json(await saveProspectDraft(db, decodeURIComponent(prospectDraftMatch[1]), body, user.email || null, tenantContext.tenant));
     }
 
     const prospectNotesMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/notes$/);
     if (prospectNotesMatch && request.method === 'PUT') {
       const body = await parseBody(request);
-      return json(await saveProspectNotes(db, decodeURIComponent(prospectNotesMatch[1]), body?.notes || '', user.email || null));
+      return json(await saveProspectNotes(db, decodeURIComponent(prospectNotesMatch[1]), body?.notes || '', user.email || null, tenantContext.tenant));
     }
 
     const prospectStatusMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/status$/);
@@ -1039,7 +1049,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const leadMatch = url.pathname.match(/^\/api\/leads\/([^/]+)$/);
     if (leadMatch && request.method === 'GET') {
-      const detail = await getLeadDetail(db, decodeURIComponent(leadMatch[1]));
+      const detail = await getLeadDetail(db, decodeURIComponent(leadMatch[1]), tenantContext.tenant);
       return json(detail || { error: 'Lead not found' }, detail ? 200 : 404);
     }
 

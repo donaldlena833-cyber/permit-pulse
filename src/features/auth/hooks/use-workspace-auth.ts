@@ -83,7 +83,7 @@ export function useWorkspaceAuth() {
       setStatus("unauthenticated")
       const message = loginError instanceof Error ? loginError.message : "Login failed"
       const friendlyMessage = message.toLowerCase().includes("email not confirmed")
-        ? "Your Supabase project is still requiring email confirmation. Confirm the inbox for operations@metroglasspro.com, or disable email confirmation in Supabase Auth."
+        ? "Your Supabase project is still requiring email confirmation. Confirm the inbox for the workspace email you signed up with, or disable email confirmation in Supabase Auth."
         : message
       setError(friendlyMessage)
       throw loginError

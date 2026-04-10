@@ -216,7 +216,7 @@ export function ProspectDetailView({
             <section className="rounded-[22px] border border-steel-200 bg-white p-5 shadow-soft">
               <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">Draft</div>
               <div className="mt-2 text-sm text-steel-600">
-                This is the exact email sequence content the automation will send, with the MetroGlass PDF attached automatically.
+                This is the exact email sequence content the automation will send, with the default workspace PDF attached automatically.
               </div>
               <div className="mt-4 space-y-3">
                 <Input onChange={(event) => setSubject(event.target.value)} placeholder="Subject line" value={subject} />

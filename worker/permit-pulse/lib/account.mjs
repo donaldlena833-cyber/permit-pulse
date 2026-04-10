@@ -7,6 +7,19 @@ import { eq, ilike, order } from './supabase.mjs';
 const WORKSPACE_DEFAULTS = {
   metroglasspro: {
     phone: '(332) 999-3846',
+    outreach_pitch: 'help interior designers and remodelers turn glass scope into clean installs across NYC, New Jersey, and Connecticut',
+    outreach_focus: 'We handle shower enclosures, mirrors, partitions, and cabinet glass with quick pricing and clear coordination.',
+    outreach_cta: 'If glass is still open on a project, I would be glad to take a look and turn around pricing quickly.',
+  },
+  lokeil: {
+    outreach_pitch: 'help remodeling teams turn glass scope into clean installs without a lot of back and forth',
+    outreach_focus: 'We handle shower enclosures, mirrors, partitions, and other custom glass work with quick turnarounds and clear communication.',
+    outreach_cta: 'If glass is still part of the job, I would be glad to take a look and help keep it moving.',
+  },
+};
+
+const LEGACY_WORKSPACE_DEFAULTS = {
+  metroglasspro: {
     outreach_pitch: 'help interior designers turn glass concepts into finished installs without the usual back and forth across NYC, New Jersey, and Connecticut',
     outreach_focus: 'We help interior designers translate shower, mirror, partition, and cabinet glass ideas into clean installs without losing the original concept.',
     outreach_cta: 'If you have a project where glass scope still needs a responsive partner, I would be glad to connect, turn around pricing quickly, and help keep things moving.',
@@ -61,6 +74,10 @@ function workspaceDefaults(slug) {
   return WORKSPACE_DEFAULTS[String(slug || '').trim().toLowerCase()] || {};
 }
 
+function workspaceLegacyDefaults(slug) {
+  return LEGACY_WORKSPACE_DEFAULTS[String(slug || '').trim().toLowerCase()] || {};
+}
+
 function hashCode(value) {
   let hash = 0;
 
@@ -88,6 +105,19 @@ function workspaceIcon(value) {
   }
 
   return pieces.map((piece) => piece[0]).join('').toUpperCase();
+}
+
+function resolveWorkspaceCopy(value, fallback = null, legacyValues = []) {
+  const text = compactText(value);
+  if (!text) {
+    return fallback || null;
+  }
+
+  if (legacyValues.some((legacy) => legacy && text === legacy)) {
+    return fallback || text;
+  }
+
+  return text;
 }
 
 function attachmentStorageKey(slug, filename) {
@@ -302,6 +332,7 @@ function resolveWorkspaceAccount(row) {
   }
 
   const defaults = workspaceDefaults(row.slug);
+  const legacyDefaults = workspaceLegacyDefaults(row.slug);
   const defaultAttachment = row.default_attachment || null;
   const defaultMailbox = row.default_mailbox || null;
 
@@ -315,9 +346,9 @@ function resolveWorkspaceAccount(row) {
     attachment_filename: defaultAttachment?.filename || row.attachment_filename || null,
     attachment_kv_key: defaultAttachment?.storage_key || row.attachment_kv_key || null,
     attachment_content_type: defaultAttachment?.content_type || row.attachment_content_type || 'application/pdf',
-    outreach_pitch: row.outreach_pitch || defaults.outreach_pitch || null,
-    outreach_focus: row.outreach_focus || defaults.outreach_focus || null,
-    outreach_cta: row.outreach_cta || defaults.outreach_cta || null,
+    outreach_pitch: resolveWorkspaceCopy(row.outreach_pitch, defaults.outreach_pitch || null, legacyDefaults.outreach_pitch ? [legacyDefaults.outreach_pitch] : []),
+    outreach_focus: resolveWorkspaceCopy(row.outreach_focus, defaults.outreach_focus || null, legacyDefaults.outreach_focus ? [legacyDefaults.outreach_focus] : []),
+    outreach_cta: resolveWorkspaceCopy(row.outreach_cta, defaults.outreach_cta || null, legacyDefaults.outreach_cta ? [legacyDefaults.outreach_cta] : []),
     icon: row.icon || workspaceIcon(row.business_name || row.name),
     accent_color: row.accent_color || defaultAccentColor(row.slug || row.name),
     onboarding: row.onboarding || null,

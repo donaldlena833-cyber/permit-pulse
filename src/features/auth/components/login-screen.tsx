@@ -91,7 +91,7 @@ export function LoginScreen({ loading, error, onSubmit, onSwitchToSignup }: Logi
                   autoComplete="username"
                   className="h-12 rounded-2xl border-navy-200 bg-white/90 px-4 dark:border-dark-border dark:bg-dark-bg"
                   onChange={(event) => setEmail(event.target.value)}
-                  placeholder="operations@metroglasspro.com or lokeil"
+                  placeholder="operations@metroglasspro.com or info@lokeilremodeling.com"
                   type="text"
                   value={email}
                 />

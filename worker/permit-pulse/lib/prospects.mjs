@@ -409,12 +409,12 @@ function workspaceFocus(workspace, prospect) {
 
 function workspaceCta(workspace) {
   return compactText(workspace?.outreach_cta)
-    || 'If you have a project where glass scope still needs a responsive partner, I would be glad to connect, turn around pricing quickly, and help keep things moving.';
+    || 'If anything is coming up, I would be glad to take a look and turn around pricing quickly.';
 }
 
 function workspaceSignatureLines(workspace) {
   return [
-    'Warm regards,',
+    'Best,',
     workspaceSenderName(workspace),
     workspaceBusinessName(workspace),
     compactText(workspace?.phone) || null,
@@ -424,62 +424,42 @@ function workspaceSignatureLines(workspace) {
 
 function categoryPitch(category) {
   if (category === 'architect') {
-    return 'support architects with clean detailing, responsive coordination, and high-end glass execution';
+    return 'help architects keep glass details clean and coordination responsive';
   }
   if (category === 'interior_designer') {
-    return 'help interior designers turn glass concepts into finished installs without the usual back and forth';
+    return 'help interior designers turn glass ideas into clean installs';
   }
   if (category === 'property_manager') {
-    return 'help property managers handle replacement, upgrades, and tenant improvement glass work quickly';
+    return 'help property managers move replacement and upgrade glass work quickly';
   }
   if (category === 'project_manager') {
-    return 'help project managers keep glass scope moving with responsive field coordination and install support';
+    return 'help project managers keep glass scope moving without a long handoff';
   }
-  return 'support general contractors with measurements, pricing, fabrication, and installation for custom glass scope';
+  return 'help contractors handle pricing, fabrication, and install coordination for custom glass scope';
 }
 
 function topicLine(prospect) {
   if (prospect.category === 'architect') {
-    return 'architectural teams';
+    return 'architects';
   }
   if (prospect.category === 'interior_designer') {
-    return 'design-driven residential teams';
+    return 'interior designers';
   }
   if (prospect.category === 'property_manager') {
-    return 'property teams';
+    return 'property managers';
   }
   if (prospect.category === 'project_manager') {
-    return 'project teams';
+    return 'project managers';
   }
-  return 'construction teams';
+  return 'contractors';
 }
 
 function categoryFocusLine(prospect) {
-  if (prospect.category === 'architect') {
-    return 'We support architects with precise detailing, clean field coordination, and residential glass execution that respects the design intent.';
-  }
-  if (prospect.category === 'interior_designer') {
-    return 'We help interior designers translate shower, mirror, partition, and cabinet glass ideas into clean installs without losing the original concept.';
-  }
-  if (prospect.category === 'property_manager') {
-    return 'We help property managers move replacement, upgrade, and tenant-improvement glass work quickly without dragging out coordination.';
-  }
-  if (prospect.category === 'project_manager') {
-    return 'We help project managers keep glass scope moving with responsive measurements, pricing, fabrication, and install coordination.';
-  }
-  return 'We support general contractors with fast glass pricing, measurements, fabrication, and installation so custom scope does not become a bottleneck.';
+  return `We help ${topicLine(prospect)} with pricing, fabrication, and install coordination.`;
 }
 
 function trimTrailingPunctuation(value) {
   return String(value || '').replace(/[.,;:!?-]+$/g, '').trim();
-}
-
-function sentenceCase(value) {
-  const text = compactText(value);
-  if (!text) {
-    return null;
-  }
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function firstDescriptionSnippet(prospect, maxLength = 180) {
@@ -500,23 +480,6 @@ function firstDescriptionSnippet(prospect, maxLength = 180) {
     return trimmed;
   }
   return `${trimmed.slice(0, maxLength - 3).trim()}...`;
-}
-
-function personalizedContextLine(prospect) {
-  const snippet = firstDescriptionSnippet(prospect);
-  if (!snippet) {
-    return null;
-  }
-
-  const normalized = snippet.toLowerCase();
-  const asStatement = /^(specializ|focus|work|design|manage|lead|deliver|build|create|handle|oversee|operate|renovat|develop|serve|provide)/i
-    .test(normalized);
-
-  const line = asStatement
-    ? `I noticed ${snippet}, which felt especially aligned with the kind of work we support.`
-    : `I noticed your focus on ${snippet}, which felt especially aligned with the kind of work we support.`;
-
-  return sentenceCase(line);
 }
 
 function shouldUseStoredInitialDraft(prospect) {
@@ -808,8 +771,7 @@ function hydrateProspect(prospect, options = {}) {
   }
 
   const followUps = Array.isArray(options.followUps) ? options.followUps : [];
-  const draft = buildProspectDraft(prospect);
-  const useStoredDraft = shouldUseStoredInitialDraft(prospect);
+  const draft = buildProspectDraft(prospect, options.workspace || null);
   const companySuppressed = companySuppressionReason(prospect, options.suppressedDomains);
   const explicitSuppression = explicitSuppressionReason(prospect, options.suppressionMaps);
   const reviewPending = pendingReviewReason(prospect, options.reviewMaps);
@@ -820,8 +782,8 @@ function hydrateProspect(prospect, options = {}) {
     : deriveQueueState(prospect, followUps);
   return {
     ...prospect,
-    draft_subject: useStoredDraft ? prospect.draft_subject || draft.subject : draft.subject,
-    draft_body: useStoredDraft ? prospect.draft_body || draft.body : draft.body,
+    draft_subject: draft.subject,
+    draft_body: draft.body,
     queue_state: queueState,
     next_follow_up: followUps.find((followUp) => followUp.status === 'pending') || null,
     automation_block_reason: isProspectSuppressed(prospect) ? 'opted_out' : explicitSuppression || companySuppressed || reviewPending,
@@ -1413,7 +1375,6 @@ function summaryLabel(prospect) {
 }
 
 function baseFollowUpDraft(prospect, workspace = null) {
-  const personalizedLine = personalizedContextLine(prospect);
   const followUpStep = Number(prospect?.follow_up_step || 1);
   const secondTouch = followUpStep >= 2;
   const company = compactText(prospect.company_name) || 'your team';
@@ -1422,21 +1383,20 @@ function baseFollowUpDraft(prospect, workspace = null) {
 
   return {
     subject: secondTouch
-      ? `Final follow-up for ${company} | ${businessName}`
-      : `Quick follow-up for ${company} | ${businessName}`,
+      ? `Final follow-up for ${company}`
+      : `Following up on ${company}`,
     body: [
       greetingLine(prospect),
       '',
       secondTouch
         ? `One last note from ${businessName}. We ${pitch}.`
-        : `Following up on my note from ${businessName}. We ${pitch}.`,
-      personalizedLine,
+        : `Just following up on my note from ${businessName}. We ${pitch}.`,
       '',
       workspaceFocus(workspace, prospect),
       '',
       secondTouch
-        ? 'If there is any upcoming glass scope, I would still be glad to share our About Us one-pager again and map out quick next steps.'
-        : 'If there is any upcoming glass scope, I would be glad to send over our About Us one-pager again and put together quick next steps.',
+        ? 'If the project is still moving, I would be glad to help.'
+        : 'If the project is still open, I would be glad to take a look.',
       '',
       ...workspaceSignatureLines(workspace),
     ].filter(Boolean).join('\n'),
@@ -1445,37 +1405,44 @@ function baseFollowUpDraft(prospect, workspace = null) {
 
 function initialSubject(prospect, workspace = null) {
   const subjectBase = compactText(prospect.company_name) || compactText(prospect.contact_name) || 'your team';
-  const snippet = firstDescriptionSnippet(prospect, 48);
   const businessName = workspaceBusinessName(workspace);
-  return snippet ? `${subjectBase} | ${snippet} | ${businessName}` : `${subjectBase} | ${businessName}`;
+  return subjectBase ? `Quick intro for ${subjectBase}` : `Quick intro from ${businessName}`;
 }
 
 function initialBody(prospect, workspace = null) {
-  const personalizedLine = personalizedContextLine(prospect);
   const company = compactText(prospect.company_name);
   const senderName = workspaceSenderName(workspace);
   const businessName = workspaceBusinessName(workspace);
   const pitch = workspacePitch(workspace, prospect.category);
+  const focus = workspaceFocus(workspace, prospect);
 
   return [
     greetingLine(prospect),
     '',
     company
-      ? `I’m ${senderName} from ${businessName}, and I’m reaching out because ${company} looks closely aligned with the kind of work we support.`
-      : `I’m ${senderName} from ${businessName}, and I’m reaching out because your work looks closely aligned with the kind of work we support.`,
+      ? `I'm ${senderName} from ${businessName}, and I wanted to connect because ${company} looks like a fit for the kind of glass work we handle.`
+      : `I'm ${senderName} from ${businessName}, and I wanted to connect because your work looks like a fit for the kind of glass work we handle.`,
     '',
     `We ${pitch}.`,
     '',
-    personalizedLine,
-    '',
-    workspaceFocus(workspace, prospect),
-    '',
-    'I attached our About Us one-pager so you can get a quick feel for the work, responsiveness, and detail we bring to projects.',
+    focus,
     '',
     workspaceCta(workspace),
     '',
     ...workspaceSignatureLines(workspace),
   ].filter(Boolean).join('\n');
+}
+
+function isLegacyProspectDraft(subject, body) {
+  const text = `${compactText(subject)}\n${compactMultilineText(body)}`.toLowerCase();
+
+  return text.includes('metroglass pro')
+    || text.includes('about us one-pager')
+    || text.includes('quick feel for the work')
+    || text.includes('kind of work we support')
+    || text.includes('usual back and forth')
+    || text.includes('looks closely aligned with the kind of work we support')
+    || text.includes('i attached our about us one-pager');
 }
 
 function resolveInitialDraft(prospect, workspace = null) {
@@ -1488,9 +1455,15 @@ function resolveInitialDraft(prospect, workspace = null) {
     return generated;
   }
 
+  const storedSubject = compactText(prospect.draft_subject);
+  const storedBody = compactMultilineText(prospect.draft_body);
+  if (!storedSubject || !storedBody || isLegacyProspectDraft(storedSubject, storedBody)) {
+    return generated;
+  }
+
   return {
-    subject: compactText(prospect.draft_subject) || generated.subject,
-    body: compactMultilineText(prospect.draft_body) || generated.body,
+    subject: storedSubject,
+    body: storedBody,
   };
 }
 
@@ -1519,7 +1492,7 @@ function updatedStoredInitialDraft(prospect, subject, body) {
   };
 }
 
-async function ensureProspectFollowUp(db, prospect, config) {
+async function ensureProspectFollowUp(db, prospect, config, workspace = null) {
   const existing = await db.select('v2_prospect_follow_ups', {
     filters: [eq('prospect_id', prospect.id)],
     ordering: [order('step_number', 'asc')],
@@ -1544,7 +1517,7 @@ async function ensureProspectFollowUp(db, prospect, config) {
       config.prospect_follow_up_send_time || config.prospect_initial_send_time || '11:00',
       config.prospect_timezone || 'America/New_York',
     );
-    const draft = buildProspectFollowUpDraft({ ...prospect, follow_up_step: stepNumber });
+    const draft = buildProspectFollowUpDraft({ ...prospect, follow_up_step: stepNumber }, workspace);
 
     const [row] = await db.insert('v2_prospect_follow_ups', {
       prospect_id: prospect.id,
@@ -1779,7 +1752,7 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
       ...updated,
       first_sent_at: nextPatch.first_sent_at,
       last_sent_at: nextPatch.last_sent_at,
-    }, options.config || await getAppConfig(db));
+    }, options.config || await getAppConfig(db), workspace);
   }
 
   if (kind === 'follow_up' && options.followUpId) {
@@ -1810,12 +1783,12 @@ export function formatProspectCategory(category) {
   return CATEGORY_LABELS[category] || 'Prospect';
 }
 
-export function buildProspectDraft(prospect) {
-  return resolveInitialDraft(prospect);
+export function buildProspectDraft(prospect, workspace = null) {
+  return resolveInitialDraft(prospect, workspace);
 }
 
-export function buildProspectFollowUpDraft(prospect) {
-  return resolveFollowUpDraft(prospect);
+export function buildProspectFollowUpDraft(prospect, workspace = null) {
+  return resolveFollowUpDraft(prospect, { workspace });
 }
 
 function hydrateFollowUpItem(followUp, prospect) {
@@ -2315,6 +2288,7 @@ export async function listProspects(db, options = {}) {
       reviewMaps,
       companyMap,
       campaignMap,
+      workspace: options.workspace || null,
     }));
 
   return {
@@ -2330,7 +2304,7 @@ export async function listProspects(db, options = {}) {
   };
 }
 
-export async function getProspectDetail(db, prospectId) {
+export async function getProspectDetail(db, prospectId, options = {}) {
   const [prospect, timeline, followUps, allProspects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     db.single('v2_prospects', { filters: [eq('id', prospectId)] }),
     db.select('v2_prospect_events', {
@@ -2365,6 +2339,7 @@ export async function getProspectDetail(db, prospectId) {
     reviewMaps,
     companyMap,
     campaignMap,
+    workspace: options.workspace || null,
   });
   const importBatch = hydrated.import_batch_id
     ? await db.single('v2_prospect_import_batches', { filters: [eq('id', hydrated.import_batch_id)] })
@@ -2414,7 +2389,7 @@ export async function getProspectDetail(db, prospectId) {
   };
 }
 
-export async function importProspects(db, payload, actorId = null) {
+export async function importProspects(db, payload, actorId = null, workspace = null) {
   const filename = compactText(payload?.filename) || 'upload.csv';
   const category = PROSPECT_CATEGORIES.includes(payload?.category) ? payload.category : null;
   const rows = Array.isArray(payload?.rows) ? payload.rows : [];
@@ -2576,7 +2551,7 @@ export async function importProspects(db, payload, actorId = null) {
       created_at: now,
       updated_at: now,
     };
-    const draft = buildProspectDraft(merged);
+    const draft = buildProspectDraft(merged, workspace);
 
     return {
       ...merged,
@@ -2659,14 +2634,14 @@ export async function importProspects(db, payload, actorId = null) {
   };
 }
 
-export async function saveProspectDraft(db, prospectId, draft, actorId = null) {
+export async function saveProspectDraft(db, prospectId, draft, actorId = null, workspace = null) {
   const prospect = await db.single('v2_prospects', { filters: [eq('id', prospectId)] });
   if (!prospect) {
     throw new Error('Prospect not found');
   }
 
-  const nextSubject = compactText(draft?.subject) || buildProspectDraft(prospect).subject;
-  const nextBody = compactMultilineText(draft?.body) || buildProspectDraft(prospect).body;
+  const nextSubject = compactText(draft?.subject) || buildProspectDraft(prospect, workspace).subject;
+  const nextBody = compactMultilineText(draft?.body) || buildProspectDraft(prospect, workspace).body;
   const updated = (await db.update('v2_prospects', [eq('id', prospectId)], {
     draft_subject: nextSubject,
     draft_body: nextBody,
@@ -2678,10 +2653,11 @@ export async function saveProspectDraft(db, prospectId, draft, actorId = null) {
 
   return hydrateProspect(updated, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
+    workspace,
   });
 }
 
-export async function saveProspectNotes(db, prospectId, notes, actorId = null) {
+export async function saveProspectNotes(db, prospectId, notes, actorId = null, workspace = null) {
   const prospect = await db.single('v2_prospects', { filters: [eq('id', prospectId)] });
   if (!prospect) {
     throw new Error('Prospect not found');
@@ -2698,6 +2674,7 @@ export async function saveProspectNotes(db, prospectId, notes, actorId = null) {
 
   return hydrateProspect(linked, {
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
+    workspace,
   });
 }
 

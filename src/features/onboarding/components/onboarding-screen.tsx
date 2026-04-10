@@ -78,7 +78,7 @@ export function OnboardingScreen({
               {needsBootstrap ? "Start the workspace" : `Finish setup for ${state?.account?.business_name || "your workspace"}`}
             </h1>
             <p className="mt-3 max-w-xl text-sm leading-6 text-navy-600">
-              This flow creates the workspace, locks access to invited members only, and gets MetroGlass ready to run permit and lead outreach from one stable operator console.
+              This flow creates the workspace, locks access to invited members only, and gets this team ready to run permit and lead outreach from one stable operator console.
             </p>
 
             <div className="mt-6 space-y-3">
