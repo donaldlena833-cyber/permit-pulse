@@ -3,15 +3,25 @@ import { LoaderCircle, LockKeyhole, ScanSearch, ShieldCheck } from "lucide-react
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { getSessionDisplayName, type AuthSession } from "@/features/auth/lib/session"
 
 interface LoginScreenProps {
   loading: boolean
   error?: string | null
+  savedSessions?: AuthSession[]
+  onSwitchSession?: (email: string) => Promise<void>
   onSubmit: (email: string, password: string) => Promise<void>
   onSwitchToSignup?: () => void
 }
 
-export function LoginScreen({ loading, error, onSubmit, onSwitchToSignup }: LoginScreenProps) {
+export function LoginScreen({
+  loading,
+  error,
+  savedSessions = [],
+  onSwitchSession,
+  onSubmit,
+  onSwitchToSignup,
+}: LoginScreenProps) {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
 
@@ -81,6 +91,39 @@ export function LoginScreen({ loading, error, onSubmit, onSwitchToSignup }: Logi
             <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">
               Sign in to run scanning, enrichment, outreach, and workspace administration inside your operator workspace.
             </p>
+
+            {savedSessions.length > 0 ? (
+              <div className="mt-6 rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-600 dark:text-orange-300">
+                  Saved users
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {savedSessions.map((savedSession) => {
+                    const label = getSessionDisplayName(savedSession.user.email)
+                    return (
+                      <Button
+                        key={savedSession.user.email}
+                        className="rounded-full px-4"
+                        disabled={loading}
+                        onClick={() => {
+                          if (!onSwitchSession) {
+                            return
+                          }
+                          void onSwitchSession(savedSession.user.email).catch(() => undefined)
+                        }}
+                        type="button"
+                        variant="outline"
+                      >
+                        {label}
+                      </Button>
+                    )
+                  })}
+                </div>
+                <p className="mt-3 text-xs leading-5 text-navy-500 dark:text-dark-muted">
+                  Click a saved workspace to jump straight back in without retyping a password.
+                </p>
+              </div>
+            ) : null}
 
             <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
