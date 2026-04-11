@@ -17,7 +17,7 @@ import {
   updateProspectStatus,
   runScheduledProspectPilot,
 } from './lib/prospects.mjs';
-import { createSupabaseClient, eq, inList, order } from './lib/supabase.mjs';
+import { createSupabaseClient, eq, inList, order, withTenantScope } from './lib/supabase.mjs';
 import { getAppConfig } from './lib/config.mjs';
 import { countPendingAutomationLeads, listPendingAutomationLeads, summarizeRunQueue } from './lib/automation-queue.mjs';
 import { getLatestRuns, getRunById, enrichLead, startAutomationCycle, startLeadBatchAutomation } from './pipeline/engine.mjs';
@@ -35,6 +35,8 @@ import {
 } from './pipeline/outcomes.mjs';
 import { readReplySyncState, syncOutreachReplies } from './lib/reply-sync.mjs';
 import { completeRun, createRun, failRun } from './lib/runs.mjs';
+import { previewTenantEmailTemplate, listTenantEmailTemplates } from './lib/tenant-email-templates.mjs';
+import { presentTenantProfile, resolveTenant } from './lib/tenants.mjs';
 
 function corsHeaders() {
   return {
@@ -53,7 +55,7 @@ function json(payload, status = 200) {
 }
 
 function getSupabaseApiKey(env) {
-  return env.SUPABASE_ANON_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '';
+  return env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY || '';
 }
 
 async function authenticateRequest(request, env) {
@@ -88,6 +90,42 @@ function parseBody(request) {
     }
     return JSON.parse(text);
   });
+}
+
+function compactText(value) {
+  const next = String(value || '').trim();
+  return next || null;
+}
+
+function sanitizeTenantProfilePatch(body = {}) {
+  const patch = {};
+
+  if ('business_name' in body) {
+    patch.business_name = compactText(body.business_name) || '';
+  }
+  if ('website' in body) {
+    patch.website = compactText(body.website) || '';
+  }
+  if ('phone' in body) {
+    patch.phone = compactText(body.phone) || '';
+  }
+  if ('sender_name' in body) {
+    patch.sender_name = compactText(body.sender_name) || '';
+  }
+  if ('outreach_pitch' in body) {
+    patch.outreach_pitch = compactText(body.outreach_pitch) || '';
+  }
+  if ('outreach_focus' in body) {
+    patch.outreach_focus = compactText(body.outreach_focus) || '';
+  }
+  if ('outreach_cta' in body) {
+    patch.outreach_cta = compactText(body.outreach_cta) || '';
+  }
+  if ('accent_color' in body) {
+    patch.accent_color = compactText(body.accent_color) || '';
+  }
+
+  return patch;
 }
 
 function tierOrder(tier) {
@@ -263,10 +301,9 @@ async function getProcessedLeadsForRun(db, run) {
   }
 }
 
-async function getTodayPayload(env) {
-  const db = createSupabaseClient(env);
-  const config = await getAppConfig(db);
-  const { currentRun, lastRun } = await getLatestRuns(env);
+async function getTodayPayload(env, db, tenant) {
+  const config = await getAppConfig(db, tenant?.id);
+  const { currentRun, lastRun } = await getLatestRuns(env, tenant?.id);
   const displayRun = currentRun || lastRun || null;
   const [
     presentedCurrentRun,
@@ -312,8 +349,8 @@ async function getTodayPayload(env) {
       limit: 5,
     }),
     getProcessedLeadsForRun(db, displayRun),
-    getProspectAutomationOverview(db, config),
-    readReplySyncState(env),
+    getProspectAutomationOverview(db, config, tenant),
+    readReplySyncState(env, tenant?.id),
   ]);
 
   const leadIds = [...new Set([...followUps.map((row) => row.lead_id), ...sentOutcomes.map((row) => row.lead_id)])];
@@ -344,7 +381,7 @@ async function getTodayPayload(env) {
     .slice(0, 40);
 
   return {
-    greeting: `Good ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(new Date()) < 12 ? 'morning' : 'afternoon'}, Donald`,
+    greeting: `Good ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(new Date()) < 12 ? 'morning' : 'afternoon'}, ${(compactText(tenant?.sender_name) || 'there').split(/\s+/)[0]}`,
     daily_cap: {
       sent: sentToday.length,
       cap,
@@ -392,8 +429,7 @@ async function getTodayPayload(env) {
   };
 }
 
-async function getLeadDetail(env, leadId) {
-  const db = createSupabaseClient(env);
+async function getLeadDetail(db, leadId) {
   const [lead, companies, emails, followUps, timeline, relatedPermits] = await Promise.all([
     db.single('v2_leads', { filters: [eq('id', leadId)] }),
     db.select('v2_company_candidates', {
@@ -472,8 +508,7 @@ async function getLeadDetail(env, leadId) {
   };
 }
 
-async function listLeads(env, requestUrl) {
-  const db = createSupabaseClient(env);
+async function listLeads(db, requestUrl) {
   const page = Math.max(1, Number(requestUrl.searchParams.get('page') || 1));
   const limit = Math.min(50, Math.max(1, Number(requestUrl.searchParams.get('limit') || 20)));
   const status = requestUrl.searchParams.get('status');
@@ -552,14 +587,89 @@ export async function handlePermitPulseRequest(request, env, ctx) {
   }
 
   const db = createSupabaseClient(env);
+  const tenant = await resolveTenant(db, user);
+  if (!tenant) {
+    return json({ error: 'Tenant access not configured' }, 403);
+  }
+  const tenantDb = withTenantScope(db, tenant.id);
 
   try {
+    if (url.pathname === '/api/tenant/me' && request.method === 'GET') {
+      return json(await presentTenantProfile(env, tenantDb, tenant));
+    }
+
+    if (url.pathname === '/api/tenant/me' && request.method === 'PUT') {
+      const body = await parseBody(request);
+      const patch = sanitizeTenantProfilePatch(body);
+      if (Object.keys(patch).length > 0) {
+        await db.update('v2_tenants', [eq('id', tenant.id)], {
+          ...patch,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      return json(await presentTenantProfile(env, tenantDb, {
+        ...tenant,
+        ...patch,
+      }));
+    }
+
+    if (url.pathname === '/api/templates' && request.method === 'GET') {
+      const templates = await listTenantEmailTemplates(tenantDb, tenant);
+      return json({
+        placeholders: [
+          '{{first_name}}',
+          '{{company_name}}',
+          '{{sender_name}}',
+          '{{sender_phone}}',
+          '{{business_name}}',
+          '{{website}}',
+          '{{category_pitch}}',
+          '{{category_focus}}',
+          '{{outreach_cta}}',
+          '{{address}}',
+        ],
+        templates,
+      });
+    }
+
+    if (url.pathname === '/api/templates/preview' && request.method === 'POST') {
+      const body = await parseBody(request);
+      return json(await previewTenantEmailTemplate(tenantDb, tenant, body));
+    }
+
+    const templateUpdateMatch = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
+    if (templateUpdateMatch && request.method === 'PUT') {
+      const body = await parseBody(request);
+      const templateId = decodeURIComponent(templateUpdateMatch[1]);
+      const existingTemplate = await tenantDb.single('v2_tenant_email_templates', {
+        filters: [eq('id', templateId)],
+      });
+      if (!existingTemplate) {
+        return json({ error: 'Template not found' }, 404);
+      }
+
+      const nextValues = body?.reset_to_default
+        ? (await previewTenantEmailTemplate(tenantDb, tenant, { template_kind: existingTemplate.template_kind })).template
+        : {
+            subject_template: compactText(body?.subject_template) || existingTemplate.subject_template,
+            body_template: compactText(body?.body_template) || existingTemplate.body_template,
+          };
+
+      const [updatedTemplate] = await tenantDb.update('v2_tenant_email_templates', [eq('id', templateId)], {
+        subject_template: nextValues.subject_template,
+        body_template: nextValues.body_template,
+        updated_at: new Date().toISOString(),
+      });
+      return json(updatedTemplate || existingTemplate);
+    }
+
     if (url.pathname === '/api/today' && request.method === 'GET') {
-      return json(await getTodayPayload(env));
+      return json(await getTodayPayload(env, tenantDb, tenant));
     }
 
     if (url.pathname === '/api/scan' && request.method === 'POST') {
       const { run, task, activeRunReused } = await startAutomationCycle(env, {
+        tenant,
         triggerType: 'operator',
         triggeredBy: user.email || null,
         mode: 'operator_scan',
@@ -591,6 +701,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     if ((url.pathname === '/api/leads/enrich-batch' || url.pathname === '/api/leads/automate-batch') && request.method === 'POST') {
       const body = await parseBody(request);
       const { run, accepted, task } = await startLeadBatchAutomation(env, parseLeadIds(body), {
+        tenant,
         triggerType: 'operator',
         triggeredBy: user.email || null,
       });
@@ -618,24 +729,25 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/api/leads/send-ready' && request.method === 'POST') {
-      const config = await getAppConfig(db);
-      return json(await sendReadyLeads(env, db, null, config));
+      const config = await getAppConfig(tenantDb, tenant.id);
+      return json(await sendReadyLeads(env, tenantDb, null, config, { tenant }));
     }
 
     if (url.pathname === '/api/leads' && request.method === 'GET') {
-      return json(await listLeads(env, url));
+      return json(await listLeads(tenantDb, url));
     }
 
     if (url.pathname === '/api/prospects' && request.method === 'GET') {
       const [payload, replySync] = await Promise.all([
-        listProspects(db, {
+        listProspects(tenantDb, {
+          tenant,
           status: url.searchParams.get('status') || 'all',
           category: url.searchParams.get('category') || 'all',
           q: url.searchParams.get('q') || '',
           page: Number(url.searchParams.get('page') || 1),
           limit: Number(url.searchParams.get('limit') || 20),
         }),
-        readReplySyncState(env),
+        readReplySyncState(env, tenant.id),
       ]);
       return json({
         ...payload,
@@ -648,18 +760,20 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     if (url.pathname === '/api/prospects/import' && request.method === 'POST') {
       const body = await parseBody(request);
-      return json(await importProspects(db, body, user.email || null));
+      return json(await importProspects(tenantDb, body, user.email || null, tenant));
     }
 
     if (url.pathname === '/api/outreach/sync-replies' && request.method === 'POST') {
       return json(await syncOutreachReplies(env, db, {
+        tenantId: tenant.id,
         maxResults: 60,
         newerThanDays: 21,
       }));
     }
 
     if (url.pathname === '/api/prospects/run-daily-send' && request.method === 'POST') {
-      return json(await runScheduledProspectPilot(env, db, createRun, completeRun, failRun, {
+      return json(await runScheduledProspectPilot(env, tenantDb, createRun, completeRun, failRun, {
+        tenant,
         mode: 'prospect_manual_send',
         slotKey: null,
       }));
@@ -668,25 +782,26 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const reviewResolveMatch = url.pathname.match(/^\/api\/outreach\/review\/([^/]+)\/resolve$/);
     if (reviewResolveMatch && request.method === 'POST') {
       const body = await parseBody(request);
-      return json(await resolveOutreachReviewItem(db, decodeURIComponent(reviewResolveMatch[1]), body, user.email || null));
+      return json(await resolveOutreachReviewItem(tenantDb, decodeURIComponent(reviewResolveMatch[1]), body, user.email || null));
     }
 
     const suppressionRemoveMatch = url.pathname.match(/^\/api\/outreach\/suppressions\/([^/]+)\/remove$/);
     if (suppressionRemoveMatch && request.method === 'POST') {
-      return json(await removeProspectSuppression(db, decodeURIComponent(suppressionRemoveMatch[1]), user.email || null));
+      return json(await removeProspectSuppression(tenantDb, decodeURIComponent(suppressionRemoveMatch[1]), user.email || null));
     }
 
     if (url.pathname === '/api/leads/follow-ups/send-due' && request.method === 'POST') {
       const body = await parseBody(request);
-      return json(await processDueFollowUps(env, db, {
+      return json(await processDueFollowUps(env, tenantDb, {
+        tenant,
         limit: Number(body?.limit || 20),
       }));
     }
 
     if (url.pathname === '/api/leads/follow-ups/repair' && request.method === 'POST') {
       const body = await parseBody(request);
-      const config = await getAppConfig(db);
-      return json(await backfillPermitFollowUps(db, config, {
+      const config = await getAppConfig(tenantDb, tenant.id);
+      return json(await backfillPermitFollowUps(tenantDb, config, {
         limit: Number(body?.limit || 500),
         lookbackDays: Number(body?.lookback_days || 60),
       }));
@@ -694,42 +809,42 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (runMatch && request.method === 'GET') {
-      const run = await getRunById(env, decodeURIComponent(runMatch[1]));
-      return json(run ? await presentRun(db, run) : { error: 'Run not found' }, run ? 200 : 404);
+      const run = await getRunById(env, decodeURIComponent(runMatch[1]), tenant.id);
+      return json(run ? await presentRun(tenantDb, run) : { error: 'Run not found' }, run ? 200 : 404);
     }
 
     const prospectMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)$/);
     if (prospectMatch && request.method === 'GET') {
-      const detail = await getProspectDetail(db, decodeURIComponent(prospectMatch[1]));
+      const detail = await getProspectDetail(tenantDb, decodeURIComponent(prospectMatch[1]), tenant);
       return json(detail || { error: 'Prospect not found' }, detail ? 200 : 404);
     }
 
     const prospectSendMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/send$/);
     if (prospectSendMatch && request.method === 'POST') {
-      return json(await sendProspect(env, db, decodeURIComponent(prospectSendMatch[1]), user.email || null));
+      return json(await sendProspect(env, tenantDb, tenant, decodeURIComponent(prospectSendMatch[1]), user.email || null));
     }
 
     const prospectReplyMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/reply$/);
     if (prospectReplyMatch && request.method === 'POST') {
       const body = await parseBody(request);
-      return json(await markProspectReply(db, decodeURIComponent(prospectReplyMatch[1]), user.email || null, body?.tone || 'neutral'));
+      return json(await markProspectReply(tenantDb, decodeURIComponent(prospectReplyMatch[1]), user.email || null, body?.tone || 'neutral'));
     }
 
     const prospectBounceMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/bounce$/);
     if (prospectBounceMatch && request.method === 'POST') {
-      return json(await markProspectBounced(db, decodeURIComponent(prospectBounceMatch[1]), user.email || null));
+      return json(await markProspectBounced(tenantDb, decodeURIComponent(prospectBounceMatch[1]), user.email || null));
     }
 
     const prospectOptOutMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/opt-out$/);
     if (prospectOptOutMatch && request.method === 'POST') {
-      return json(await optOutProspect(db, decodeURIComponent(prospectOptOutMatch[1]), user.email || null));
+      return json(await optOutProspect(tenantDb, decodeURIComponent(prospectOptOutMatch[1]), user.email || null));
     }
 
     const prospectSuppressMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/suppress$/);
     if (prospectSuppressMatch && request.method === 'POST') {
       const body = await parseBody(request);
       return json(await suppressProspectScope(
-        db,
+        tenantDb,
         decodeURIComponent(prospectSuppressMatch[1]),
         body?.scope_type || 'email',
         user.email || null,
@@ -740,31 +855,31 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const prospectDraftMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/draft$/);
     if (prospectDraftMatch && request.method === 'PUT') {
       const body = await parseBody(request);
-      return json(await saveProspectDraft(db, decodeURIComponent(prospectDraftMatch[1]), body, user.email || null));
+      return json(await saveProspectDraft(tenantDb, decodeURIComponent(prospectDraftMatch[1]), body, user.email || null, tenant));
     }
 
     const prospectNotesMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/notes$/);
     if (prospectNotesMatch && request.method === 'PUT') {
       const body = await parseBody(request);
-      return json(await saveProspectNotes(db, decodeURIComponent(prospectNotesMatch[1]), body?.notes || '', user.email || null));
+      return json(await saveProspectNotes(tenantDb, decodeURIComponent(prospectNotesMatch[1]), body?.notes || '', user.email || null));
     }
 
     const prospectStatusMatch = url.pathname.match(/^\/api\/prospects\/([^/]+)\/status$/);
     if (prospectStatusMatch && request.method === 'POST') {
       const body = await parseBody(request);
-      return json(await updateProspectStatus(db, decodeURIComponent(prospectStatusMatch[1]), body?.status, user.email || null));
+      return json(await updateProspectStatus(tenantDb, decodeURIComponent(prospectStatusMatch[1]), body?.status, user.email || null));
     }
 
     const leadMatch = url.pathname.match(/^\/api\/leads\/([^/]+)$/);
     if (leadMatch && request.method === 'GET') {
-      const detail = await getLeadDetail(env, decodeURIComponent(leadMatch[1]));
+      const detail = await getLeadDetail(tenantDb, decodeURIComponent(leadMatch[1]));
       return json(detail || { error: 'Lead not found' }, detail ? 200 : 404);
     }
 
     const sendMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/send$/);
     if (sendMatch && request.method === 'POST') {
-      const config = await getAppConfig(db);
-      return json(await sendLead(env, db, decodeURIComponent(sendMatch[1]), {
+      const config = await getAppConfig(tenantDb, tenant.id);
+      return json(await sendLead(env, tenantDb, tenant, decodeURIComponent(sendMatch[1]), {
         actorId: user.email || null,
         followUpSequence: config.follow_up_sequence,
       }));
@@ -773,6 +888,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     const enrichMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/enrich$/);
     if (enrichMatch && request.method === 'POST') {
       return json(await enrichLead(env, decodeURIComponent(enrichMatch[1]), {
+        tenant,
         triggerType: 'retry',
         triggeredBy: user.email || null,
       }));
@@ -780,7 +896,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const archiveMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/archive$/);
     if (archiveMatch && request.method === 'POST') {
-      await db.update('v2_leads', [`id=eq.${decodeURIComponent(archiveMatch[1])}`], {
+      await tenantDb.update('v2_leads', [`id=eq.${decodeURIComponent(archiveMatch[1])}`], {
         status: 'archived',
         updated_at: new Date().toISOString(),
       });
@@ -789,30 +905,30 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const emailRequiredMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/email-required$/);
     if (emailRequiredMatch && request.method === 'POST') {
-      return json(await markLeadEmailRequired(db, decodeURIComponent(emailRequiredMatch[1]), user.email || null));
+      return json(await markLeadEmailRequired(tenantDb, decodeURIComponent(emailRequiredMatch[1]), user.email || null));
     }
 
     const vouchMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/vouch$/);
     if (vouchMatch && request.method === 'POST') {
-      return json(await vouchLeadEmail(db, decodeURIComponent(vouchMatch[1]), user.email || null));
+      return json(await vouchLeadEmail(tenantDb, decodeURIComponent(vouchMatch[1]), user.email || null));
     }
 
     const outcomeMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/outcome$/);
     if (outcomeMatch && request.method === 'POST') {
       const body = await parseBody(request);
-      return json(await markLeadOutcome(db, decodeURIComponent(outcomeMatch[1]), body, user.email || null));
+      return json(await markLeadOutcome(tenantDb, decodeURIComponent(outcomeMatch[1]), body, user.email || null));
     }
 
     const switchFallbackMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/switch-fallback$/);
     if (switchFallbackMatch && request.method === 'POST') {
-      return json(await switchLeadToFallback(db, decodeURIComponent(switchFallbackMatch[1]), user.email || null));
+      return json(await switchLeadToFallback(tenantDb, decodeURIComponent(switchFallbackMatch[1]), user.email || null));
     }
 
     const chooseEmailMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/select-email$/);
     if (chooseEmailMatch && request.method === 'POST') {
       const body = await parseBody(request);
       return json(await chooseLeadEmailCandidate(
-        db,
+        tenantDb,
         decodeURIComponent(chooseEmailMatch[1]),
         body.candidate_id,
         user.email || null,
@@ -823,7 +939,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
     if (manualEmailMatch && request.method === 'POST') {
       const body = await parseBody(request);
       return json(await addManualLeadEmail(
-        db,
+        tenantDb,
         decodeURIComponent(manualEmailMatch[1]),
         body,
         user.email || null,
@@ -832,13 +948,13 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const draftRefreshMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/draft\/refresh$/);
     if (draftRefreshMatch && request.method === 'POST') {
-      return json(await generateLeadDraft(db, null, decodeURIComponent(draftRefreshMatch[1])));
+      return json(await generateLeadDraft(tenantDb, tenant, null, decodeURIComponent(draftRefreshMatch[1])));
     }
 
     const draftMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/draft$/);
     if (draftMatch && request.method === 'PUT') {
       const body = await parseBody(request);
-      const [lead] = await db.update('v2_leads', [`id=eq.${decodeURIComponent(draftMatch[1])}`], {
+      const [lead] = await tenantDb.update('v2_leads', [`id=eq.${decodeURIComponent(draftMatch[1])}`], {
         draft_subject: body.subject || '',
         draft_body: body.body || '',
         draft_cta_type: body.cta_type || '',
@@ -849,7 +965,7 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const followUpsMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/follow-ups$/);
     if (followUpsMatch && request.method === 'GET') {
-      const followUps = await db.select('v2_follow_ups', {
+      const followUps = await tenantDb.select('v2_follow_ups', {
         filters: [eq('lead_id', decodeURIComponent(followUpsMatch[1]))],
         ordering: [order('step_number', 'asc')],
       });
@@ -858,46 +974,46 @@ export async function handlePermitPulseRequest(request, env, ctx) {
 
     const followUpSendMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/follow-ups\/([^/]+)\/send$/);
     if (followUpSendMatch && request.method === 'POST') {
-      return json(await sendFollowUp(env, db, decodeURIComponent(followUpSendMatch[1]), Number(followUpSendMatch[2]), user.email || null));
+      return json(await sendFollowUp(env, tenantDb, tenant, decodeURIComponent(followUpSendMatch[1]), Number(followUpSendMatch[2]), user.email || null));
     }
 
     const followUpSkipMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/follow-ups\/([^/]+)\/skip$/);
     if (followUpSkipMatch && request.method === 'POST') {
-      await skipFollowUp(db, decodeURIComponent(followUpSkipMatch[1]), Number(followUpSkipMatch[2]), user.email || null);
+      await skipFollowUp(tenantDb, decodeURIComponent(followUpSkipMatch[1]), Number(followUpSkipMatch[2]), user.email || null);
       return json({ success: true });
     }
 
     const followUpLogMatch = url.pathname.match(/^\/api\/leads\/([^/]+)\/follow-ups\/([^/]+)\/log$/);
     if (followUpLogMatch && request.method === 'POST') {
       const body = await parseBody(request);
-      await logPhoneFollowUp(db, decodeURIComponent(followUpLogMatch[1]), Number(followUpLogMatch[2]), body.notes || '', user.email || null);
+      await logPhoneFollowUp(tenantDb, decodeURIComponent(followUpLogMatch[1]), Number(followUpLogMatch[2]), body.notes || '', user.email || null);
       return json({ success: true });
     }
 
     if (url.pathname === '/api/config' && request.method === 'GET') {
-      return json(await getAppConfig(db));
+      return json(await getAppConfig(tenantDb, tenant.id));
     }
 
     if (url.pathname === '/api/config' && request.method === 'PUT') {
       const body = await parseBody(request);
       const payload = Object.entries(body || {}).map(([key, value]) => ({ key, value }));
       if (payload.length > 0) {
-        await db.upsert('v2_app_config', payload, 'key');
+        await tenantDb.upsert('v2_app_config', payload, 'tenant_id,key');
       }
-      return json(await getAppConfig(db));
+      return json(await getAppConfig(tenantDb, tenant.id));
     }
 
     if (url.pathname === '/api/system' && request.method === 'GET') {
       const [recentFailureRows, totalLeads, totalProspects, domainHealth, runs] = await Promise.all([
-        db.select('v2_lead_jobs', {
+        tenantDb.select('v2_lead_jobs', {
           filters: [eq('status', 'failed')],
           ordering: [order('created_at', 'desc')],
           limit: 25,
         }),
-        db.select('v2_leads', { columns: 'id' }),
-        db.select('v2_prospects', { columns: 'id' }).catch(() => []),
+        tenantDb.select('v2_leads', { columns: 'id' }),
+        tenantDb.select('v2_prospects', { columns: 'id' }).catch(() => []),
         db.select('v2_domain_health', { columns: 'domain,health_score,checked_at', limit: 20 }),
-        db.select('v2_automation_runs', {
+        tenantDb.select('v2_automation_runs', {
           ordering: [order('created_at', 'desc')],
           limit: 5,
         }),
@@ -915,8 +1031,8 @@ export async function handlePermitPulseRequest(request, env, ctx) {
         total_prospects: totalProspects.length,
         recent_failures: recentFailures,
         domain_health: domainHealth,
-        recent_runs: await Promise.all(runs.map((run) => presentRun(db, run))),
-        reply_sync: await readReplySyncState(env),
+        recent_runs: await Promise.all(runs.map((run) => presentRun(tenantDb, run))),
+        reply_sync: await readReplySyncState(env, tenant.id),
       });
     }
 

@@ -11,7 +11,7 @@ interface LoginScreenProps {
 }
 
 export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
-  const [email, setEmail] = useState("operations@metroglasspro.com")
+  const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -28,33 +28,33 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
             <div>
               <div className="inline-flex items-center gap-3 rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/20 dark:text-orange-200">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500 text-white">
-                  MG
+                  OP
                 </div>
-                MetroGlass Leads
+                Outreach Platform
               </div>
               <h1 className="mt-6 max-w-2xl text-[2rem] font-semibold tracking-[-0.05em] text-navy-900 sm:text-5xl dark:text-dark-text">
-                Private lead ops for real permit-driven outreach.
+                Multi-tenant outreach operations for permit and CRM workflows.
               </h1>
               <p className="mt-3 max-w-xl text-sm leading-6 text-navy-600 sm:text-base sm:leading-7 dark:text-dark-muted">
-                Scan DOB permits, resolve the real company, pick the best recipient, and send through Gmail from one controlled workspace.
+                Sign in with your tenant workspace account to access prospect imports, permit intelligence, Gmail sending, and runtime controls.
               </p>
             </div>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <div className="rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
                 <ScanSearch className="h-5 w-5 text-orange-600 dark:text-orange-300" />
-                <div className="mt-3 text-sm font-semibold text-navy-900 dark:text-dark-text">Scan and enrich</div>
-                <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">Let the system pull permits and build the first pass automatically.</p>
+                <div className="mt-3 text-sm font-semibold text-navy-900 dark:text-dark-text">Tenant-aware access</div>
+                <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">Each workspace loads its own branding, templates, and feature set after sign-in.</p>
               </div>
               <div className="rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
                 <LockKeyhole className="h-5 w-5 text-orange-600 dark:text-orange-300" />
-                <div className="mt-3 text-sm font-semibold text-navy-900 dark:text-dark-text">Login only</div>
-                <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">The dashboard stays private. No public app surface, no open lead feed.</p>
+                <div className="mt-3 text-sm font-semibold text-navy-900 dark:text-dark-text">Private workspace</div>
+                <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">The dashboard stays restricted to authenticated tenant users with isolated data access.</p>
               </div>
               <div className="rounded-[24px] border border-navy-200/70 bg-cream-50/80 p-4 dark:border-dark-border/70 dark:bg-dark-bg">
                 <ShieldCheck className="h-5 w-5 text-orange-600 dark:text-orange-300" />
-                <div className="mt-3 text-sm font-semibold text-navy-900 dark:text-dark-text">Long session</div>
-                <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">Stay signed in on your devices so the app is ready when you are.</p>
+                <div className="mt-3 text-sm font-semibold text-navy-900 dark:text-dark-text">Shared delivery stack</div>
+                <p className="mt-1 text-sm leading-6 text-navy-500 dark:text-dark-muted">Gmail, attachments, and automation rules are loaded per tenant instead of from a single brand preset.</p>
               </div>
             </div>
           </div>
@@ -62,10 +62,10 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
           <div className="rounded-[28px] border border-navy-200/70 bg-white/88 p-5 shadow-[0_24px_90px_rgba(70,55,37,0.12)] backdrop-blur-xl sm:rounded-[32px] sm:p-8 dark:border-dark-border/70 dark:bg-dark-card/92">
             <div className="mb-5 flex items-center gap-3 rounded-full border border-orange-200 bg-orange-50/80 px-3.5 py-2 sm:hidden dark:border-orange-800/50 dark:bg-orange-900/20">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-500 text-xs font-semibold text-white">
-                MG
+                OP
               </div>
               <div className="min-w-0">
-                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">MetroGlass Leads</div>
+                <div className="text-sm font-semibold tracking-[-0.03em] text-navy-900 dark:text-dark-text">Outreach Platform</div>
                 <div className="text-[11px] uppercase tracking-[0.18em] text-orange-700 dark:text-orange-200">
                   Internal access
                 </div>
@@ -75,10 +75,10 @@ export function LoginScreen({ loading, error, onSubmit }: LoginScreenProps) {
               Internal access
             </div>
             <h2 className="mt-2 text-[1.75rem] font-semibold tracking-[-0.04em] text-navy-900 sm:mt-3 sm:text-3xl dark:text-dark-text">
-              Sign in to MetroGlass Leads
+              Sign in to your workspace
             </h2>
             <p className="mt-2 text-sm leading-6 text-navy-600 dark:text-dark-muted">
-              Private MetroGlass Pro workspace for scanning, enrichment, and Gmail outreach.
+              Tenant branding loads after authentication. Use the email address assigned to this workspace.
             </p>
 
             <form className="mt-6 space-y-4" onSubmit={handleSubmit}>

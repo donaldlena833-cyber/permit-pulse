@@ -7,6 +7,10 @@ import type {
   ProspectDetailResponse,
   ProspectsPayload,
   SystemPayload,
+  TemplatePreviewPayload,
+  TenantEmailTemplate,
+  TenantProfile,
+  TenantTemplatesPayload,
   TodayPayload,
 } from "@/features/metroglass-leads/types/api"
 
@@ -40,6 +44,54 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchHealth() {
   return requestJson<HealthPayload>("/api/health")
+}
+
+export function fetchTenantMe() {
+  return requestJson<TenantProfile>("/api/tenant/me")
+}
+
+export function updateTenantMe(payload: Partial<TenantProfile>) {
+  return requestJson<TenantProfile>("/api/tenant/me", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchTemplates() {
+  return requestJson<TenantTemplatesPayload>("/api/templates")
+}
+
+export function updateTemplate(templateId: string, payload: {
+  subject_template?: string
+  body_template?: string
+  reset_to_default?: boolean
+}) {
+  return requestJson<TenantEmailTemplate>(`/api/templates/${encodeURIComponent(templateId)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function previewTemplate(payload: {
+  id?: string
+  template_kind?: TenantEmailTemplate["template_kind"]
+  subject_template?: string
+  body_template?: string
+  sample_data?: Record<string, unknown>
+}) {
+  return requestJson<TemplatePreviewPayload>("/api/templates/preview", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
 }
 
 export function fetchToday() {

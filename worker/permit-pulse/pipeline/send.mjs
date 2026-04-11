@@ -61,7 +61,7 @@ async function suppressDuplicateLeadRecipient(db, lead, recipient, prior, option
   });
 }
 
-export async function sendLead(env, db, leadId, options = {}) {
+export async function sendLead(env, db, tenant, leadId, options = {}) {
   const lead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
   });
@@ -97,14 +97,14 @@ export async function sendLead(env, db, leadId, options = {}) {
   }
 
   if (!lead.draft_subject || !lead.draft_body) {
-    await generateLeadDraft(db, options.runId || null, leadId);
+    await generateLeadDraft(db, tenant, options.runId || null, leadId);
   }
 
   const refreshedLead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
   });
 
-  await sendAutomationEmail(env, {
+  await sendAutomationEmail(env, db, tenant, {
     recipient: normalizedRecipient,
     subject: refreshedLead.draft_subject,
     body: refreshedLead.draft_body,
@@ -186,7 +186,7 @@ export async function sendReadyLeads(env, db, runId, config, options = {}) {
 
   for (const lead of prioritizedLeads) {
     try {
-      await sendLead(env, db, lead.id, {
+      await sendLead(env, db, options.tenant || null, lead.id, {
         runId,
         requireAutoApproved: true,
         followUpSequence: config.follow_up_sequence,

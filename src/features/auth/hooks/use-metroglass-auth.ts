@@ -7,12 +7,15 @@ import {
   signInWithPassword,
   signOutSession,
 } from "@/features/auth/lib/session"
+import { fetchTenantMe } from "@/features/metroglass-leads/lib/remote"
+import type { TenantProfile } from "@/features/metroglass-leads/types/api"
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated"
 
 export function useMetroglassAuth() {
   const [status, setStatus] = useState<AuthStatus>("loading")
   const [session, setSession] = useState<AuthSession | null>(null)
+  const [tenant, setTenant] = useState<TenantProfile | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -25,7 +28,18 @@ export function useMetroglassAuth() {
           return
         }
         setSession(nextSession)
-        setStatus(nextSession ? "authenticated" : "unauthenticated")
+        if (!nextSession) {
+          setTenant(null)
+          setStatus("unauthenticated")
+          setError(null)
+          return
+        }
+        const nextTenant = await fetchTenantMe()
+        if (cancelled) {
+          return
+        }
+        setTenant(nextTenant)
+        setStatus("authenticated")
         setError(null)
       } catch (hydrateError) {
         if (cancelled) {
@@ -33,6 +47,7 @@ export function useMetroglassAuth() {
         }
         clearStoredSession()
         setSession(null)
+        setTenant(null)
         setStatus("unauthenticated")
         setError(hydrateError instanceof Error ? hydrateError.message : "Session restore failed")
       }
@@ -47,13 +62,24 @@ export function useMetroglassAuth() {
     try {
       const nextSession = await ensureSession()
       setSession(nextSession)
-      setStatus(nextSession ? "authenticated" : "unauthenticated")
+      if (!nextSession) {
+        setTenant(null)
+        setStatus("unauthenticated")
+        setError(null)
+        return null
+      }
+      const nextTenant = await fetchTenantMe()
+      setTenant(nextTenant)
+      setStatus("authenticated")
       setError(null)
+      return nextTenant
     } catch (hydrateError) {
       clearStoredSession()
       setSession(null)
+      setTenant(null)
       setStatus("unauthenticated")
       setError(hydrateError instanceof Error ? hydrateError.message : "Session restore failed")
+      return null
     }
   }, [])
 
@@ -74,15 +100,18 @@ export function useMetroglassAuth() {
     setError(null)
     try {
       const nextSession = await signInWithPassword(email, password)
+      const nextTenant = await fetchTenantMe()
       setSession(nextSession)
+      setTenant(nextTenant)
       setStatus("authenticated")
       return nextSession
     } catch (loginError) {
       setSession(null)
+      setTenant(null)
       setStatus("unauthenticated")
       const message = loginError instanceof Error ? loginError.message : "Login failed"
       const friendlyMessage = message.toLowerCase().includes("email not confirmed")
-        ? "Your Supabase project is still requiring email confirmation. Confirm the inbox for operations@metroglasspro.com, or disable email confirmation in Supabase Auth."
+        ? "Your Supabase project is still requiring email confirmation. Confirm the inbox for this tenant account, or disable email confirmation in Supabase Auth."
         : message
       setError(friendlyMessage)
       throw loginError
@@ -92,6 +121,7 @@ export function useMetroglassAuth() {
   const logout = useCallback(async () => {
     await signOutSession()
     setSession(null)
+    setTenant(null)
     setStatus("unauthenticated")
     setError(null)
   }, [])
@@ -99,6 +129,8 @@ export function useMetroglassAuth() {
   return {
     status,
     session,
+    tenant,
+    setTenant,
     error,
     login,
     logout,

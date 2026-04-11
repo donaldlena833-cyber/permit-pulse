@@ -13,6 +13,7 @@ import {
   fetchProspects,
   fetchRun,
   fetchSystem,
+  fetchTemplates,
   fetchToday,
   importProspectsCsv,
   logPhoneFollowUp,
@@ -36,12 +37,15 @@ import {
   switchToFallback,
   suppressProspect,
   triggerScan,
+  updateTemplate,
+  updateTenantMe,
   updateConfig,
   updateDraft,
   updateProspectDraft,
   updateProspectNotes,
   updateProspectStatus,
   vouchLead,
+  previewTemplate as previewTemplateRequest,
   runProspectDailySendNow,
 } from "@/features/metroglass-leads/lib/remote"
 import type {
@@ -56,6 +60,9 @@ import type {
   ProspectsPayload,
   ProspectStatus,
   SystemPayload,
+  TemplatePreviewPayload,
+  TenantEmailTemplate,
+  TenantProfile,
   TodayPayload,
 } from "@/features/metroglass-leads/types/api"
 
@@ -65,12 +72,19 @@ function scopeTypeLabel(scopeType: "email" | "domain" | "company") {
   return "Company"
 }
 
-export function useMetroglassLeads() {
-  const [tab, setTab] = useState<AppTab>("today")
+interface UseMetroglassLeadsOptions {
+  tenant: TenantProfile | null
+  onTenantUpdated?: (tenant: TenantProfile) => void
+}
+
+export function useMetroglassLeads(options: UseMetroglassLeadsOptions) {
+  const [tab, setTab] = useState<AppTab>(() => (options.tenant?.features.permit_scanning ? "today" : "prospects"))
   const [health, setHealth] = useState<HealthPayload | null>(null)
   const [today, setToday] = useState<TodayPayload | null>(null)
   const [leads, setLeads] = useState<LeadsPayload["leads"]>([])
   const [prospects, setProspects] = useState<ProspectsPayload | null>(null)
+  const [templates, setTemplates] = useState<TenantEmailTemplate[]>([])
+  const [templatePlaceholders, setTemplatePlaceholders] = useState<string[]>([])
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [selectedLead, setSelectedLead] = useState<LeadDetailResponse | null>(null)
   const [selectedProspectId, setSelectedProspectId] = useState<string | null>(null)
@@ -84,6 +98,12 @@ export function useMetroglassLeads() {
   const [loading, setLoading] = useState(true)
   const [actionLeadId, setActionLeadId] = useState<string | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!options.tenant?.features.permit_scanning && tab === "today") {
+      setTab("prospects")
+    }
+  }, [options.tenant?.features.permit_scanning, tab])
 
   const refreshToday = useCallback(async (options?: { preserveRunId?: string | null }) => {
     const payload = await fetchToday()
@@ -256,6 +276,13 @@ export function useMetroglassLeads() {
     return payload
   }, [])
 
+  const refreshTemplates = useCallback(async () => {
+    const payload = await fetchTemplates()
+    setTemplates(payload.templates)
+    setTemplatePlaceholders(payload.placeholders)
+    return payload
+  }, [])
+
   const refreshSystem = useCallback(async () => {
     const payload = await fetchSystem()
     setSystem(payload)
@@ -271,12 +298,13 @@ export function useMetroglassLeads() {
         refreshLeads(),
         refreshProspects(),
         refreshConfig(),
+        refreshTemplates(),
         refreshSystem(),
       ])
     } finally {
       setLoading(false)
     }
-  }, [refreshConfig, refreshLeads, refreshProspects, refreshSystem, refreshToday])
+  }, [refreshConfig, refreshLeads, refreshProspects, refreshSystem, refreshTemplates, refreshToday])
 
   useEffect(() => {
     void refreshAll()
@@ -597,7 +625,47 @@ export function useMetroglassLeads() {
         toast.error(error instanceof Error ? error.message : "Settings update failed")
       }
     },
-  }), [refreshLeads, refreshProspects, refreshSelectedLead, refreshSelectedProspect, refreshSystem, refreshToday, runAction, runGlobalAction, runProspectAction, scan, selectedLeadId, selectedProspectId])
+    saveTenantProfile: async (patch: Partial<TenantProfile>) => {
+      try {
+        const nextTenant = await updateTenantMe(patch)
+        options.onTenantUpdated?.(nextTenant)
+        toast.success("Profile updated")
+        return nextTenant
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Profile update failed")
+        throw error
+      }
+    },
+    saveTemplate: async (templateId: string, patch: { subject_template?: string; body_template?: string }) => {
+      try {
+        const nextTemplate = await updateTemplate(templateId, patch)
+        setTemplates((current) => current.map((template) => (template.id === templateId ? nextTemplate : template)))
+        toast.success("Template saved")
+        return nextTemplate
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Template update failed")
+        throw error
+      }
+    },
+    resetTemplate: async (templateId: string) => {
+      try {
+        const nextTemplate = await updateTemplate(templateId, { reset_to_default: true })
+        setTemplates((current) => current.map((template) => (template.id === templateId ? nextTemplate : template)))
+        toast.success("Template reset to default")
+        return nextTemplate
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Template reset failed")
+        throw error
+      }
+    },
+    previewTemplate: async (payload: {
+      id?: string
+      template_kind?: TenantEmailTemplate["template_kind"]
+      subject_template?: string
+      body_template?: string
+      sample_data?: Record<string, unknown>
+    }) => previewTemplateRequest(payload) as Promise<TemplatePreviewPayload>,
+  }), [options, refreshLeads, refreshProspects, refreshSelectedLead, refreshSelectedProspect, refreshSystem, refreshToday, runAction, runGlobalAction, runProspectAction, scan, selectedLeadId, selectedProspectId])
 
   return {
     tab,
@@ -606,6 +674,8 @@ export function useMetroglassLeads() {
     today,
     leads,
     prospects,
+    templates,
+    templatePlaceholders,
     selectedLeadId,
     selectedLead,
     selectedProspectId,

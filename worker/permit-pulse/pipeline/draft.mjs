@@ -1,5 +1,6 @@
 import { appendLeadEvent } from '../lib/events.mjs';
 import { eq } from '../lib/supabase.mjs';
+import { renderEmailTemplate, resolveTenantEmailTemplate } from '../lib/tenant-email-templates.mjs';
 
 function serviceFromLead(lead) {
   const keyword = String(lead.relevance_keyword || '').toLowerCase();
@@ -7,7 +8,11 @@ function serviceFromLead(lead) {
   if (keyword.includes('mirror')) return 'mirror wall';
   if (keyword.includes('partition')) return 'glass partition';
   if (keyword.includes('railing')) return 'glass railing';
-  return 'glass scope';
+  return 'project scope';
+}
+
+function firstNameFromLead(lead) {
+  return String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
 }
 
 export function chooseDraftCta(lead) {
@@ -24,7 +29,7 @@ export function chooseDraftCta(lead) {
   if (lead.contact_role === 'gc_applicant') {
     return {
       type: 'takeoff',
-      sentence: 'Happy to do a free glass takeoff from plans if you send them over.',
+      sentence: 'Happy to do a quick takeoff from plans if you send them over.',
     };
   }
 
@@ -37,60 +42,45 @@ export function chooseDraftCta(lead) {
 
   return {
     type: 'quick_call',
-    sentence: `Would 10 minutes work this week to walk through glass options for ${lead.address}?`,
+    sentence: `Would 10 minutes work this week to walk through the scope at ${lead.address || 'your project'}?`,
   };
 }
 
-export function buildInitialDraft(lead) {
-  const firstName = String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
-  const address = lead.address || 'your project';
-  const subject = lead.address ? `Quick note on ${lead.address}` : 'Quick note from MetroGlass Pro';
-  const lines = [
-    `Hi ${firstName},`,
-    `I saw the filing for ${address} and wanted to reach out.`,
-    "I'm with MetroGlass Pro. We work on custom glass installations across NYC, NJ, and CT, including mirrors, partitions, shower glass, cabinets, and similar scope.",
-    "I know filings do not always show the full picture, but if any glass related work is still being lined up, I'd be happy to connect.",
-    'Best,',
-    'Donald',
-  ];
+function leadTemplateData(tenant, lead, context, ctaSentence) {
+  return {
+    first_name: firstNameFromLead(lead),
+    company_name: lead.company_name || lead.applicant_name || lead.owner_name || 'your team',
+    address: lead.address || 'your project',
+    context,
+    outreach_cta: ctaSentence,
+  };
+}
+
+export async function buildInitialDraft(db, tenant, lead) {
+  const cta = chooseDraftCta(lead);
+  const template = await resolveTenantEmailTemplate(db, tenant, 'permit_initial');
+  const rendered = renderEmailTemplate(tenant, template, leadTemplateData(tenant, lead, 'permit', cta.sentence));
 
   return {
-    subject,
-    body: lines.join('\n\n'),
-    cta_type: 'soft_intro',
+    subject: rendered.subject,
+    body: rendered.body,
+    cta_type: cta.type,
   };
 }
 
-export function buildFollowUpDraft(lead, stepNumber) {
-  const firstName = String(lead.contact_name || '').trim().split(/\s+/)[0] || 'there';
-  const service = serviceFromLead(lead);
-
-  if (Number(stepNumber || 0) <= 1) {
-    return {
-      subject: lead.draft_subject || `Following up on ${lead.address || 'your project'}`,
-      body: [
-        `Hi ${firstName},`,
-        `Wanted to follow up on my note about the ${service} at ${lead.address || 'your project'}.`,
-        'If it helps, we can turn around a quick number or review plans without a long handoff.',
-        'Best,',
-        'Donald',
-      ].join('\n\n'),
-    };
-  }
+export async function buildFollowUpDraft(db, tenant, lead, stepNumber) {
+  const templateKind = Number(stepNumber || 0) <= 1 ? 'permit_follow_up_1' : 'permit_follow_up_2';
+  const cta = chooseDraftCta(lead);
+  const template = await resolveTenantEmailTemplate(db, tenant, templateKind);
+  const rendered = renderEmailTemplate(tenant, template, leadTemplateData(tenant, lead, 'permit', cta.sentence));
 
   return {
-    subject: lead.draft_subject || `Final follow up for ${lead.address || 'your project'}`,
-    body: [
-      `Hi ${firstName},`,
-      'Just wanted to make sure this did not get buried.',
-      `If the glass scope for ${lead.address || 'the project'} is still open, I would be happy to help.`,
-      'Best,',
-      'Donald',
-    ].join('\n\n'),
+    subject: rendered.subject,
+    body: rendered.body,
   };
 }
 
-export async function generateLeadDraft(db, runId, leadId) {
+export async function generateLeadDraft(db, tenant, runId, leadId) {
   const lead = await db.single('v2_leads', {
     filters: [eq('id', leadId)],
   });
@@ -99,7 +89,7 @@ export async function generateLeadDraft(db, runId, leadId) {
     return null;
   }
 
-  const draft = buildInitialDraft(lead);
+  const draft = await buildInitialDraft(db, tenant, lead);
 
   await db.update('v2_leads', [`id=eq.${leadId}`], {
     draft_subject: draft.subject,

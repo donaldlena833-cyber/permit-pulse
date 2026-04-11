@@ -1,3 +1,5 @@
+import { withTenantScope } from './supabase.mjs';
+
 const DEFAULT_CONFIG = {
   daily_send_cap: 100,
   min_relevance_threshold: 0.15,
@@ -82,8 +84,9 @@ function normalizeFollowUpSequence(value) {
   return normalized.length > 0 ? normalized : fallback;
 }
 
-export async function getAppConfig(db) {
-  const rows = await db.select('v2_app_config', {
+export async function getAppConfig(db, tenantId = null) {
+  const client = tenantId ? withTenantScope(db, tenantId) : db;
+  const rows = await client.select('v2_app_config', {
     columns: 'key,value,updated_at',
   });
 

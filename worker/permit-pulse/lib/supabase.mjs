@@ -38,6 +38,36 @@ function buildQuery(params = {}) {
   return query ? `?${query}` : '';
 }
 
+const TENANT_SCOPED_TABLES = new Set([
+  'v2_prospects',
+  'v2_prospect_import_batches',
+  'v2_prospect_events',
+  'v2_prospect_outcomes',
+  'v2_prospect_follow_ups',
+  'v2_prospect_companies',
+  'v2_prospect_campaigns',
+  'v2_prospect_suppressions',
+  'v2_outreach_review_queue',
+  'v2_leads',
+  'v2_automation_runs',
+  'v2_lead_events',
+  'v2_lead_jobs',
+  'v2_email_candidates',
+  'v2_company_candidates',
+  'v2_email_outcomes',
+  'v2_follow_ups',
+  'v2_related_permits',
+  'v2_app_config',
+  'v2_tenant_email_templates',
+  'v2_tenant_gmail_credentials',
+]);
+
+const TENANT_ON_CONFLICT = {
+  v2_app_config: 'tenant_id,key',
+  v2_prospects: 'tenant_id,email_normalized',
+  v2_tenant_gmail_credentials: 'tenant_id',
+};
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -119,7 +149,7 @@ export function order(field, direction = 'desc', nulls = 'last') {
 }
 
 export function createSupabaseClient(env) {
-  return {
+  const client = {
     async select(table, options = {}) {
       const {
         columns = '*',
@@ -181,6 +211,104 @@ export function createSupabaseClient(env) {
         method: 'DELETE',
         query: `?${filters.join('&')}`,
       });
+    },
+
+    async rpc(fn, args = {}) {
+      return request(env, `rpc/${fn}`, {
+        method: 'POST',
+        body: args,
+      });
+    },
+  };
+
+  return client;
+}
+
+function hasTenantFilter(filters = []) {
+  return filters.some((filter) => String(filter || '').startsWith('tenant_id='));
+}
+
+function scopedFilters(table, tenantId, filters = []) {
+  if (!tenantId || !TENANT_SCOPED_TABLES.has(table) || hasTenantFilter(filters)) {
+    return filters;
+  }
+
+  return [eq('tenant_id', tenantId), ...filters];
+}
+
+function scopedPayload(table, tenantId, payload) {
+  if (!tenantId || !TENANT_SCOPED_TABLES.has(table)) {
+    return payload;
+  }
+
+  const applyTenant = (row) => ({
+    ...(row || {}),
+    tenant_id: row?.tenant_id || tenantId,
+  });
+
+  return Array.isArray(payload) ? payload.map(applyTenant) : applyTenant(payload);
+}
+
+function scopedOnConflict(table, onConflict = '') {
+  if (!TENANT_SCOPED_TABLES.has(table)) {
+    return onConflict;
+  }
+
+  if (onConflict && onConflict.includes('tenant_id')) {
+    return onConflict;
+  }
+
+  return TENANT_ON_CONFLICT[table] || onConflict;
+}
+
+export function withTenantScope(db, tenantId) {
+  if (!tenantId) {
+    return db;
+  }
+
+  return {
+    tenantId,
+
+    async select(table, options = {}) {
+      return db.select(table, {
+        ...options,
+        filters: scopedFilters(table, tenantId, options.filters || []),
+      });
+    },
+
+    async single(table, options = {}) {
+      return db.single(table, {
+        ...options,
+        filters: scopedFilters(table, tenantId, options.filters || []),
+      });
+    },
+
+    async insert(table, payload, prefer) {
+      return db.insert(table, scopedPayload(table, tenantId, payload), prefer);
+    },
+
+    async update(table, filters, payload) {
+      return db.update(
+        table,
+        scopedFilters(table, tenantId, filters || []),
+        scopedPayload(table, tenantId, payload),
+      );
+    },
+
+    async upsert(table, payload, onConflict = '') {
+      return db.upsert(
+        table,
+        scopedPayload(table, tenantId, payload),
+        scopedOnConflict(table, onConflict),
+      );
+    },
+
+    async remove(table, filters) {
+      return db.remove(table, scopedFilters(table, tenantId, filters || []));
+    },
+
+    async rpc(fn, args = {}) {
+      return db.rpc(fn, args);
     },
   };
 }

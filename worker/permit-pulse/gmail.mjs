@@ -1,20 +1,95 @@
-async function fetchAccessToken(env) {
+import { eq, withTenantScope } from './lib/supabase.mjs';
+import {
+  METROGLASS_TENANT_ID,
+  tenantAttachmentContentType,
+  tenantAttachmentFilename,
+} from './lib/tenants.mjs';
+
+function compactText(value) {
+  const next = String(value || '').trim();
+  return next || null;
+}
+
+async function decryptTenantSecret(db, env, ciphertext) {
+  const encryptionKey = env.GMAIL_TOKEN_ENCRYPTION_KEY || '';
+  if (!ciphertext || !encryptionKey) {
+    return null;
+  }
+
+  return db.rpc('decrypt_gmail_secret', {
+    ciphertext,
+    secret_key: encryptionKey,
+  });
+}
+
+async function loadTenantGmailAuth(env, db, tenant) {
+  const tenantDb = tenant?.id ? withTenantScope(db, tenant.id) : db;
+  const credential = tenant?.id
+    ? await tenantDb.single('v2_tenant_gmail_credentials', {
+        filters: [eq('tenant_id', tenant.id)],
+      }).catch(() => null)
+    : null;
+
+  let refreshToken = await decryptTenantSecret(tenantDb, env, credential?.refresh_token_encrypted);
+  let clientSecret = compactText(env.GMAIL_CLIENT_SECRET)
+    || await decryptTenantSecret(tenantDb, env, credential?.client_secret_encrypted);
+
+  if (!refreshToken && tenant?.id === METROGLASS_TENANT_ID) {
+    refreshToken = compactText(env.GMAIL_REFRESH_TOKEN);
+  }
+
+  if (!clientSecret) {
+    clientSecret = compactText(env.GMAIL_CLIENT_SECRET);
+  }
+
+  return {
+    credential,
+    refreshToken,
+    clientId: compactText(env.GMAIL_CLIENT_ID) || compactText(credential?.client_id),
+    clientSecret,
+  };
+}
+
+async function fetchAccessToken(env, db, tenant) {
+  const auth = await loadTenantGmailAuth(env, db, tenant);
+  if (!auth.clientId || !auth.clientSecret || !auth.refreshToken) {
+    throw new Error(`Gmail credentials are incomplete for ${tenant?.name || 'this tenant'}`);
+  }
+
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: env.GMAIL_CLIENT_ID || '',
-      client_secret: env.GMAIL_CLIENT_SECRET || '',
-      refresh_token: env.GMAIL_REFRESH_TOKEN || '',
+      client_id: auth.clientId,
+      client_secret: auth.clientSecret,
+      refresh_token: auth.refreshToken,
       grant_type: 'refresh_token',
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Gmail token refresh failed: ${response.status} ${await response.text()}`);
+    const message = await response.text();
+    if (auth.credential?.id) {
+      const tenantDb = withTenantScope(db, tenant.id);
+      await tenantDb.update('v2_tenant_gmail_credentials', [eq('id', auth.credential.id)], {
+        token_status: message.toLowerCase().includes('revoked') ? 'revoked' : 'expired',
+        updated_at: new Date().toISOString(),
+      }).catch(() => null);
+    }
+    throw new Error(`Gmail token refresh failed: ${response.status} ${message}`);
   }
 
   const payload = await response.json();
+
+  if (auth.credential?.id) {
+    const tenantDb = withTenantScope(db, tenant.id);
+    await tenantDb.update('v2_tenant_gmail_credentials', [eq('id', auth.credential.id)], {
+      token_status: 'active',
+      last_token_refresh_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).catch(() => null);
+  }
+
   return payload.access_token;
 }
 
@@ -75,15 +150,9 @@ function textToHtml(text) {
     .join('');
 }
 
-async function loadDefaultAttachment(env) {
-  if (!env.PERMIT_PULSE?.get) {
-    return null;
-  }
-
-  const attachmentKey = env.OUTREACH_ATTACHMENT_KEY || 'default_outreach_attachment';
-  const filename = env.OUTREACH_ATTACHMENT_NAME || '';
-
-  if (!filename) {
+async function loadTenantAttachment(env, tenant) {
+  const attachmentKey = compactText(tenant?.attachment_kv_key);
+  if (!env?.PERMIT_PULSE?.get || !attachmentKey) {
     return null;
   }
 
@@ -94,29 +163,21 @@ async function loadDefaultAttachment(env) {
 
   const bytes = new Uint8Array(payload);
   return {
-    filename,
-    contentType: env.OUTREACH_ATTACHMENT_CONTENT_TYPE || 'application/pdf',
+    filename: tenantAttachmentFilename(tenant),
+    contentType: tenantAttachmentContentType(tenant),
     base64: wrapBase64(encodeBase64Bytes(bytes)),
   };
 }
 
-export async function getDefaultAttachmentStatus(env) {
-  if (!env.PERMIT_PULSE?.get) {
+export async function getDefaultAttachmentStatus(env, tenant = null) {
+  const attachmentKey = compactText(tenant?.attachment_kv_key);
+  const filename = tenant ? tenantAttachmentFilename(tenant) : '';
+
+  if (!env?.PERMIT_PULSE?.get || !attachmentKey) {
     return {
       configured: false,
       loaded: false,
-      filename: '',
-    };
-  }
-
-  const attachmentKey = env.OUTREACH_ATTACHMENT_KEY || 'default_outreach_attachment';
-  const filename = env.OUTREACH_ATTACHMENT_NAME || '';
-
-  if (!filename) {
-    return {
-      configured: false,
-      loaded: false,
-      filename: '',
+      filename,
     };
   }
 
@@ -129,8 +190,7 @@ export async function getDefaultAttachmentStatus(env) {
   };
 }
 
-function buildRawMessage({ attachment, body, recipient, sender, subject }) {
-  const displayName = 'Donald Lena';
+function buildRawMessage({ attachment, body, displayName, recipient, sender, subject }) {
   const htmlBody = textToHtml(body);
 
   if (!attachment) {
@@ -184,16 +244,22 @@ function buildRawMessage({ attachment, body, recipient, sender, subject }) {
 }
 
 export function hasGmailAutomation(env) {
-  return Boolean(env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET && env.GMAIL_REFRESH_TOKEN);
+  return Boolean(env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET && (env.GMAIL_TOKEN_ENCRYPTION_KEY || env.GMAIL_REFRESH_TOKEN));
 }
 
-export async function sendAutomationEmail(env, draft) {
-  const accessToken = await fetchAccessToken(env);
-  const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
-  const attachment = await loadDefaultAttachment(env);
+export async function sendAutomationEmail(env, db, tenant, draft) {
+  const accessToken = await fetchAccessToken(env, db, tenant);
+  const sender = compactText(tenant?.sender_email) || compactText(draft.sender) || '';
+  const displayName = compactText(tenant?.sender_name) || 'Team';
+  if (!sender) {
+    throw new Error(`Sender email is missing for ${tenant?.name || 'this tenant'}`);
+  }
+
+  const attachment = await loadTenantAttachment(env, tenant);
   const rawMessage = buildRawMessage({
     attachment,
     body: draft.body,
+    displayName,
     recipient: draft.recipient,
     sender,
     subject: draft.subject,
@@ -264,8 +330,8 @@ function extractMessageText(payload) {
   return '';
 }
 
-async function gmailRequest(env, path, init = {}) {
-  const accessToken = await fetchAccessToken(env);
+async function gmailRequest(env, db, tenant, path, init = {}) {
+  const accessToken = await fetchAccessToken(env, db, tenant);
   const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`, {
     ...init,
     headers: {
@@ -281,24 +347,24 @@ async function gmailRequest(env, path, init = {}) {
   return response.json();
 }
 
-async function listMessageIds(env, query, maxResults = 50) {
+async function listMessageIds(env, db, tenant, query, maxResults = 50) {
   const params = new URLSearchParams();
   params.set('q', query);
   params.set('includeSpamTrash', 'false');
   params.set('maxResults', String(Math.min(Math.max(Number(maxResults || 0), 1), 100)));
 
-  const payload = await gmailRequest(env, `messages?${params.toString()}`);
+  const payload = await gmailRequest(env, db, tenant, `messages?${params.toString()}`);
   return Array.isArray(payload?.messages) ? payload.messages : [];
 }
 
-async function getMessageMetadata(env, messageId) {
+async function getMessageMetadata(env, db, tenant, messageId) {
   const params = new URLSearchParams();
   params.set('format', 'metadata');
   for (const header of ['From', 'Subject', 'Date', 'To']) {
     params.append('metadataHeaders', header);
   }
 
-  const payload = await gmailRequest(env, `messages/${encodeURIComponent(messageId)}?${params.toString()}`);
+  const payload = await gmailRequest(env, db, tenant, `messages/${encodeURIComponent(messageId)}?${params.toString()}`);
   const headers = payload?.payload?.headers || [];
 
   return {
@@ -314,8 +380,8 @@ async function getMessageMetadata(env, messageId) {
   };
 }
 
-async function getMessageContent(env, messageId) {
-  const payload = await gmailRequest(env, `messages/${encodeURIComponent(messageId)}?format=full`);
+async function getMessageContent(env, db, tenant, messageId) {
+  const payload = await gmailRequest(env, db, tenant, `messages/${encodeURIComponent(messageId)}?format=full`);
   const headers = payload?.payload?.headers || [];
 
   return {
@@ -332,18 +398,18 @@ async function getMessageContent(env, messageId) {
   };
 }
 
-export async function listRecentInboxMessages(env, options = {}) {
-  const sender = env.GMAIL_SENDER || 'operations@metroglasspro.com';
+export async function listRecentInboxMessages(env, db, tenant, options = {}) {
+  const sender = compactText(tenant?.sender_email) || '';
   const newerThanDays = Math.max(1, Number(options.newerThanDays || 30));
   const maxResults = Math.min(Math.max(Number(options.maxResults || 0), 1), 100);
-  const query = options.query || `in:inbox newer_than:${newerThanDays}d -from:${sender} -from:me`;
-  const messageRefs = await listMessageIds(env, query, maxResults);
+  const query = options.query || `in:inbox newer_than:${newerThanDays}d${sender ? ` -from:${sender}` : ''} -from:me`;
+  const messageRefs = await listMessageIds(env, db, tenant, query, maxResults);
   const messages = [];
 
   for (const message of messageRefs) {
     const metadata = options.includeBody
-      ? await getMessageContent(env, message.id)
-      : await getMessageMetadata(env, message.id);
+      ? await getMessageContent(env, db, tenant, message.id)
+      : await getMessageMetadata(env, db, tenant, message.id);
     if (!metadata.fromEmail) {
       continue;
     }
@@ -353,6 +419,6 @@ export async function listRecentInboxMessages(env, options = {}) {
   return messages;
 }
 
-export async function listRecentInboxReplies(env, options = {}) {
-  return listRecentInboxMessages(env, options);
+export async function listRecentInboxReplies(env, db, tenant, options = {}) {
+  return listRecentInboxMessages(env, db, tenant, options);
 }

@@ -17,8 +17,9 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { useTenantContext } from "@/features/metroglass-leads/context/tenant-context"
 import { formatDate, formatLeadStatus, formatRelativeTime, formatScore } from "@/features/metroglass-leads/lib/format"
-import type { EmailCandidate, LeadDetailResponse } from "@/features/metroglass-leads/types/api"
+import type { EmailCandidate, LeadDetailResponse, TenantProfile } from "@/features/metroglass-leads/types/api"
 
 interface LeadDetailViewProps {
   detail: LeadDetailResponse | null
@@ -59,10 +60,16 @@ function normalizeSmsPhone(value: string | null | undefined) {
   return digits
 }
 
-function buildTextDraft(detail: LeadDetailResponse) {
+function buildTextDraft(detail: LeadDetailResponse, tenant: TenantProfile | null) {
   const address = detail.lead.address || "your project"
+  const businessName = tenant?.business_name || tenant?.name || "our team"
+  const senderName = tenant?.sender_name || "our team"
+  const serviceLine = tenant?.outreach_pitch
+    || (tenant?.features.permit_scanning
+      ? "handle permit-driven project scope with fast coordination and clean follow-through"
+      : "handle remodeling scope with disciplined coordination and finish quality")
 
-  return `Hi, this is Donald from MetroGlass Pro. I came across the filing for ${address} and wanted to reach out. Not sure if you're the right contact for the project, but we handle storefronts, shower doors, mirrors, railings, and custom glass across NYC. If any of that scope is still open, I'd be happy to help.`
+  return `Hi, this is ${senderName} from ${businessName}. I came across the filing for ${address} and wanted to reach out. Not sure if you're the right contact for the project, but we ${serviceLine}. If any of that scope is still open, I'd be happy to help.`
 }
 
 function buildSmsHref(phone: string | null | undefined, draft: string) {
@@ -208,6 +215,7 @@ export function LeadDetailView({
   onSkipFollowUp,
   onLogPhoneFollowUp,
 }: LeadDetailViewProps) {
+  const { tenant } = useTenantContext()
   const [draft, setDraft] = useState(() => ({
     subject: detail?.draft.subject || "",
     body: detail?.draft.body || "",
@@ -215,7 +223,7 @@ export function LeadDetailView({
   const [draftDirty, setDraftDirty] = useState(false)
   const [manualEmail, setManualEmail] = useState("")
   const [manualNote, setManualNote] = useState("")
-  const [textDraft, setTextDraft] = useState(() => (detail ? buildTextDraft(detail) : ""))
+  const [textDraft, setTextDraft] = useState(() => (detail ? buildTextDraft(detail, tenant) : ""))
 
   const discoveredEmails = useMemo(() => detail?.contacts.discovered_emails ?? [], [detail])
   const primary = detail?.contacts.primary ?? null

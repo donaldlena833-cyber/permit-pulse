@@ -107,7 +107,7 @@ export async function cancelFollowUps(db, leadId, reason) {
   });
 }
 
-export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null) {
+export async function sendFollowUp(env, db, tenant, leadId, stepNumber, actorId = null) {
   const followUp = await db.single('v2_follow_ups', {
     filters: [eq('lead_id', leadId), eq('step_number', stepNumber)],
   });
@@ -125,7 +125,7 @@ export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null) 
 
   const draft = followUp.draft_content
     ? { subject: lead.draft_subject || `Follow up for ${lead.address}`, body: followUp.draft_content }
-    : buildFollowUpDraft(lead, stepNumber);
+    : await buildFollowUpDraft(db, tenant, lead, stepNumber);
 
   const recipient = lead.active_email_role === 'fallback' && lead.fallback_email ? lead.fallback_email : lead.contact_email;
   if (!recipient) {
@@ -158,7 +158,7 @@ export async function sendFollowUp(env, db, leadId, stepNumber, actorId = null) 
     }
   }
 
-  await sendAutomationEmail(env, {
+  await sendAutomationEmail(env, db, tenant, {
     recipient,
     subject: draft.subject,
     body: draft.body,
@@ -259,7 +259,7 @@ export async function processDueFollowUps(env, db, options = {}) {
       continue;
     }
     try {
-      await sendFollowUp(env, db, item.lead_id, item.step_number);
+      await sendFollowUp(env, db, options.tenant || null, item.lead_id, item.step_number, options.actorId || null);
       sent += 1;
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes('Repeat outreach is disabled')) {

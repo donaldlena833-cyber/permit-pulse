@@ -7,9 +7,10 @@ import {
   optOutProspect,
   queueOutreachReviewItem,
 } from './prospects.mjs';
-import { eq, gte, order } from './supabase.mjs';
+import { eq, gte, order, withTenantScope } from './supabase.mjs';
+import { getTenantGmailCredential, listTenants, METROGLASS_TENANT_ID } from './tenants.mjs';
 
-const SUMMARY_KEY = 'reply_sync:last_summary';
+const SUMMARY_PREFIX = 'reply_sync:summary:';
 const SEEN_PREFIX = 'reply_sync:seen:';
 
 const OPT_OUT_PATTERNS = [
@@ -79,6 +80,14 @@ function normalizeDomain(value) {
   return email.split('@').pop() || null;
 }
 
+function summaryKey(tenantId) {
+  return `${SUMMARY_PREFIX}${tenantId}`;
+}
+
+function seenKey(tenantId, messageId) {
+  return `${SEEN_PREFIX}${tenantId}:${messageId}`;
+}
+
 function bodyForClassification(message) {
   return compactText([message.subject, message.snippet, message.bodyText].filter(Boolean).join(' '));
 }
@@ -109,33 +118,33 @@ function kvAvailable(env) {
   return Boolean(env?.PERMIT_PULSE?.get && env?.PERMIT_PULSE?.put);
 }
 
-async function hasSeenMessage(env, messageId) {
-  if (!kvAvailable(env) || !messageId) {
+async function hasSeenMessage(env, tenantId, messageId) {
+  if (!kvAvailable(env) || !tenantId || !messageId) {
     return false;
   }
-  return Boolean(await env.PERMIT_PULSE.get(`${SEEN_PREFIX}${messageId}`));
+  return Boolean(await env.PERMIT_PULSE.get(seenKey(tenantId, messageId)));
 }
 
-async function markMessageSeen(env, messageId) {
-  if (!kvAvailable(env) || !messageId) {
+async function markMessageSeen(env, tenantId, messageId) {
+  if (!kvAvailable(env) || !tenantId || !messageId) {
     return;
   }
-  await env.PERMIT_PULSE.put(`${SEEN_PREFIX}${messageId}`, '1', { expirationTtl: 60 * 60 * 24 * 60 });
+  await env.PERMIT_PULSE.put(seenKey(tenantId, messageId), '1', { expirationTtl: 60 * 60 * 24 * 60 });
 }
 
-async function writeSummary(env, summary) {
-  if (!kvAvailable(env)) {
+async function writeSummary(env, tenantId, summary) {
+  if (!kvAvailable(env) || !tenantId) {
     return summary;
   }
-  await env.PERMIT_PULSE.put(SUMMARY_KEY, JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 60 });
+  await env.PERMIT_PULSE.put(summaryKey(tenantId), JSON.stringify(summary), { expirationTtl: 60 * 60 * 24 * 60 });
   return summary;
 }
 
-export async function readReplySyncState(env) {
-  if (!kvAvailable(env)) {
+export async function readReplySyncState(env, tenantId = null) {
+  if (!kvAvailable(env) || !tenantId) {
     return null;
   }
-  const value = await env.PERMIT_PULSE.get(SUMMARY_KEY);
+  const value = await env.PERMIT_PULSE.get(summaryKey(tenantId));
   if (!value) {
     return null;
   }
@@ -321,13 +330,24 @@ async function queueReview(db, message, prospect = null, reason = 'reply_review_
   });
 }
 
-export async function syncOutreachReplies(env, db, options = {}) {
+async function canSyncTenant(env, db, tenant) {
+  if (!tenant?.id || !tenant?.sender_email) {
+    return false;
+  }
+
+  const credential = await getTenantGmailCredential(withTenantScope(db, tenant.id), tenant.id);
+  return Boolean(credential?.refresh_token_encrypted || (tenant.id === METROGLASS_TENANT_ID && env.GMAIL_REFRESH_TOKEN));
+}
+
+async function syncTenantReplies(env, db, tenant, options = {}) {
+  const tenantDb = withTenantScope(db, tenant.id);
   const maxResults = Math.min(Math.max(Number(options.maxResults || 0), 1), 100);
   const newerThanDays = Math.min(Math.max(Number(options.newerThanDays || 0), 1), 45);
+
   const [messages, prospects, leads] = await Promise.all([
-    listRecentInboxMessages(env, { maxResults, newerThanDays, includeBody: true }),
-    listCandidateProspects(db),
-    listCandidateLeads(db),
+    listRecentInboxMessages(env, tenantDb, tenant, { maxResults, newerThanDays, includeBody: true }),
+    listCandidateProspects(tenantDb),
+    listCandidateLeads(tenantDb),
   ]);
 
   const prospectMaps = buildProspectEmailMap(prospects);
@@ -335,6 +355,8 @@ export async function syncOutreachReplies(env, db, options = {}) {
   const knownEmails = allKnownEmails(prospects, leads);
 
   const summary = {
+    tenant_id: tenant.id,
+    tenant_slug: tenant.slug,
     checked_at: new Date().toISOString(),
     scanned_messages: messages.length,
     processed_messages: 0,
@@ -351,7 +373,7 @@ export async function syncOutreachReplies(env, db, options = {}) {
     if (!message?.id) {
       continue;
     }
-    if (await hasSeenMessage(env, message.id)) {
+    if (await hasSeenMessage(env, tenant.id, message.id)) {
       continue;
     }
 
@@ -364,58 +386,95 @@ export async function syncOutreachReplies(env, db, options = {}) {
       || (referencedEmail ? leadEmailMap.get(referencedEmail) : null);
 
     if (classification === 'review') {
-      await queueReview(db, message, prospect, 'auto_reply_review');
+      await queueReview(tenantDb, message, prospect, 'auto_reply_review');
       summary.processed_messages += 1;
       summary.review_items += 1;
-      await markMessageSeen(env, message.id);
+      await markMessageSeen(env, tenant.id, message.id);
       continue;
     }
 
     if (prospect) {
-      const applied = await applyProspectReply(db, prospect, classification, message);
+      const applied = await applyProspectReply(tenantDb, prospect, classification, message);
       summary.processed_messages += 1;
       summary.prospect_replies += 1;
-      if (applied === 'opt_out') {
-        summary.opt_outs += 1;
-      }
-      if (applied === 'positive') {
-        summary.positive_replies += 1;
-      }
-      if (applied === 'bounce') {
-        summary.bounces += 1;
-      }
-      await markMessageSeen(env, message.id);
+      if (applied === 'opt_out') summary.opt_outs += 1;
+      if (applied === 'positive') summary.positive_replies += 1;
+      if (applied === 'bounce') summary.bounces += 1;
+      await markMessageSeen(env, tenant.id, message.id);
       continue;
     }
 
     if (lead) {
-      const applied = await applyLeadReply(db, lead, classification, message);
+      const applied = await applyLeadReply(tenantDb, lead, classification, message);
       summary.processed_messages += 1;
       summary.lead_replies += 1;
-      if (applied === 'opt_out') {
-        summary.opt_outs += 1;
-      }
-      if (applied === 'positive') {
-        summary.positive_replies += 1;
-      }
-      if (applied === 'bounce') {
-        summary.bounces += 1;
-      }
-      await markMessageSeen(env, message.id);
+      if (applied === 'opt_out') summary.opt_outs += 1;
+      if (applied === 'positive') summary.positive_replies += 1;
+      if (applied === 'bounce') summary.bounces += 1;
+      await markMessageSeen(env, tenant.id, message.id);
       continue;
     }
 
     if (classification === 'bounce' || classification === 'reply' || classification === 'positive' || classification === 'opt_out') {
-      await queueReview(db, message, null, classification === 'bounce' ? 'bounce_review_pending' : 'unmatched_reply_review');
+      await queueReview(tenantDb, message, null, classification === 'bounce' ? 'bounce_review_pending' : 'unmatched_reply_review');
       summary.review_items += 1;
       summary.processed_messages += 1;
     } else {
       summary.unmatched_messages += 1;
     }
 
-    await markMessageSeen(env, message.id);
+    await markMessageSeen(env, tenant.id, message.id);
   }
 
-  await writeSummary(env, summary);
+  await writeSummary(env, tenant.id, summary);
   return summary;
+}
+
+export async function syncOutreachReplies(env, db, options = {}) {
+  const allTenants = options.tenantId
+    ? (await listTenants(db)).filter((tenant) => String(tenant.id) === String(options.tenantId))
+    : await listTenants(db);
+
+  const tenantSummaries = {};
+  const aggregate = {
+    checked_at: new Date().toISOString(),
+    scanned_messages: 0,
+    processed_messages: 0,
+    prospect_replies: 0,
+    lead_replies: 0,
+    opt_outs: 0,
+    positive_replies: 0,
+    unmatched_messages: 0,
+    bounces: 0,
+    review_items: 0,
+  };
+
+  for (const tenant of allTenants) {
+    if (!(await canSyncTenant(env, db, tenant))) {
+      continue;
+    }
+
+    try {
+      const summary = await syncTenantReplies(env, db, tenant, options);
+      tenantSummaries[tenant.slug] = summary;
+      for (const [key, value] of Object.entries(aggregate)) {
+        if (key === 'checked_at') {
+          continue;
+        }
+        aggregate[key] += Number(summary[key] || 0);
+      }
+    } catch (error) {
+      console.warn(`Reply sync skipped for ${tenant.slug}`, error instanceof Error ? error.message : String(error || 'Unknown error'));
+    }
+  }
+
+  if (options.tenantId) {
+    const tenantMatch = allTenants.find((tenant) => String(tenant.id) === String(options.tenantId));
+    return tenantMatch ? tenantSummaries[tenantMatch.slug] || null : null;
+  }
+
+  return {
+    ...aggregate,
+    tenants: tenantSummaries,
+  };
 }

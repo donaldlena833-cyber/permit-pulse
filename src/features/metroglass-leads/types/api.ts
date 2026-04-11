@@ -4,6 +4,70 @@ export type AppTab = "today" | "leads" | "prospects" | "settings"
 export type ProspectCategory = "interior_designer" | "gc" | "property_manager" | "project_manager" | "architect"
 export type ProspectStatus = "new" | "drafted" | "sent" | "replied" | "opted_out" | "archived"
 export type ProspectQueueState = "queued_initial" | "sent" | "queued_follow_up" | "follow_up_sent" | "replied" | "opted_out" | "archived" | "suppressed" | "pending_review"
+export type TenantTemplateKind =
+  | "prospect_initial"
+  | "prospect_follow_up_1"
+  | "prospect_follow_up_2"
+  | "permit_initial"
+  | "permit_follow_up_1"
+  | "permit_follow_up_2"
+
+export interface TenantFeatures {
+  permit_scanning: boolean
+  prospect_outreach: boolean
+}
+
+export interface TenantProfile {
+  id: string
+  slug: string
+  name: string
+  business_name: string
+  website: string
+  icon: string
+  accent_color: string
+  sender_name: string
+  sender_email: string
+  phone: string | null
+  outreach_pitch: string
+  outreach_focus: string
+  outreach_cta: string
+  features: TenantFeatures
+  gmail_connected: boolean
+  gmail_address?: string | null
+  gmail_token_status?: "active" | "expired" | "revoked" | "missing" | string
+  gmail_last_token_refresh_at?: string | null
+  attachment_configured: boolean
+  attachment_filename?: string | null
+  attachment_key?: string | null
+}
+
+export interface TenantEmailTemplate {
+  id: string
+  tenant_id: string
+  template_kind: TenantTemplateKind
+  category: ProspectCategory | null
+  subject_template: string
+  body_template: string
+  is_active: boolean
+  created_at?: string
+  updated_at?: string
+  defaults?: boolean
+}
+
+export interface TenantTemplatesPayload {
+  placeholders: string[]
+  templates: TenantEmailTemplate[]
+}
+
+export interface TemplatePreviewPayload {
+  template: TenantEmailTemplate
+  preview: {
+    subject: string
+    body: string
+    replacements?: Record<string, string>
+  }
+  sample_data: Record<string, unknown>
+}
 
 export interface LeadRow {
   id: string

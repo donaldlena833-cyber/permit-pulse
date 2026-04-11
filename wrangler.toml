@@ -10,13 +10,6 @@ subrequests = 50_000
 [triggers]
 crons = ["*/30 * * * *"]
 
-[vars]
-NOTIFY_EMAIL = "operations@metroglasspro.com"
-GMAIL_SENDER = "operations@metroglasspro.com"
-OUTREACH_ATTACHMENT_KEY = "default_outreach_attachment"
-OUTREACH_ATTACHMENT_NAME = "MetroGlass Pro - About Us.pdf"
-OUTREACH_ATTACHMENT_CONTENT_TYPE = "application/pdf"
-
 # KV namespace — stores picked architects + email draft queue
 # Create: npx wrangler kv namespace create PERMIT_PULSE
 # Then paste the ID below
@@ -34,8 +27,10 @@ id = "6bd0ca87c13d448c80381159511f8e40"
 # npx wrangler secret put FIRECRAWL_API_KEY       — scrape high-value websites
 # npx wrangler secret put GMAIL_CLIENT_ID         — Gmail OAuth client
 # npx wrangler secret put GMAIL_CLIENT_SECRET     — Gmail OAuth client secret
-# npx wrangler secret put GMAIL_REFRESH_TOKEN     — Gmail OAuth refresh token
+# npx wrangler secret put GMAIL_TOKEN_ENCRYPTION_KEY — symmetric key used with pgcrypto tenant credential encryption
+# npx wrangler secret put GMAIL_REFRESH_TOKEN     — MetroGlass fallback only during migration
 # npx wrangler secret put SUPABASE_URL            — Supabase project URL
 # npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY — preferred for secure worker-only REST access
 # npx wrangler secret put SUPABASE_ANON_KEY       — fallback only, keep temporarily while migrating
-# npx wrangler kv key put --binding=PERMIT_PULSE default_outreach_attachment --path "/Users/donaldlena/Downloads/MetroGlass Pro - About Us.pdf"
+# Tenant attachment onboarding example:
+#   node scripts/upload-attachment.mjs --tenant metroglasspro --file "/absolute/path/MetroGlass Pro - About Us.pdf"

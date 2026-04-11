@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import { BriefcaseBusiness, LoaderCircle, ListTodo, ScanLine, Settings2 } from "lucide-react"
 import { Toaster } from "sonner"
 
@@ -8,27 +9,34 @@ import { LeadDetailView } from "@/features/metroglass-leads/components/lead-deta
 import { LeadsScreen } from "@/features/metroglass-leads/components/leads-screen"
 import { SettingsScreen } from "@/features/metroglass-leads/components/settings-screen"
 import { TodayScreen } from "@/features/metroglass-leads/components/today-screen"
+import { TenantContext } from "@/features/metroglass-leads/context/tenant-context"
 import { useMetroglassLeads } from "@/features/metroglass-leads/hooks/use-metroglass-leads"
+import type { AppTab, TenantProfile } from "@/features/metroglass-leads/types/api"
 import { ProspectDetailView } from "@/features/metroglass-prospects/components/prospect-detail-view"
 import { ProspectsScreen } from "@/features/metroglass-prospects/components/prospects-screen"
 
 function AppTabs({
   tab,
   onChange,
+  showToday,
 }: {
-  tab: "today" | "leads" | "prospects" | "settings"
-  onChange: (value: "today" | "leads" | "prospects" | "settings") => void
+  tab: AppTab
+  onChange: (value: AppTab) => void
+  showToday: boolean
 }) {
   const items = [
-    { id: "today", label: "Today", icon: ScanLine },
+    ...(showToday ? [{ id: "today", label: "Today", icon: ScanLine }] : []),
     { id: "leads", label: "Leads", icon: ListTodo },
     { id: "prospects", label: "Outreach", icon: BriefcaseBusiness },
     { id: "settings", label: "Settings", icon: Settings2 },
-  ] as const
+  ] as Array<{ id: AppTab; label: string; icon: typeof ScanLine }>
 
   return (
     <nav className="fixed bottom-4 left-0 right-0 z-30 px-3">
-      <div className="mx-auto grid max-w-[720px] grid-cols-4 gap-2 rounded-[20px] border border-steel-200 bg-[rgba(255,255,255,0.88)] p-2 shadow-[0_16px_36px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+      <div
+        className="mx-auto grid max-w-[720px] gap-2 rounded-[20px] border border-steel-200 bg-[rgba(255,255,255,0.88)] p-2 shadow-[0_16px_36px_rgba(15,23,42,0.12)] backdrop-blur-xl"
+        style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
+      >
         {items.map((item) => {
           const Icon = item.icon
           const active = tab === item.id
@@ -53,7 +61,15 @@ function AppTabs({
   )
 }
 
-function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
+function MetroglassLeadsApp({
+  onLogout,
+  tenant,
+  setTenant,
+}: {
+  onLogout: () => Promise<void>
+  tenant: TenantProfile
+  setTenant: (tenant: TenantProfile | null) => void
+}) {
   const {
     tab,
     setTab,
@@ -68,6 +84,8 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
     setLeadFilter,
     config,
     system,
+    templates,
+    templatePlaceholders,
     loading,
     actionLeadId,
     actions,
@@ -82,10 +100,32 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
     setProspectCategoryFilter,
     prospectQuery,
     setProspectQuery,
-  } = useMetroglassLeads()
+  } = useMetroglassLeads({
+    tenant,
+    onTenantUpdated: setTenant,
+  })
 
-  const title = tab === "prospects" ? "Outreach CRM" : "Leads"
-  const subtitle = tab === "prospects" ? "Automated outbound email operations" : "Permit automation"
+  useEffect(() => {
+    if (!tenant.features.permit_scanning && tab === "today") {
+      setTab("prospects")
+    }
+  }, [setTab, tab, tenant.features.permit_scanning])
+
+  const title = tab === "prospects"
+    ? "Outreach CRM"
+    : tab === "settings"
+      ? "Workspace settings"
+      : "Leads"
+  const subtitle = tab === "prospects"
+    ? "Tenant-specific outbound operations"
+    : tenant.features.permit_scanning
+      ? "Permit and outreach automation"
+      : "Outreach workspace"
+  const brandStyle = {
+    borderColor: `${tenant.accent_color}33`,
+    backgroundColor: `${tenant.accent_color}14`,
+    color: tenant.accent_color,
+  }
 
   return (
     <div className="min-h-screen text-foreground">
@@ -93,8 +133,11 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em] text-brand-700">
-                MetroGlass Pro
+              <div className="inline-flex items-center gap-2 rounded-full border px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em]" style={brandStyle}>
+                <div className="flex h-5 w-5 items-center justify-center rounded-full border border-current text-[10px] font-semibold">
+                  {tenant.icon}
+                </div>
+                {tenant.name}
               </div>
               <div className="rounded-full border border-steel-200 bg-white px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em] text-steel-500">
                 {subtitle}
@@ -123,7 +166,7 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
                     {prospects?.counts.opted_out ?? 0} opted out
                   </div>
                 </>
-              ) : (
+              ) : tenant.features.permit_scanning ? (
                 <>
                   <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {today?.automation_backlog_pending ?? today?.counts.new ?? 0} backlog
@@ -136,6 +179,18 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
                   </div>
                   <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
                     {today?.counts.ready ?? 0} ready
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
+                    {prospects?.counts.all ?? 0} prospects
+                  </div>
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
+                    {prospects?.counts.sent ?? 0} sent
+                  </div>
+                  <div className="rounded-full border border-steel-200 bg-white px-3 py-1 font-mono text-[11px] text-steel-600">
+                    {prospects?.automation.metrics?.positive_replies_total ?? 0} positive replies
                   </div>
                 </>
               )}
@@ -158,7 +213,7 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
           </div>
         ) : null}
 
-        {!loading && tab === "today" ? (
+        {!loading && tab === "today" && tenant.features.permit_scanning ? (
           <TodayScreen
             actionLeadId={actionLeadId}
             onLogPhoneFollowUp={(leadId, step) => {
@@ -192,7 +247,14 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
             config={config}
             health={health}
             onSaveConfig={actions.saveConfig}
+            onResetTemplate={actions.resetTemplate}
+            onPreviewTemplate={actions.previewTemplate}
+            onSaveTemplate={actions.saveTemplate}
+            onSaveTenantProfile={actions.saveTenantProfile}
             system={system}
+            templatePlaceholders={templatePlaceholders}
+            templates={templates}
+            tenant={tenant}
           />
         ) : null}
 
@@ -259,7 +321,7 @@ function MetroglassLeadsApp({ onLogout }: { onLogout: () => Promise<void> }) {
         open={Boolean(selectedProspectId)}
       />
 
-      <AppTabs tab={tab} onChange={setTab} />
+      <AppTabs showToday={tenant.features.permit_scanning} tab={tab} onChange={setTab} />
       <Toaster position="top-center" richColors />
     </div>
   )
@@ -285,5 +347,17 @@ export default function App() {
     )
   }
 
-  return <MetroglassLeadsApp onLogout={auth.logout} />
+  if (!auth.tenant) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <LoaderCircle className="h-7 w-7 animate-spin text-primary" />
+      </div>
+    )
+  }
+
+  return (
+    <TenantContext.Provider value={{ tenant: auth.tenant, setTenant: auth.setTenant }}>
+      <MetroglassLeadsApp onLogout={auth.logout} setTenant={auth.setTenant} tenant={auth.tenant} />
+    </TenantContext.Provider>
+  )
 }

@@ -3,6 +3,12 @@ import { getAppConfig } from './config.mjs';
 import { formatPriorOutreachMessage, getPriorOutreach } from './outreach-guard.mjs';
 import { eq, inList, order } from './supabase.mjs';
 import {
+  buildDefaultEmailTemplate,
+  listTenantEmailTemplates,
+  renderEmailTemplate,
+  resolveTenantEmailTemplate,
+} from './tenant-email-templates.mjs';
+import {
   addDaysToDateKey,
   formatLocalDateKey,
   zonedDateTimeToUtcIso,
@@ -345,18 +351,18 @@ function greetingLine(prospect) {
 
 function categoryPitch(category) {
   if (category === 'architect') {
-    return 'support architects with clean detailing, responsive coordination, and high-end glass execution';
+    return 'support architects with responsive coordination, disciplined execution, and reliable communication';
   }
   if (category === 'interior_designer') {
-    return 'help interior designers turn glass concepts into finished installs without the usual back and forth';
+    return 'help interior designers move design-driven scope from concept to clean execution without unnecessary friction';
   }
   if (category === 'property_manager') {
-    return 'help property managers handle replacement, upgrades, and tenant improvement glass work quickly';
+    return 'help property managers handle upgrade, improvement, and turnover scope quickly and cleanly';
   }
   if (category === 'project_manager') {
-    return 'help project managers keep glass scope moving with responsive field coordination and install support';
+    return 'help project managers keep scope moving with responsive coordination and dependable field follow-through';
   }
-  return 'support general contractors with measurements, pricing, fabrication, and installation for custom glass scope';
+  return 'support general contractors with responsive estimating, scheduling, and field execution';
 }
 
 function topicLine(prospect) {
@@ -377,18 +383,18 @@ function topicLine(prospect) {
 
 function categoryFocusLine(prospect) {
   if (prospect.category === 'architect') {
-    return 'We support architects with precise detailing, clean field coordination, and residential glass execution that respects the design intent.';
+    return 'We support architects with precise coordination, dependable communication, and execution that respects the design intent.';
   }
   if (prospect.category === 'interior_designer') {
-    return 'We help interior designers translate shower, mirror, partition, and cabinet glass ideas into clean installs without losing the original concept.';
+    return 'We help interior designers translate ideas into finished work without losing the original concept in the handoff.';
   }
   if (prospect.category === 'property_manager') {
-    return 'We help property managers move replacement, upgrade, and tenant-improvement glass work quickly without dragging out coordination.';
+    return 'We help property managers move replacement, upgrade, and tenant-improvement scope quickly without dragging out coordination.';
   }
   if (prospect.category === 'project_manager') {
-    return 'We help project managers keep glass scope moving with responsive measurements, pricing, fabrication, and install coordination.';
+    return 'We help project managers keep scope moving with responsive estimating, field coordination, and steady follow-through.';
   }
-  return 'We support general contractors with fast glass pricing, measurements, fabrication, and installation so custom scope does not become a bottleneck.';
+  return 'We support general contractors with fast pricing, clear scheduling, and dependable execution so scope does not become a bottleneck.';
 }
 
 function trimTrailingPunctuation(value) {
@@ -434,8 +440,8 @@ function personalizedContextLine(prospect) {
     .test(normalized);
 
   const line = asStatement
-    ? `I noticed ${snippet}, which felt especially aligned with the kind of detailed glass scope we support.`
-    : `I noticed your focus on ${snippet}, which felt especially aligned with the kind of detailed glass scope we support.`;
+    ? `I noticed ${snippet}, which felt especially aligned with the kind of work we support.`
+    : `I noticed your focus on ${snippet}, which felt especially aligned with the kind of work we support.`;
 
   return sentenceCase(line);
 }
@@ -729,7 +735,7 @@ function hydrateProspect(prospect, options = {}) {
   }
 
   const followUps = Array.isArray(options.followUps) ? options.followUps : [];
-  const draft = buildProspectDraft(prospect);
+  const draft = buildProspectDraft(prospect, options.tenant || null);
   const useStoredDraft = shouldUseStoredInitialDraft(prospect);
   const companySuppressed = companySuppressionReason(prospect, options.suppressedDomains);
   const explicitSuppression = explicitSuppressionReason(prospect, options.suppressionMaps);
@@ -1333,99 +1339,97 @@ function summaryLabel(prospect) {
   return prospect.contact_name || prospect.company_name || prospect.email_address;
 }
 
-function baseFollowUpDraft(prospect) {
-  const personalizedLine = personalizedContextLine(prospect);
-  const followUpStep = Number(prospect?.follow_up_step || 1);
-  const secondTouch = followUpStep >= 2;
-  const company = compactText(prospect.company_name) || 'your team';
+function prospectFirstName(prospect) {
+  const localPart = emailLocalPart(prospect?.email_address);
+  const firstName = greetingName(prospect);
 
+  if (!firstName || (localPart && GENERIC_LOCAL_PARTS.has(localPart))) {
+    return 'there';
+  }
+
+  return firstName;
+}
+
+function buildProspectTemplateData(prospect, tenant = null, context = 'prospect') {
   return {
-    subject: secondTouch
-      ? `Final follow-up for ${company} | MetroGlass Pro`
-      : `Quick follow-up for ${company} | MetroGlass Pro`,
-    body: [
-      greetingLine(prospect),
-      '',
-      secondTouch
-        ? `One last note from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`
-        : `Following up on my note from MetroGlass Pro. We ${categoryPitch(prospect.category)} and keep glass scope moving cleanly for ${topicLine(prospect)}.`,
-      personalizedLine,
-      '',
-      categoryFocusLine(prospect),
-      '',
-      secondTouch
-        ? 'If there is any upcoming glass scope, I would still be glad to share our MetroGlass Pro About Us one-pager again and map out quick next steps.'
-        : 'If there is any upcoming glass scope, I would be glad to send over our MetroGlass Pro About Us one-pager again and put together quick next steps.',
-      '',
-      'Warm regards,',
-      'Donald Lena',
-      'MetroGlass Pro',
-      '(332) 999-3846',
-      'metroglasspro.com',
-    ].filter(Boolean).join('\n'),
+    first_name: prospectFirstName(prospect),
+    company_name: compactText(prospect?.company_name) || compactText(prospect?.contact_name) || 'your team',
+    category: prospect?.category || null,
+    category_pitch: tenant ? null : categoryPitch(prospect?.category),
+    category_focus: tenant ? null : categoryFocusLine(prospect),
+    outreach_cta: tenant ? null : `If there is any upcoming scope for ${topicLine(prospect)}, I would be glad to connect and help keep things moving.`,
+    context,
   };
 }
 
-function initialSubject(prospect) {
-  const subjectBase = compactText(prospect.company_name) || compactText(prospect.contact_name) || 'your team';
-  const snippet = firstDescriptionSnippet(prospect, 48);
-  return snippet ? `${subjectBase} | ${snippet} | MetroGlass Pro` : `${subjectBase} | MetroGlass Pro`;
+function renderProspectTemplate(prospect, tenant, template) {
+  return renderEmailTemplate(tenant || {}, template, buildProspectTemplateData(prospect, tenant));
 }
 
-function initialBody(prospect) {
-  const personalizedLine = personalizedContextLine(prospect);
-  const company = compactText(prospect.company_name);
-
-  return [
-    greetingLine(prospect),
-    '',
-    company
-      ? `I’m Donald from MetroGlass Pro, and I’m reaching out because ${company} looks closely aligned with the kind of glass scope we help support.`
-      : `I’m Donald from MetroGlass Pro, and I’m reaching out because your work looks closely aligned with the kind of glass scope we help support.`,
-    '',
-    `We ${categoryPitch(prospect.category)} across NYC, New Jersey, and Connecticut.`,
-    '',
-    personalizedLine,
-    '',
-    categoryFocusLine(prospect),
-    '',
-    'I attached our MetroGlass Pro About Us one-pager so you can get a quick feel for the work, responsiveness, and detail we bring to projects.',
-    '',
-    'If you have a project where glass scope still needs a responsive partner, I would be glad to connect, turn around pricing quickly, and help keep things moving.',
-    '',
-    'Warm regards,',
-    'Donald Lena',
-    'MetroGlass Pro',
-    '(332) 999-3846',
-    'metroglasspro.com',
-  ].filter(Boolean).join('\n');
-}
-
-function resolveInitialDraft(prospect) {
-  const generated = {
-    subject: initialSubject(prospect),
-    body: initialBody(prospect),
-  };
+function resolveInitialDraftSync(prospect, tenant = null) {
+  const template = buildDefaultEmailTemplate(tenant || {}, 'prospect_initial');
+  const rendered = renderProspectTemplate(prospect, tenant, template);
 
   if (!shouldUseStoredInitialDraft(prospect)) {
-    return generated;
+    return rendered;
   }
 
   return {
-    subject: compactText(prospect.draft_subject) || generated.subject,
-    body: compactMultilineText(prospect.draft_body) || generated.body,
+    subject: compactText(prospect.draft_subject) || rendered.subject,
+    body: compactMultilineText(prospect.draft_body) || rendered.body,
   };
 }
 
-function resolveFollowUpDraft(prospect, options = {}) {
+async function resolveInitialDraft(db, tenant, prospect, options = {}) {
+  if (!tenant?.id) {
+    return resolveInitialDraftSync(prospect, tenant);
+  }
+
+  const template = await resolveTenantEmailTemplate(db, tenant, 'prospect_initial', {
+    category: prospect?.category || null,
+    templates: options.templates,
+  });
+  const rendered = renderProspectTemplate(prospect, tenant, template);
+
+  if (!shouldUseStoredInitialDraft(prospect)) {
+    return rendered;
+  }
+
+  return {
+    subject: compactText(prospect.draft_subject) || rendered.subject,
+    body: compactMultilineText(prospect.draft_body) || rendered.body,
+  };
+}
+
+function buildProspectFollowUpDraft(prospect, tenant = null) {
+  const stepNumber = Number(prospect?.follow_up_step || 1);
+  const templateKind = stepNumber >= 2 ? 'prospect_follow_up_2' : 'prospect_follow_up_1';
+  const template = buildDefaultEmailTemplate(tenant || {}, templateKind);
+  return renderProspectTemplate({ ...prospect, follow_up_step: stepNumber }, tenant, template);
+}
+
+async function resolveFollowUpDraft(db, tenant, prospect, options = {}) {
+  const stepNumber = Number(options.stepNumber || prospect?.follow_up_step || 1);
+  const templateKind = stepNumber >= 2 ? 'prospect_follow_up_2' : 'prospect_follow_up_1';
+  const baseDraft = tenant?.id
+    ? renderProspectTemplate(
+      { ...prospect, follow_up_step: stepNumber },
+      tenant,
+      await resolveTenantEmailTemplate(db, tenant, templateKind, {
+        category: prospect?.category || null,
+        templates: options.templates,
+      }),
+    )
+    : buildProspectFollowUpDraft({ ...prospect, follow_up_step: stepNumber }, tenant);
+
   if (options.subject || options.body) {
     return {
-      subject: compactText(options.subject) || baseFollowUpDraft(prospect).subject,
-      body: compactMultilineText(options.body) || baseFollowUpDraft(prospect).body,
+      subject: compactText(options.subject) || baseDraft.subject,
+      body: compactMultilineText(options.body) || baseDraft.body,
     };
   }
 
-  return baseFollowUpDraft(prospect);
+  return baseDraft;
 }
 
 function updatedStoredInitialDraft(prospect, subject, body) {
@@ -1442,7 +1446,7 @@ function updatedStoredInitialDraft(prospect, subject, body) {
   };
 }
 
-async function ensureProspectFollowUp(db, prospect, config) {
+async function ensureProspectFollowUp(db, prospect, config, tenant = null, templates = null) {
   const existing = await db.select('v2_prospect_follow_ups', {
     filters: [eq('prospect_id', prospect.id)],
     ordering: [order('step_number', 'asc')],
@@ -1467,7 +1471,12 @@ async function ensureProspectFollowUp(db, prospect, config) {
       config.prospect_follow_up_send_time || config.prospect_initial_send_time || '11:00',
       config.prospect_timezone || 'America/New_York',
     );
-    const draft = buildProspectFollowUpDraft({ ...prospect, follow_up_step: stepNumber });
+    const draft = tenant?.id
+      ? await resolveFollowUpDraft(db, tenant, { ...prospect, follow_up_step: stepNumber }, {
+        stepNumber,
+        templates,
+      })
+      : buildProspectFollowUpDraft({ ...prospect, follow_up_step: stepNumber }, tenant);
 
     const [row] = await db.insert('v2_prospect_follow_ups', {
       prospect_id: prospect.id,
@@ -1530,7 +1539,7 @@ async function getProspectWithFollowUps(db, prospectId) {
   return { prospect, followUps };
 }
 
-async function sendProspectMessage(env, db, prospectId, options = {}) {
+async function sendProspectMessage(env, db, tenant, prospectId, options = {}) {
   const [{ prospect, followUps }, allProspects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     getProspectWithFollowUps(db, prospectId),
     listAllProspects(db),
@@ -1620,9 +1629,13 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
     }
   }
 
-  const resolvedInitialDraft = resolveInitialDraft(hydrated);
+  const templates = tenant?.id ? await listTenantEmailTemplates(db, tenant).catch(() => []) : null;
+  const resolvedInitialDraft = await resolveInitialDraft(db, tenant, hydrated, { templates });
   const resolvedFollowUpDraft = kind === 'follow_up'
-    ? resolveFollowUpDraft({ ...hydrated, follow_up_step: Number(options.stepNumber || 1) }, options)
+    ? await resolveFollowUpDraft(db, tenant, { ...hydrated, follow_up_step: Number(options.stepNumber || 1) }, {
+      ...options,
+      templates,
+    })
     : null;
   const draftSubject = kind === 'follow_up'
     ? resolvedFollowUpDraft?.subject || ''
@@ -1631,7 +1644,7 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
     ? resolvedFollowUpDraft?.body || ''
     : compactMultilineText(options.body) || resolvedInitialDraft.body || '';
 
-  const gmail = await sendAutomationEmail(env, {
+  const gmail = await sendAutomationEmail(env, db, tenant, {
     recipient,
     subject: draftSubject,
     body: draftBody,
@@ -1686,7 +1699,7 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
       ...updated,
       first_sent_at: nextPatch.first_sent_at,
       last_sent_at: nextPatch.last_sent_at,
-    }, options.config || await getAppConfig(db));
+    }, options.config || await getAppConfig(db, tenant?.id || null), tenant, templates);
   }
 
   if (kind === 'follow_up' && options.followUpId) {
@@ -1706,6 +1719,7 @@ async function sendProspectMessage(env, db, prospectId, options = {}) {
     sentAt,
     kind,
     prospect: hydrateProspect(updated, {
+      tenant,
       followUps: kind === 'follow_up'
         ? followUps.map((row) => (String(row.id) === String(options.followUpId) ? { ...row, status: 'sent', sent_at: sentAt } : row))
         : followUps,
@@ -1717,12 +1731,8 @@ export function formatProspectCategory(category) {
   return CATEGORY_LABELS[category] || 'Prospect';
 }
 
-export function buildProspectDraft(prospect) {
-  return resolveInitialDraft(prospect);
-}
-
-export function buildProspectFollowUpDraft(prospect) {
-  return resolveFollowUpDraft(prospect);
+export function buildProspectDraft(prospect, tenant = null) {
+  return resolveInitialDraftSync(prospect, tenant);
 }
 
 function hydrateFollowUpItem(followUp, prospect) {
@@ -1759,8 +1769,8 @@ function categoryMetricTemplate() {
   }]));
 }
 
-export async function getProspectAutomationOverview(db, config = null) {
-  const resolvedConfig = config || await getAppConfig(db);
+export async function getProspectAutomationOverview(db, config = null, tenant = null) {
+  const resolvedConfig = config || await getAppConfig(db, tenant?.id || null);
   const timeZone = resolvedConfig.prospect_timezone || 'America/New_York';
   const todayKey = formatLocalDateKey(new Date(), timeZone);
   const [prospects, followUps, outcomes, events, recentImports, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
@@ -2008,6 +2018,7 @@ export async function getProspectAutomationOverview(db, config = null) {
   for (const prospect of prospects) {
     const prospectFollowUps = followUpsByProspect[prospect.id] || [];
     const hydratedProspect = hydrateProspect(prospect, {
+      tenant,
       followUps: prospectFollowUps,
       suppressedDomains,
       suppressionMaps,
@@ -2142,7 +2153,7 @@ export async function listProspects(db, options = {}) {
   const category = options.category || 'all';
   const query = compactText(options.q)?.toLowerCase() || '';
 
-  const config = await getAppConfig(db);
+  const config = await getAppConfig(db, options.tenant?.id || null);
   const [allRows, recentImports, followUps, automation, companies, campaignsCatalog, suppressions, reviewQueue, outcomes] = await Promise.all([
     listAllProspects(db),
     db.select('v2_prospect_import_batches', {
@@ -2150,7 +2161,7 @@ export async function listProspects(db, options = {}) {
       limit: 8,
     }),
     listAllProspectFollowUps(db),
-    getProspectAutomationOverview(db, config),
+    getProspectAutomationOverview(db, config, options.tenant || null),
     listProspectCompanies(db),
     listProspectCampaigns(db),
     listProspectSuppressions(db),
@@ -2216,6 +2227,7 @@ export async function listProspects(db, options = {}) {
     .sort((left, right) => Number(new Date(right.updated_at || 0).getTime()) - Number(new Date(left.updated_at || 0).getTime()))
     .slice((page - 1) * limit, page * limit)
     .map((prospect) => hydrateProspect(prospect, {
+      tenant: options.tenant || null,
       followUps: followUpsByProspect[prospect.id] || [],
       suppressedDomains,
       suppressionMaps,
@@ -2237,7 +2249,7 @@ export async function listProspects(db, options = {}) {
   };
 }
 
-export async function getProspectDetail(db, prospectId) {
+export async function getProspectDetail(db, prospectId, tenant = null) {
   const [prospect, timeline, followUps, allProspects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     db.single('v2_prospects', { filters: [eq('id', prospectId)] }),
     db.select('v2_prospect_events', {
@@ -2266,6 +2278,7 @@ export async function getProspectDetail(db, prospectId) {
   const companyMap = buildCompanyMap(companies);
   const campaignMap = buildCampaignMap(campaignsCatalog);
   const hydrated = hydrateProspect(prospect, {
+    tenant,
     followUps,
     suppressedDomains: buildSuppressedDomainMap(allProspects, outcomes),
     suppressionMaps,
@@ -2321,7 +2334,7 @@ export async function getProspectDetail(db, prospectId) {
   };
 }
 
-export async function importProspects(db, payload, actorId = null) {
+export async function importProspects(db, payload, actorId = null, tenant = null) {
   const filename = compactText(payload?.filename) || 'upload.csv';
   const category = PROSPECT_CATEGORIES.includes(payload?.category) ? payload.category : null;
   const rows = Array.isArray(payload?.rows) ? payload.rows : [];
@@ -2445,7 +2458,7 @@ export async function importProspects(db, payload, actorId = null) {
       created_at: current?.created_at || now,
       updated_at: now,
     };
-    const draft = buildProspectDraft(merged);
+    const draft = buildProspectDraft(merged, tenant);
 
     return {
       ...merged,
@@ -2528,14 +2541,15 @@ export async function importProspects(db, payload, actorId = null) {
   };
 }
 
-export async function saveProspectDraft(db, prospectId, draft, actorId = null) {
+export async function saveProspectDraft(db, prospectId, draft, actorId = null, tenant = null) {
   const prospect = await db.single('v2_prospects', { filters: [eq('id', prospectId)] });
   if (!prospect) {
     throw new Error('Prospect not found');
   }
 
-  const nextSubject = compactText(draft?.subject) || buildProspectDraft(prospect).subject;
-  const nextBody = compactMultilineText(draft?.body) || buildProspectDraft(prospect).body;
+  const defaultDraft = await resolveInitialDraft(db, tenant, prospect);
+  const nextSubject = compactText(draft?.subject) || defaultDraft.subject;
+  const nextBody = compactMultilineText(draft?.body) || defaultDraft.body;
   const updated = (await db.update('v2_prospects', [eq('id', prospectId)], {
     draft_subject: nextSubject,
     draft_body: nextBody,
@@ -2546,6 +2560,7 @@ export async function saveProspectDraft(db, prospectId, draft, actorId = null) {
   await recordProspectEvent(db, prospectId, 'draft_saved', 'operator', actorId, { subject: nextSubject });
 
   return hydrateProspect(updated, {
+    tenant,
     followUps: await db.select('v2_prospect_follow_ups', { filters: [eq('prospect_id', prospectId)] }).catch(() => []),
   });
 }
@@ -2702,18 +2717,18 @@ export async function markProspectBounced(db, prospectId, actorId = null, actorT
   });
 }
 
-export async function sendProspect(env, db, prospectId, actorId = null) {
+export async function sendProspect(env, db, tenant, prospectId, actorId = null) {
   const { prospect, followUps } = await getProspectWithFollowUps(db, prospectId);
   const kind = prospect?.first_sent_at ? 'follow_up' : 'initial';
   const pendingFollowUp = followUps.find((row) => row.status === 'pending') || null;
 
-  return sendProspectMessage(env, db, prospectId, {
+  return sendProspectMessage(env, db, tenant, prospectId, {
     kind,
     actorId,
     actorType: 'operator',
     followUpId: kind === 'follow_up' ? pendingFollowUp?.id || null : null,
     stepNumber: kind === 'follow_up' ? Number(pendingFollowUp?.step_number || 1) : 0,
-    config: await getAppConfig(db),
+    config: await getAppConfig(db, tenant?.id || null),
   });
 }
 
@@ -2760,7 +2775,7 @@ function sentTodayByCategory(outcomes, prospectMap, timeZone) {
   return totals;
 }
 
-export async function runProspectDailyBatch(env, db, config, slotKey) {
+export async function runProspectDailyBatch(env, db, config, slotKey, tenant = null) {
   const [followUps, prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspectFollowUps(db),
     listAllProspects(db),
@@ -2795,6 +2810,7 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
         return false;
       }
       const hydrated = hydrateProspect(prospect, {
+        tenant,
         followUps: [followUp],
         suppressedDomains,
         suppressionMaps,
@@ -2811,6 +2827,7 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
         return false;
       }
       const hydrated = hydrateProspect(prospect, {
+        tenant,
         followUps: [],
         suppressedDomains,
         suppressionMaps,
@@ -2850,7 +2867,7 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
 
     attemptedByCategory[prospect.category] += 1;
     try {
-      await sendProspectMessage(env, db, prospect.id, {
+      await sendProspectMessage(env, db, tenant, prospect.id, {
         kind: 'follow_up',
         automated: true,
         actorType: 'schedule',
@@ -2874,7 +2891,7 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
   for (const prospect of selectedInitials) {
     attemptedByCategory[prospect.category] += 1;
     try {
-      await sendProspectMessage(env, db, prospect.id, {
+      await sendProspectMessage(env, db, tenant, prospect.id, {
         kind: 'initial',
         automated: true,
         actorType: 'schedule',
@@ -2905,7 +2922,7 @@ export async function runProspectDailyBatch(env, db, config, slotKey) {
   };
 }
 
-export async function runProspectInitialBatch(env, db, config, slotKey) {
+export async function runProspectInitialBatch(env, db, config, slotKey, tenant = null) {
   const [prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspects(db),
     listRecentProspectOutcomes(db),
@@ -2940,6 +2957,7 @@ export async function runProspectInitialBatch(env, db, config, slotKey) {
       return false;
     }
     const hydrated = hydrateProspect(prospect, {
+      tenant,
       followUps: [],
       suppressedDomains,
       suppressionMaps,
@@ -2961,7 +2979,7 @@ export async function runProspectInitialBatch(env, db, config, slotKey) {
   for (const prospect of selected) {
     attemptedByCategory[prospect.category] += 1;
     try {
-      await sendProspectMessage(env, db, prospect.id, {
+      await sendProspectMessage(env, db, tenant, prospect.id, {
         kind: 'initial',
         automated: true,
         actorType: 'schedule',
@@ -2987,7 +3005,7 @@ export async function runProspectInitialBatch(env, db, config, slotKey) {
   };
 }
 
-export async function runProspectFollowUpBatch(env, db, config, slotKey) {
+export async function runProspectFollowUpBatch(env, db, config, slotKey, tenant = null) {
   const [followUps, prospects, outcomes, companies, campaignsCatalog, suppressions, reviewQueue] = await Promise.all([
     listAllProspectFollowUps(db),
     listAllProspects(db),
@@ -3030,6 +3048,7 @@ export async function runProspectFollowUpBatch(env, db, config, slotKey) {
         return false;
       }
       const hydrated = hydrateProspect(prospect, {
+        tenant,
         followUps: [followUp],
         suppressedDomains,
         suppressionMaps,
@@ -3058,7 +3077,7 @@ export async function runProspectFollowUpBatch(env, db, config, slotKey) {
 
     attemptedByCategory[prospect.category] += 1;
     try {
-      await sendProspectMessage(env, db, prospect.id, {
+      await sendProspectMessage(env, db, tenant, prospect.id, {
         kind: 'follow_up',
         automated: true,
         actorType: 'schedule',
@@ -3087,7 +3106,7 @@ export async function runProspectFollowUpBatch(env, db, config, slotKey) {
 }
 
 export async function runScheduledProspectPilot(env, db, createRun, completeRun, failRun, options = {}) {
-  const config = await getAppConfig(db);
+  const config = await getAppConfig(db, options.tenant?.id || null);
   if (!config.prospect_pilot_enabled) {
     return { started: false, reason: 'prospect_pilot_disabled' };
   }
@@ -3123,11 +3142,11 @@ export async function runScheduledProspectPilot(env, db, createRun, completeRun,
     let summary;
 
     if (mode === 'prospect_initial_send') {
-      summary = await runProspectInitialBatch(env, db, config, slotKey);
+      summary = await runProspectInitialBatch(env, db, config, slotKey, options.tenant || null);
     } else if (mode === 'prospect_follow_up_send') {
-      summary = await runProspectFollowUpBatch(env, db, config, slotKey);
+      summary = await runProspectFollowUpBatch(env, db, config, slotKey, options.tenant || null);
     } else {
-      summary = await runProspectDailyBatch(env, db, config, slotKey);
+      summary = await runProspectDailyBatch(env, db, config, slotKey, options.tenant || null);
     }
 
     await completeRun(db, run.id, {
