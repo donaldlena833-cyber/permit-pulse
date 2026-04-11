@@ -367,7 +367,7 @@ create or replace function public.encrypt_gmail_secret(secret_value text, secret
 returns text
 language sql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
   select armor(pgp_sym_encrypt(secret_value, secret_key, 'cipher-algo=aes256'));
 $$;
@@ -376,7 +376,7 @@ create or replace function public.decrypt_gmail_secret(ciphertext text, secret_k
 returns text
 language sql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
   select pgp_sym_decrypt(dearmor(ciphertext), secret_key);
 $$;
